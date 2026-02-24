@@ -18,9 +18,10 @@
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
-    "test": "vitest run",
+    "test": "vitest run tests/schema tests/generators",
     "test:watch": "vitest",
     "test:integration": "vitest run tests/integration",
+    "test:examples": "vitest run examples",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

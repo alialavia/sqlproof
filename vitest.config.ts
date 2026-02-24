@@ -5,7 +5,6 @@ export default defineConfig({
     environment: 'node',
     pool: 'forks',
     testTimeout: 30000,
-    include: ['tests/**/*.test.ts'],
-    exclude: ['tests/integration/**'],
+    include: ['tests/**/*.test.ts', 'examples/**/*.test.ts'],
   },
 });
