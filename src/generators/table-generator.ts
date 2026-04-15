@@ -1,5 +1,5 @@
 import * as fc from 'fast-check';
-import type { TableInfo, SchemaInfo, Dataset } from '../schema/types.js';
+import type { TableInfo, SchemaInfo, Dataset, FkDistributionStrategy } from '../schema/types.js';
 import { getArbitraryForColumn } from './column-generators.js';
 import { applyNullability, applyCheckConstraint, makeForeignKeyArbitrary } from './constraint-handler.js';
 
@@ -13,6 +13,7 @@ export function makeTableArbitrary(
   existingData: Dataset,
   rowCount: number,
   overrides?: Record<string, fc.Arbitrary<unknown>>,
+  fkDistribution?: Record<string, FkDistributionStrategy>,
 ): fc.Arbitrary<Record<string, unknown>[]> {
   // Build per-column arbitraries
   const colArbitraries: Record<string, fc.Arbitrary<unknown>> = {};
@@ -41,10 +42,21 @@ export function makeTableArbitrary(
         const colIdx = fk.columns.indexOf(col.name);
         const referencedCol = fk.referencedColumns[colIdx] ?? 'id';
         const parentTable = fk.referencedTable;
-
-        // For self-referential FKs, parentRows may be empty on first pass
         const parentRows = existingData[parentTable] ?? [];
-        let fkArb = makeForeignKeyArbitrary(parentRows, referencedCol);
+
+        const parentTableInfo = schema.tables.find(t => t.name === parentTable);
+        const refColInfo = parentTableInfo?.columns.find(c => c.name === referencedCol);
+        const strategy = fkDistribution?.[col.name] ?? 'uniform';
+
+        let fkArb: fc.Arbitrary<unknown>;
+        if (refColInfo?.isGenerated && parentRows.length > 0) {
+          // SERIAL parent: use 1-based placeholder indices, apply distribution strategy
+          const placeholderRows = parentRows.map((_, i) => ({ [referencedCol]: i + 1 }));
+          fkArb = makeForeignKeyArbitrary(placeholderRows, referencedCol, strategy);
+        } else {
+          fkArb = makeForeignKeyArbitrary(parentRows, referencedCol, strategy);
+        }
+
         fkArb = applyNullability(fkArb, col);
         colArbitraries[col.name] = fkArb;
         continue;
