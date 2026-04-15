@@ -35,7 +35,7 @@ export class DBManager {
   }
 
   async setupSchema(schemaName: string, schemaInfo: SchemaInfo): Promise<void> {
-    const pool = this.requirePool();
+    const pool = this.getPool();
     const client = await pool.connect();
     try {
       await client.query(`CREATE SCHEMA "${schemaName}"`);
@@ -60,7 +60,7 @@ export class DBManager {
   }
 
   async getClientForSchema(schemaName: string): Promise<PoolClient> {
-    const pool = this.requirePool();
+    const pool = this.getPool();
     return pool.connect();
   }
 
@@ -133,7 +133,7 @@ export class DBManager {
   }
 
   async dropSchema(schemaName: string): Promise<void> {
-    const pool = this.requirePool();
+    const pool = this.getPool();
     const client = await pool.connect();
     try {
       await client.query(`DROP SCHEMA IF EXISTS "${schemaName}" CASCADE`);
@@ -155,7 +155,7 @@ export class DBManager {
     return `run_${id}`;
   }
 
-  private requirePool(): Pool {
+  getPool(): Pool {
     if (!this.pool) throw new Error('DBManager not started. Call start() first.');
     return this.pool;
   }
@@ -304,15 +304,25 @@ function remapForeignKeys(
       const genParentRows = generatedDataset[fk.referencedTable];
       if (!realParentRows || !genParentRows || realParentRows.length === 0) continue;
 
-      // For single-column FK, find the value in the generated data and map to real
       if (fk.columns.length === 1) {
         const fkCol = fk.columns[0]!;
         const refCol = fk.referencedColumns[0]!;
         const genValue = remapped[fkCol];
 
-        // Find which generated parent row had this value
-        const parentIdx = genParentRows.findIndex(r => String(r[refCol]) === String(genValue));
-        if (parentIdx >= 0 && realParentRows[parentIdx]) {
+        // The table generator emits 1-based placeholder indices for FK
+        // columns that reference SERIAL PKs (since those columns are
+        // absent from the generated rows). Convert directly to a
+        // 0-based array index. For non-SERIAL PKs the generated parent
+        // rows contain the actual value, so we fall back to a lookup.
+        let parentIdx: number;
+        const refColInfo = parentTable.columns.find(c => c.name === refCol);
+        if (refColInfo?.isGenerated && typeof genValue === 'number') {
+          parentIdx = genValue - 1;
+        } else {
+          parentIdx = genParentRows.findIndex(r => String(r[refCol]) === String(genValue));
+        }
+
+        if (parentIdx >= 0 && parentIdx < realParentRows.length && realParentRows[parentIdx]) {
           remapped[fkCol] = realParentRows[parentIdx]![refCol];
         }
       }

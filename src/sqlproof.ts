@@ -61,7 +61,11 @@ export class SqlProof {
    */
   customize(table: string, overrides: TableCustomization): this {
     const existing = this.customizations.get(table) ?? {};
-    this.customizations.set(table, { ...existing, ...overrides });
+    const merged: TableCustomization = { ...existing, ...overrides };
+    if (existing.fkDistribution && overrides.fkDistribution) {
+      merged.fkDistribution = { ...existing.fkDistribution, ...overrides.fkDistribution };
+    }
+    this.customizations.set(table, merged);
     return this;
   }
 

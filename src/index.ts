@@ -1,16 +1,12 @@
-import { runProperty } from './runner/property-runner.js';
-import type { SqlProofCheckOptions } from './schema/types.js';
-
-export const sqlproof = {
-  check: (options: SqlProofCheckOptions): Promise<void> => runProperty(options),
-};
-
-export { runProperty };
+export { SqlProof } from './sqlproof.js';
 
 export type {
-  SqlProofCheckOptions,
+  SqlProofConnectOptions,
+  CheckOptions,
+  InvariantOptions,
+  TableCustomization,
+  FkDistributionStrategy,
   SqlProofClient,
-  GeneratorOverrides,
   SchemaInfo,
   TableInfo,
   ColumnInfo,
