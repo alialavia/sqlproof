@@ -79,6 +79,8 @@ export interface GeneratorOverrides {
   [tableName: string]: { [columnName: string]: fc.Arbitrary<unknown> };
 }
 
+export type FkDistributionStrategy = 'zipf' | 'uniform' | 'adversarial';
+
 export interface SqlProofCheckOptions {
   name: string;
   schema: string;
