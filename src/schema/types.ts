@@ -81,6 +81,11 @@ export interface GeneratorOverrides {
 
 export type FkDistributionStrategy = 'zipf' | 'uniform' | 'adversarial';
 
+export interface TableCustomization {
+  fkDistribution?: Record<string, FkDistributionStrategy>;
+  [columnName: string]: fc.Arbitrary<unknown> | Record<string, FkDistributionStrategy> | undefined;
+}
+
 export interface SqlProofCheckOptions {
   name: string;
   schema: string;

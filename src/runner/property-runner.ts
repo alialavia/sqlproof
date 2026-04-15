@@ -1,12 +1,13 @@
+import { readFile } from 'node:fs/promises';
 import * as fc from 'fast-check';
 import type { SqlProofCheckOptions, SqlProofClient, Dataset } from '../schema/types.js';
-import { parseSchemaFromFile, parseSchemaFromConnection } from '../schema/parser.js';
+import { executeAndIntrospect, introspectSchema } from '../schema/parser.js';
 import { makeDatasetArbitrary } from '../generators/dataset-generator.js';
 import { DBManager } from './db-manager.js';
 import { formatCounterexample } from '../reporter/reporter.js';
 
 /**
- * Main entry point: parse schema, spin up DB, run property-based test.
+ * Main entry point: start DB, introspect schema, run property-based test.
  * Throws on property failure with a formatted counterexample message.
  */
 export async function runProperty(options: SqlProofCheckOptions): Promise<void> {
@@ -22,24 +23,34 @@ export async function runProperty(options: SqlProofCheckOptions): Promise<void> 
     overrides,
   } = options;
 
-  // 1. Parse schema once
-  const schemaInfo = isConnectionString(schema)
-    ? await parseSchemaFromConnection(schema)
-    : await parseSchemaFromFile(schema);
-
-  // 2. Start DB manager once
+  // 1. Start DB first (needed for introspection)
   const dbManager = new DBManager(
     isConnectionString(schema) ? { connectionString: schema } : { useTestcontainers: true },
   );
   await dbManager.start();
 
-  // 3. Build dataset arbitrary once
-  const datasetArb = makeDatasetArbitrary(schemaInfo, rowsPerTable, overrides, tables);
-
-  // Failure info captured from reporter callback
   let failureMessage: string | undefined;
 
   try {
+    // 2. Get SchemaInfo using the live database
+    const schemaInfo = isConnectionString(schema)
+      ? await introspectSchema(dbManager.getPool(), 'public')
+      : await executeAndIntrospect(dbManager.getPool(), await readFile(schema, 'utf8'));
+
+    // 3. Build dataset arbitrary once
+    const targetTables =
+      tables != null ? schemaInfo.tables.filter(t => tables.includes(t.name)) : schemaInfo.tables;
+    const rowCounts: Record<string, number> = Object.fromEntries(
+      targetTables.map(t => [t.name, rowsPerTable]),
+    );
+    const customizations =
+      overrides != null
+        ? new Map(
+            Object.entries(overrides).map(([tbl, cols]) => [tbl, cols] as const),
+          )
+        : undefined;
+    const datasetArb = makeDatasetArbitrary(schemaInfo, rowCounts, customizations);
+
     // 4. Run fc.assert
     await fc.assert(
       fc.asyncProperty(datasetArb, async (dataset: Dataset) => {
@@ -52,8 +63,6 @@ export async function runProperty(options: SqlProofCheckOptions): Promise<void> 
             realDataset = await dbManager.insertDataset(client, dataset, schemaInfo, schemaName);
           } catch (insertErr) {
             client.release();
-            // Insert failure usually means constraint violation from bad data generation
-            // Skip this run by returning true (not a property violation)
             console.warn(
               `[sqlproof] Insert failed (skipping run): ${(insertErr as Error).message}`,
             );
@@ -82,9 +91,7 @@ export async function runProperty(options: SqlProofCheckOptions): Promise<void> 
 
           return result;
         } finally {
-          await dbManager.dropSchema(schemaName).catch(() => {
-            // best-effort cleanup
-          });
+          await dbManager.dropSchema(schemaName).catch(() => {});
         }
       }),
       {
@@ -106,7 +113,6 @@ export async function runProperty(options: SqlProofCheckOptions): Promise<void> 
       },
     );
   } catch (err) {
-    // Re-throw with formatted message if we have one
     if (failureMessage) {
       const error = new Error(failureMessage);
       error.name = 'SqlProofError';

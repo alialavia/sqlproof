@@ -1,24 +1,23 @@
 import * as fc from 'fast-check';
-import type { SchemaInfo, Dataset, SqlProofCheckOptions } from '../schema/types.js';
+import type { SchemaInfo, Dataset, TableCustomization, FkDistributionStrategy } from '../schema/types.js';
 import { getInsertionOrder } from '../schema/dependency-graph.js';
 import { makeTableArbitrary } from './table-generator.js';
 
 /**
  * Builds a fast-check Arbitrary that generates a complete multi-table dataset.
- * Tables are generated in FK dependency order so that FK columns can reference
- * already-generated parent rows.
+ * Tables are generated in FK dependency order.
  *
- * Uses fc.gen() so that fast-check can shrink each table's rows independently
- * while still passing previously-generated data to child table generators.
+ * rowCounts: per-table row count map, e.g. { customers: 20, orders: 100 }.
+ *   Only tables whose names appear as keys are generated.
+ * customizations: per-table column overrides and FK distribution strategies.
  */
 export function makeDatasetArbitrary(
   schema: SchemaInfo,
-  rowsPerTable: number,
-  overrides?: SqlProofCheckOptions['overrides'],
-  tableFilter?: string[],
+  rowCounts: Record<string, number>,
+  customizations?: Map<string, TableCustomization>,
 ): fc.Arbitrary<Dataset> {
   const orderedTables = getInsertionOrder(schema.tables).filter(name =>
-    tableFilter == null || tableFilter.includes(name),
+    Object.prototype.hasOwnProperty.call(rowCounts, name),
   );
 
   return fc.gen().map(gen => {
@@ -28,13 +27,21 @@ export function makeDatasetArbitrary(
       const table = schema.tables.find(t => t.name === tableName);
       if (!table) continue;
 
-      const tableOverrides = overrides?.[tableName];
+      const rowCount = rowCounts[tableName] ?? 0;
+      const customization = customizations?.get(tableName);
+
+      // Split customization into column overrides and FK distribution
+      const { fkDistribution, ...columnOverrides } = customization ?? {};
+      const colOverrides = columnOverrides as Record<string, fc.Arbitrary<unknown>>;
+      const fkDist = fkDistribution as Record<string, FkDistributionStrategy> | undefined;
+
       const tableArb = makeTableArbitrary(
         table,
         schema,
         dataset,
-        rowsPerTable,
-        tableOverrides,
+        rowCount,
+        Object.keys(colOverrides).length > 0 ? colOverrides : undefined,
+        fkDist,
       );
 
       dataset[tableName] = gen(() => tableArb);
