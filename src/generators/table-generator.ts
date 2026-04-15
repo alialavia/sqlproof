@@ -54,6 +54,8 @@ export function makeTableArbitrary(
           const placeholderRows = parentRows.map((_, i) => ({ [referencedCol]: i + 1 }));
           fkArb = makeForeignKeyArbitrary(placeholderRows, referencedCol, strategy);
         } else {
+          // parentRows may be empty for self-referential FKs on first pass;
+          // makeForeignKeyArbitrary returns fc.constant(null) in that case.
           fkArb = makeForeignKeyArbitrary(parentRows, referencedCol, strategy);
         }
 
