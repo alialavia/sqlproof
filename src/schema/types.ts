@@ -86,6 +86,41 @@ export interface TableCustomization {
   [columnName: string]: fc.Arbitrary<unknown> | Record<string, FkDistributionStrategy> | undefined;
 }
 
+export interface SqlProofConnectOptions {
+  /** Connect to an existing Postgres instance. */
+  connectionString?: string;
+  /** Postgres schema name to introspect (default: 'public'). Only used with connectionString. */
+  schema?: string;
+  /** Path to a SQL DDL file. Auto-starts a testcontainers Postgres. */
+  schemaFile?: string;
+}
+
+export interface CheckOptions {
+  /** Per-table row counts, e.g. { customers: 20, orders: 100, line_items: 500 } */
+  generate: Record<string, number>;
+  /** Optional mutations to run after data insertion, before the property. */
+  setup?: (db: SqlProofClient) => Promise<void>;
+  /** Returns true if the property holds, false if violated. */
+  property: (db: SqlProofClient) => Promise<boolean>;
+  /** Number of random datasets to test. Default: 100. */
+  runs?: number;
+  /** Seed for reproducible failures. */
+  seed?: number;
+  /** Per-run timeout in ms. Default: 5000. */
+  timeout?: number;
+}
+
+export interface InvariantOptions {
+  /** Per-table row counts. */
+  generate: Record<string, number>;
+  /** SQL query whose result must be empty for the invariant to hold. */
+  query: string;
+  expectEmpty: true;
+  runs?: number;
+  seed?: number;
+  timeout?: number;
+}
+
 export interface SqlProofCheckOptions {
   name: string;
   schema: string;
