@@ -75,14 +75,14 @@
 
 - [ ] **Step 3: Create `website/astro.config.mjs`**
 
-Replace `YOUR_GITHUB_USERNAME` with the actual GitHub username (e.g. if the repo is at `github.com/ali/sqlproof`, use `ali`).
+Replace `alialavia` with the actual GitHub username (e.g. if the repo is at `github.com/ali/sqlproof`, use `ali`).
 
 ```javascript
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 
 export default defineConfig({
-  site: 'https://YOUR_GITHUB_USERNAME.github.io',
+  site: 'https://alialavia.github.io',
   base: '/sqlproof',
   integrations: [
     starlight({
@@ -92,7 +92,7 @@ export default defineConfig({
         {
           icon: 'github',
           label: 'GitHub',
-          href: 'https://github.com/YOUR_GITHUB_USERNAME/sqlproof',
+          href: 'https://github.com/alialavia/sqlproof',
         },
       ],
       customCss: ['./src/styles/custom.css'],
@@ -513,7 +513,7 @@ const base = import.meta.env.BASE_URL;
 const docsBase = `${base}getting-started/`;
 const apiBase = `${base}api/sqlproof-class/`;
 const examplesBase = `${base}examples/orders/`;
-const githubUrl = 'https://github.com/YOUR_GITHUB_USERNAME/sqlproof';
+const githubUrl = 'https://github.com/alialavia/sqlproof';
 ---
 
 <!doctype html>
@@ -1655,7 +1655,7 @@ git push origin main
 
 - [ ] **Step 4: Verify the workflow runs**
 
-In GitHub → Actions tab, verify the "Deploy website to GitHub Pages" workflow runs and passes. After it completes, the site will be live at `https://YOUR_GITHUB_USERNAME.github.io/sqlproof/`.
+In GitHub → Actions tab, verify the "Deploy website to GitHub Pages" workflow runs and passes. After it completes, the site will be live at `https://alialavia.github.io/sqlproof/`.
 
 ---
 
@@ -1669,7 +1669,7 @@ In GitHub → Actions tab, verify the "Deploy website to GitHub Pages" workflow 
 Open `README.md`. After the `# SqlProof` heading and before the description paragraph, add:
 
 ```markdown
-**→ Full docs: [YOUR_GITHUB_USERNAME.github.io/sqlproof](https://YOUR_GITHUB_USERNAME.github.io/sqlproof)**
+**→ Full docs: [alialavia.github.io/sqlproof](https://alialavia.github.io/sqlproof)**
 ```
 
 Also update the Quick Start code example (currently uses the old `sqlproof.check()` flat API) to match the new class-based API:
@@ -1728,4 +1728,4 @@ git push origin main
 - [x] **Spec §8 (deployment):** GitHub Actions workflow — Task 8
 - [x] **Spec §9 (README update):** README updated — Task 9
 - [x] **No placeholders** — all code blocks are complete
-- [x] **`YOUR_GITHUB_USERNAME` noted** — implementer must replace in `astro.config.mjs`, workflow, and README
+- [x] **`alialavia` noted** — implementer must replace in `astro.config.mjs`, workflow, and README
