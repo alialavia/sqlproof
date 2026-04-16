@@ -1,5 +1,7 @@
 # SqlProof
 
+**→ Full docs: [alialavia.github.io/sqlproof](https://alialavia.github.io/sqlproof)**
+
 Property-based testing for SQL queries against PostgreSQL. Define invariants about your queries, and SqlProof generates random valid datasets to try to break them — then reports the minimal counterexample when it does.
 
 Built on [fast-check](https://github.com/dubzzz/fast-check), [pg](https://node-postgres.com/), and [testcontainers](https://node.testcontainers.org/).
@@ -41,25 +43,31 @@ CREATE TABLE line_items (
 Write property tests with Vitest (or Jest):
 
 ```typescript
-import { describe, it } from 'vitest';
-import { sqlproof } from 'sqlproof';
+import { describe, it, beforeEach, afterEach } from 'vitest';
+import { SqlProof } from 'sqlproof';
 
 describe('order queries', () => {
+  let proof: SqlProof;
+
+  beforeEach(async () => {
+    proof = await SqlProof.connect({ schemaFile: './schema.sql' });
+  }, 120_000);
+
+  afterEach(async () => {
+    await proof?.disconnect();
+  });
+
   it('every line item references a valid order', async () => {
-    await sqlproof.check({
-      name: 'line items have valid order references',
-      schema: './schema.sql',
+    await proof.invariant('no orphan line items', {
+      generate: { customers: 5, orders: 20, line_items: 50 },
+      query: `
+        SELECT li.id
+        FROM line_items li
+        LEFT JOIN orders o ON li.order_id = o.id
+        WHERE o.id IS NULL
+      `,
+      expectEmpty: true,
       runs: 50,
-      rowsPerTable: 5,
-      property: async (db) => {
-        const result = await db.query(`
-          SELECT li.id
-          FROM line_items li
-          LEFT JOIN orders o ON li.order_id = o.id
-          WHERE o.id IS NULL
-        `);
-        return result.rows.length === 0;
-      },
     });
   });
 });
@@ -76,34 +84,24 @@ SqlProof will:
 
 ## API
 
-### `sqlproof.check(options)`
+See the full API reference at [alialavia.github.io/sqlproof/api/sqlproof-class/](https://alialavia.github.io/sqlproof/api/sqlproof-class/).
 
-The main entry point. Returns a `Promise<void>` that resolves on success and throws a `SqlProofError` with a formatted counterexample on failure.
+### Quick reference
 
 ```typescript
-await sqlproof.check({
-  name: 'order totals are non-negative',
-  schema: './schema.sql',
-  property: async (db) => {
-    const result = await db.query('SELECT total FROM orders');
-    return result.rows.every(row => Number(row.total) >= 0);
-  },
-});
+const proof = await SqlProof.connect({ schemaFile: './schema.sql' });
+
+// Property test
+await proof.check('name', { generate: { table: 10 }, property: async (db) => { ... } });
+
+// Declarative invariant
+await proof.invariant('name', { generate: { table: 10 }, query: `SELECT ...`, expectEmpty: true });
+
+// Custom generators / FK distribution
+proof.customize('orders', { fkDistribution: { customer_id: 'zipf' } });
+
+await proof.disconnect();
 ```
-
-### Options
-
-| Option | Type | Default | Description |
-|---|---|---|---|
-| `name` | `string` | *required* | Human-readable property name |
-| `schema` | `string` | *required* | Path to a `.sql` file or a `postgresql://` connection string |
-| `property` | `(db) => Promise<boolean>` | *required* | The invariant to check. Return `true` if it holds. |
-| `runs` | `number` | `100` | Number of random datasets to generate |
-| `rowsPerTable` | `number` | `10` | Rows to generate per table |
-| `seed` | `number` | — | Reproduce a specific failure |
-| `timeout` | `number` | `5000` | Per-run timeout in ms |
-| `tables` | `string[]` | all | Subset of tables to generate data for |
-| `overrides` | `GeneratorOverrides` | — | Custom fast-check arbitraries for specific columns |
 
 ### Schema Sources
 
