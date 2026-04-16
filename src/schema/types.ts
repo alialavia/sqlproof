@@ -75,10 +75,6 @@ export interface SqlProofClient {
   getGeneratedData(): Dataset;
 }
 
-export interface GeneratorOverrides {
-  [tableName: string]: { [columnName: string]: fc.Arbitrary<unknown> };
-}
-
 export type FkDistributionStrategy = 'zipf' | 'uniform' | 'adversarial';
 
 export interface TableCustomization {
@@ -121,14 +117,3 @@ export interface InvariantOptions {
   timeout?: number;
 }
 
-export interface SqlProofCheckOptions {
-  name: string;
-  schema: string;
-  property: (db: SqlProofClient) => Promise<boolean>;
-  runs?: number;
-  rowsPerTable?: number;
-  seed?: number;
-  timeout?: number;
-  tables?: string[];
-  overrides?: GeneratorOverrides;
-}

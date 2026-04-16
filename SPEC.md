@@ -59,120 +59,168 @@ sqlproof/
 ### Primary Interface
 
 ```typescript
-import { sqlproof } from 'sqlproof';
+import { SqlProof } from 'sqlproof';
 
-// Define and run a property test
-await sqlproof.check({
-  // Human-readable name for the property
-  name: "order totals match sum of line items",
+// Connect once per test suite
+const proof = await SqlProof.connect({ schemaFile: './schema.sql' });
+// OR connect to an existing Postgres instance:
+// const proof = await SqlProof.connect({ connectionString: 'postgresql://localhost:5432/mydb' });
 
-  // Path to SQL schema file OR a Postgres connection string
-  schema: "./schema.sql",
-  // OR: schema: "postgresql://localhost:5432/mydb"
-
-  // Number of random datasets to generate and test (default: 100)
-  runs: 100,
-
-  // Number of rows to generate per table (default: 10)
-  rowsPerTable: 10,
-
-  // The property to check. Receives a connected db client.
-  // Must return true (property holds) or false (property violated).
-  property: async (db) => {
-    const result = await db.query(`
-      SELECT o.id, o.total, SUM(li.price * li.quantity) as computed_total
-      FROM orders o
-      JOIN line_items li ON o.id = li.order_id
-      GROUP BY o.id, o.total
-    `);
-    return result.rows.every(
-      row => Number(row.total) === Number(row.computed_total)
-    );
-  }
+// Register custom generators or FK distribution strategies
+proof.customize('products', {
+  price: fc.float({ min: 0.01, max: 9999.99, noNaN: true }),
+  name: fc.string({ minLength: 1, maxLength: 100 }),
 });
-```
 
-### Configuration Options
+proof.customize('orders', {
+  fkDistribution: { customer_id: 'zipf' },
+});
 
-```typescript
-interface SqlProofCheckOptions {
-  name: string;
-  schema: string;                    // File path or connection string
-  property: (db: SqlProofClient) => Promise<boolean>;
-  runs?: number;                     // Default: 100
-  rowsPerTable?: number;             // Default: 10
-  seed?: number;                     // For reproducible failures
-  timeout?: number;                  // Per-run timeout in ms (default: 5000)
-  tables?: string[];                 // Subset of tables to generate data for (default: all)
-  overrides?: GeneratorOverrides;    // Custom generators for specific columns
-}
-
-interface GeneratorOverrides {
-  [tableName: string]: {
-    [columnName: string]: fc.Arbitrary<any>;  // fast-check arbitrary
-  };
-}
-```
-
-### Custom Column Overrides
-
-```typescript
-import { sqlproof } from 'sqlproof';
-import fc from 'fast-check';
-
-await sqlproof.check({
-  name: "discount never exceeds 50%",
-  schema: "./schema.sql",
+// Run a property test
+await proof.check('order totals are non-negative', {
+  generate: { customers: 20, orders: 100, line_items: 500 },
   runs: 100,
-  overrides: {
-    products: {
-      // Override default generator for specific columns
-      price: fc.float({ min: 0.01, max: 10000, noNaN: true }),
-      name: fc.stringOf(fc.char(), { minLength: 1, maxLength: 100 }),
-    },
-    discounts: {
-      percentage: fc.float({ min: 0, max: 1, noNaN: true }),
-    }
+  property: async (db) => {
+    const result = await db.query('SELECT total FROM orders');
+    return result.rows.every(row => Number(row.total) >= 0);
   },
-  property: async (db) => {
-    const result = await db.query(`
-      SELECT d.percentage FROM discounts d
-    `);
-    return result.rows.every(row => Number(row.percentage) <= 0.5);
-  }
 });
+
+// Declarative shorthand: asserts query returns 0 rows
+await proof.invariant('no orphan line items', {
+  generate: { customers: 10, orders: 20, products: 10, line_items: 50 },
+  query: `
+    SELECT li.id FROM line_items li
+    LEFT JOIN orders o ON li.order_id = o.id
+    WHERE o.id IS NULL
+  `,
+  expectEmpty: true,
+});
+
+// Close connection and stop testcontainers (if auto-managed)
+await proof.disconnect();
 ```
+
+### Connect Options
+
+```typescript
+interface SqlProofConnectOptions {
+  connectionString?: string;  // Connect to an existing Postgres instance
+  schema?: string;            // Schema name to introspect (default: 'public')
+  schemaFile?: string;        // Path to SQL DDL file — auto-starts testcontainers
+}
+```
+
+Exactly one of `connectionString` or `schemaFile` must be provided.
+
+### SqlProof Class
+
+```typescript
+class SqlProof {
+  /** Factory: connect to Postgres, introspect schema, return ready instance. */
+  static async connect(options: SqlProofConnectOptions): Promise<SqlProof>
+
+  /** Register custom generators or FK distribution strategies for a table. Fluent. */
+  customize(table: string, overrides: TableCustomization): this
+
+  /** Run a property-based test. Throws SqlProofError on failure with counterexample. */
+  async check(name: string, options: CheckOptions): Promise<void>
+
+  /** Declarative shorthand: asserts the query returns 0 rows for all generated datasets. */
+  async invariant(name: string, options: InvariantOptions): Promise<void>
+
+  /** Close DB connection and stop testcontainers instance (if auto-managed). */
+  async disconnect(): Promise<void>
+}
+```
+
+### Check Options
+
+```typescript
+interface CheckOptions {
+  /** Per-table row counts, e.g. { customers: 20, orders: 100, line_items: 500 } */
+  generate: Record<string, number>;
+  /** Optional mutations to run after data insertion, before the property. */
+  setup?: (db: SqlProofClient) => Promise<void>;
+  /** Returns true if the property holds, false if violated. */
+  property: (db: SqlProofClient) => Promise<boolean>;
+  /** Number of random datasets to generate and test. Default: 100. */
+  runs?: number;
+  /** Seed for reproducible failures. */
+  seed?: number;
+  /** Per-run timeout in ms. Default: 5000. */
+  timeout?: number;
+}
+```
+
+### Invariant Options
+
+```typescript
+interface InvariantOptions {
+  generate: Record<string, number>;
+  /** SQL query that must return 0 rows for the invariant to hold. */
+  query: string;
+  expectEmpty: true;
+  runs?: number;
+  seed?: number;
+  timeout?: number;
+}
+```
+
+### Table Customization
+
+```typescript
+interface TableCustomization {
+  /** FK distribution strategy per FK column name. */
+  fkDistribution?: Record<string, FkDistributionStrategy>;
+  /** Custom fast-check arbitrary per column name. */
+  [columnName: string]: fc.Arbitrary<unknown> | Record<string, FkDistributionStrategy> | undefined;
+}
+
+type FkDistributionStrategy = 'zipf' | 'uniform' | 'adversarial';
+```
+
+| Strategy | Behavior | Use case |
+|---|---|---|
+| `uniform` (default) | Equal probability per parent | Good general coverage |
+| `zipf` | First parents get many children, later ones few or none | Realistic skewed load |
+| `adversarial` | Only picks first, middle, last parent | Boundary stress test |
 
 ### SqlProof Client (passed to property function)
 
 ```typescript
 interface SqlProofClient {
-  // Run a SQL query against the test database
-  query(sql: string, params?: any[]): Promise<{ rows: any[] }>;
-
-  // Get the raw dataset that was generated (for debugging)
-  getGeneratedData(): Record<string, any[]>;
+  query(sql: string, params?: unknown[]): Promise<{ rows: Record<string, unknown>[] }>;
+  getGeneratedData(): Dataset;
 }
 ```
 
 ### Integration with Test Runners
 
-SqlProof should work with Jest and Vitest. The `check` function throws on property failure with a descriptive error including the counterexample.
+SqlProof works with Jest and Vitest. `check()` throws on property failure with a descriptive error including the counterexample.
 
 ```typescript
-// Jest / Vitest
-import { describe, it } from 'vitest';
-import { sqlproof } from 'sqlproof';
+import { describe, it, beforeEach, afterEach } from 'vitest';
+import { SqlProof } from 'sqlproof';
 
 describe('order queries', () => {
+  let proof: SqlProof;
+
+  beforeEach(async () => {
+    proof = await SqlProof.connect({ schemaFile: './schema.sql' });
+  }, 120000);
+
+  afterEach(async () => {
+    await proof?.disconnect();
+  });
+
   it('totals are consistent', async () => {
-    await sqlproof.check({
-      name: "order totals match line items",
-      schema: "./schema.sql",
+    await proof.check('order totals match line items', {
+      generate: { customers: 5, orders: 10, line_items: 20 },
       property: async (db) => {
         // ... property logic
         return true;
-      }
+      },
     });
   });
 });
@@ -413,7 +461,7 @@ When a property fails, output:
 
   Expected: total (100.00) === sum(price * quantity) (110.00)
 
-  Reproduce with seed: sqlproof.check({ ..., seed: 1708891234 })
+  Reproduce with seed: proof.check('...', { ..., seed: 1708891234 })
 ```
 
 ## Example: E-Commerce Schema
@@ -457,27 +505,33 @@ CREATE TABLE line_items (
 ### Example Property Tests
 
 ```typescript
-import { describe, it } from 'vitest';
-import { sqlproof } from 'sqlproof';
+import { describe, it, beforeEach, afterEach } from 'vitest';
+import { SqlProof } from 'sqlproof';
 
-describe('e-commerce properties', () => {
-  const schema = './examples/orders/schema.sql';
+describe('e-commerce properties', { timeout: 120000 }, () => {
+  let proof: SqlProof;
+
+  beforeEach(async () => {
+    proof = await SqlProof.connect({ schemaFile: './examples/orders/schema.sql' });
+  }, 120000);
+
+  afterEach(async () => {
+    await proof?.disconnect();
+  });
 
   it('order total should be non-negative', async () => {
-    await sqlproof.check({
-      name: "order totals are non-negative",
-      schema,
+    await proof.check('order totals are non-negative', {
+      generate: { customers: 5, orders: 5, products: 5, line_items: 10 },
       property: async (db) => {
         const result = await db.query('SELECT total FROM orders');
         return result.rows.every(row => Number(row.total) >= 0);
-      }
+      },
     });
   });
 
   it('every line item references a valid order', async () => {
-    await sqlproof.check({
-      name: "line items have valid order references",
-      schema,
+    await proof.check('line items have valid order references', {
+      generate: { customers: 5, orders: 5, products: 5, line_items: 10 },
       property: async (db) => {
         const result = await db.query(`
           SELECT li.id
@@ -486,15 +540,14 @@ describe('e-commerce properties', () => {
           WHERE o.id IS NULL
         `);
         return result.rows.length === 0;
-      }
+      },
     });
   });
 
   it('order total equals sum of line item costs', async () => {
-    await sqlproof.check({
-      name: "order totals match line items",
-      schema,
-      runs: 200,
+    await proof.check('order totals match line items', {
+      generate: { customers: 5, orders: 5, products: 5, line_items: 10 },
+      runs: 50,
       property: async (db) => {
         const result = await db.query(`
           SELECT
@@ -506,28 +559,21 @@ describe('e-commerce properties', () => {
           GROUP BY o.id, o.total
         `);
         return result.rows.every(row =>
-          Math.abs(Number(row.stored_total) - Number(row.computed_total)) < 0.01
+          Math.abs(Number(row.stored_total) - Number(row.computed_total)) < 0.01,
         );
-      }
+      },
     });
   });
 
-  it('cancelled orders have no new line items after cancellation', async () => {
-    await sqlproof.check({
-      name: "cancelled orders are immutable",
-      schema,
-      property: async (db) => {
-        const result = await db.query(`
-          SELECT o.id, o.status, COUNT(li.id) as item_count
-          FROM orders o
-          LEFT JOIN line_items li ON o.id = li.order_id
-          WHERE o.status = 'cancelled'
-          GROUP BY o.id, o.status
-        `);
-        // This property will likely always pass with random data,
-        // but demonstrates the pattern for business rule testing
-        return true;
-      }
+  it('no orphan line items', async () => {
+    await proof.invariant('line items always have a valid order', {
+      generate: { customers: 5, orders: 10, products: 5, line_items: 20 },
+      query: `
+        SELECT li.id FROM line_items li
+        LEFT JOIN orders o ON li.order_id = o.id
+        WHERE o.id IS NULL
+      `,
+      expectEmpty: true,
     });
   });
 });

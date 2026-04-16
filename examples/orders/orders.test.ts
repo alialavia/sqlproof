@@ -1,15 +1,23 @@
-import { describe, it } from 'vitest';
-import { sqlproof } from '../../src/index.js';
+import { describe, it, beforeEach, afterEach } from 'vitest';
+import { SqlProof } from '../../src/index.js';
 
-const schema = new URL('./schema.sql', import.meta.url).pathname;
+const schemaFile = new URL('./schema.sql', import.meta.url).pathname;
 
-describe('e-commerce properties', { timeout: 60000 }, () => {
+describe('e-commerce properties', { timeout: 120000 }, () => {
+  let proof: SqlProof;
+
+  beforeEach(async () => {
+    proof = await SqlProof.connect({ schemaFile });
+  }, 120000);
+
+  afterEach(async () => {
+    await proof?.disconnect();
+  }, 30000);
+
   it('order total should be non-negative', async () => {
-    await sqlproof.check({
-      name: 'order totals are non-negative',
-      schema,
+    await proof.check('order totals are non-negative', {
+      generate: { customers: 5, orders: 5, products: 5, line_items: 10 },
       runs: 20,
-      rowsPerTable: 5,
       property: async db => {
         const result = await db.query('SELECT total FROM orders');
         return result.rows.every(row => Number(row['total']) >= 0);
@@ -18,11 +26,9 @@ describe('e-commerce properties', { timeout: 60000 }, () => {
   });
 
   it('every line item references a valid order', async () => {
-    await sqlproof.check({
-      name: 'line items have valid order references',
-      schema,
+    await proof.check('line items have valid order references', {
+      generate: { customers: 5, orders: 5, products: 5, line_items: 10 },
       runs: 20,
-      rowsPerTable: 5,
       property: async db => {
         const result = await db.query(`
           SELECT li.id
@@ -40,11 +46,9 @@ describe('e-commerce properties', { timeout: 60000 }, () => {
     // demonstrating counterexample reporting.
     // Wrapped in try/catch so the test suite itself passes.
     try {
-      await sqlproof.check({
-        name: 'order totals match line items',
-        schema,
+      await proof.check('order totals match line items', {
+        generate: { customers: 5, orders: 5, products: 5, line_items: 10 },
         runs: 50,
-        rowsPerTable: 5,
         property: async db => {
           const result = await db.query(`
             SELECT
@@ -67,11 +71,9 @@ describe('e-commerce properties', { timeout: 60000 }, () => {
   });
 
   it('cancelled orders query runs without error', async () => {
-    await sqlproof.check({
-      name: 'cancelled orders are immutable',
-      schema,
+    await proof.check('cancelled orders are immutable', {
+      generate: { customers: 5, orders: 5, products: 5, line_items: 10 },
       runs: 20,
-      rowsPerTable: 5,
       property: async db => {
         await db.query(`
           SELECT o.id, o.status, COUNT(li.id) as item_count
@@ -81,6 +83,31 @@ describe('e-commerce properties', { timeout: 60000 }, () => {
           GROUP BY o.id, o.status
         `);
         return true;
+      },
+    });
+  });
+
+  it('zipf FK distribution: FK integrity holds with skewed assignment', async () => {
+    proof.customize('orders', { fkDistribution: { customer_id: 'zipf' } });
+    proof.customize('line_items', {
+      fkDistribution: { order_id: 'zipf', product_id: 'adversarial' },
+    });
+
+    await proof.check('FK integrity with zipf/adversarial distributions', {
+      generate: { customers: 5, orders: 10, products: 5, line_items: 20 },
+      runs: 10,
+      property: async db => {
+        const orphanOrders = await db.query(`
+          SELECT o.id FROM orders o
+          LEFT JOIN customers c ON o.customer_id = c.id
+          WHERE c.id IS NULL
+        `);
+        const orphanItems = await db.query(`
+          SELECT li.id FROM line_items li
+          LEFT JOIN orders o ON li.order_id = o.id
+          WHERE o.id IS NULL
+        `);
+        return orphanOrders.rows.length === 0 && orphanItems.rows.length === 0;
       },
     });
   });

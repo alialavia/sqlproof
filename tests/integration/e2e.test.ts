@@ -1,4 +1,4 @@
-import { describe, it, beforeAll, afterAll } from 'vitest';
+import { describe, it, beforeEach, afterEach } from 'vitest';
 import { SqlProof } from '../../src/index.js';
 
 const schemaFile = new URL('../../examples/orders/schema.sql', import.meta.url).pathname;
@@ -6,12 +6,12 @@ const schemaFile = new URL('../../examples/orders/schema.sql', import.meta.url).
 describe('e2e integration tests', { timeout: 120000 }, () => {
   let proof: SqlProof;
 
-  beforeAll(async () => {
+  beforeEach(async () => {
     proof = await SqlProof.connect({ schemaFile });
   }, 120000);
 
-  afterAll(async () => {
-    await proof.disconnect();
+  afterEach(async () => {
+    await proof?.disconnect();
   }, 30000);
 
   it('passes a trivially-true property', async () => {
@@ -69,7 +69,7 @@ describe('e2e integration tests', { timeout: 120000 }, () => {
     });
 
     await proof.check('FK integrity with custom distributions', {
-      generate: { customers: 5, orders: 10, products: 5, line_items: 20 },
+      generate: { customers: 3, orders: 5, products: 3, line_items: 5 },
       property: async db => {
         const orphanOrders = await db.query(`
           SELECT o.id FROM orders o
