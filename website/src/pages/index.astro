@@ -1,3 +1,164 @@
 ---
+import '../styles/custom.css';
+const base = import.meta.env.BASE_URL;
+const docsBase = `${base}getting-started/`;
+const apiBase = `${base}api/sqlproof-class/`;
+const examplesBase = `${base}examples/orders/`;
+const githubUrl = 'https://github.com/alialavia/sqlproof';
 ---
-<html><body><h1>SqlProof</h1></body></html>
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SqlProof — Property-based testing for PostgreSQL</title>
+    <meta name="description" content="Automatically generate valid test data that respects your schema constraints, then find the minimal counterexample when your queries break." />
+    <link rel="icon" type="image/svg+xml" href={`${base}favicon.svg`} />
+    <style>
+      *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+      html { scroll-behavior: smooth; }
+      body {
+        background: #0d1f12;
+        color: #f0fdf4;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        line-height: 1.6;
+      }
+    </style>
+  </head>
+  <body>
+
+    <!-- Nav -->
+    <nav class="sp-nav">
+      <a href={base} class="sp-logo">SqlProof</a>
+      <div class="sp-nav-links">
+        <a href={docsBase}>Docs</a>
+        <a href={apiBase}>API</a>
+        <a href={examplesBase}>Examples</a>
+        <a href={githubUrl} target="_blank" rel="noopener">GitHub ↗</a>
+        <a href={docsBase} class="sp-nav-cta">Get Started</a>
+      </div>
+    </nav>
+
+    <!-- Hero -->
+    <div class="sp-hero">
+      <div class="sp-badge">v0.1.0 — now on npm</div>
+      <h1>Find SQL bugs<br />before your <span>users</span> do</h1>
+      <p>
+        Property-based testing for PostgreSQL. Generates random valid datasets
+        that respect your schema — then tries to break your queries.
+      </p>
+      <div class="sp-install">
+        <span class="prompt">$</span>
+        <span>npm install sqlproof</span>
+      </div>
+      <div class="sp-hero-buttons">
+        <a href={docsBase} class="sp-btn-primary">Get Started →</a>
+        <a href={githubUrl} target="_blank" rel="noopener" class="sp-btn-secondary">View on GitHub</a>
+      </div>
+    </div>
+
+    <hr class="sp-divider" />
+
+    <!-- Why SqlProof -->
+    <div class="sp-section">
+      <div class="sp-section-label">// why sqlproof</div>
+      <h2>Your queries work on your fixtures.<br />Do they work on real data?</h2>
+      <p class="sp-lead">
+        Hand-crafted test data misses edge cases. SqlProof generates thousands of valid
+        random datasets and finds the one that breaks your invariants.
+      </p>
+      <div class="sp-why-grid">
+        <div class="sp-why-card">
+          <h3>Schema-aware generation</h3>
+          <p>Respects foreign keys, CHECK constraints, UNIQUE, NOT NULL, and enum types automatically. No invalid data, no constraint violations.</p>
+        </div>
+        <div class="sp-why-card">
+          <h3>Minimal counterexamples</h3>
+          <p>When a property fails, fast-check shrinks the dataset to the smallest possible example — so you fix the bug, not hunt for it.</p>
+        </div>
+        <div class="sp-why-card">
+          <h3>Zero infrastructure</h3>
+          <p>Spins up a disposable Postgres via testcontainers. No external DB needed. Each run gets its own isolated schema — fast and clean.</p>
+        </div>
+        <div class="sp-why-card">
+          <h3>Works with your test runner</h3>
+          <p>Drop it into Vitest or Jest. Call <code>proof.check()</code> from an <code>it()</code> block. No new tools to learn.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- How it works -->
+    <div class="sp-how-section">
+      <div class="sp-how-inner">
+        <div class="sp-section-label">// how it works</div>
+        <h2 style="font-size:32px;font-weight:700;color:#f0fdf4;margin-bottom:0;">Four steps, zero boilerplate</h2>
+        <div class="sp-steps">
+          <div class="sp-step">
+            <div class="sp-step-num">1</div>
+            <h3>Parse schema</h3>
+            <p>Reads your SQL file or introspects a live Postgres DB to extract tables, types, FKs, and constraints.</p>
+          </div>
+          <div class="sp-step">
+            <div class="sp-step-num">2</div>
+            <h3>Generate data</h3>
+            <p>Creates random valid rows for every table in FK-dependency order. Respects all constraints.</p>
+          </div>
+          <div class="sp-step">
+            <div class="sp-step-num">3</div>
+            <h3>Insert &amp; run</h3>
+            <p>Inserts into an isolated Postgres schema, runs your property, then drops the schema. Repeats up to N times.</p>
+          </div>
+          <div class="sp-step">
+            <div class="sp-step-num">4</div>
+            <h3>Report</h3>
+            <p>On failure, shrinks to the minimal counterexample and reports it with a reproducible seed.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Code example -->
+    <div class="sp-code-section">
+      <div class="sp-section-label">// example</div>
+      <h2 style="font-size:32px;font-weight:700;color:#f0fdf4;">See it in action</h2>
+      <div class="sp-code-block">
+        <div class="sp-code-header">
+          <div class="sp-code-dot" style="background:#ff5f57"></div>
+          <div class="sp-code-dot" style="background:#febc2e"></div>
+          <div class="sp-code-dot" style="background:#28c840"></div>
+          <span class="sp-code-filename">orders.test.ts</span>
+        </div>
+        <div class="sp-code-body"><span class="sp-kw">import</span> &#123; SqlProof &#125; <span class="sp-kw">from</span> <span class="sp-str">'sqlproof'</span>;
+
+<span class="sp-kw">const</span> proof = <span class="sp-kw">await</span> SqlProof.<span class="sp-fn">connect</span>(&#123; schemaFile: <span class="sp-str">'./schema.sql'</span> &#125;);
+
+<span class="sp-kw">await</span> proof.<span class="sp-fn">invariant</span>(<span class="sp-str">'no orphan line items'</span>, &#123;
+  generate: &#123; customers: <span class="sp-num">10</span>, orders: <span class="sp-num">50</span>, line_items: <span class="sp-num">200</span> &#125;,
+  query: <span class="sp-str">`SELECT li.id FROM line_items li
+         LEFT JOIN orders o ON li.order_id = o.id
+         WHERE o.id IS NULL`</span>,
+  expectEmpty: <span class="sp-kw">true</span>,
+&#125;);
+
+<span class="sp-cm">// ✗ Property failed: "no orphan line items"</span>
+<span class="sp-cm">// After 3 runs — seed: 1708891234</span>
+<span class="sp-cm">// Reproduce: proof.invariant('...', &#123; ..., seed: 1708891234 &#125;)</span></div>
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <footer class="sp-footer">
+      <div>
+        <div class="sp-footer-logo">SqlProof</div>
+        <div class="sp-footer-sub">MIT License · Built on fast-check, pg, testcontainers</div>
+      </div>
+      <div class="sp-footer-links">
+        <a href={docsBase}>Docs</a>
+        <a href={githubUrl} target="_blank" rel="noopener">GitHub</a>
+        <a href="https://www.npmjs.com/package/sqlproof" target="_blank" rel="noopener">npm</a>
+      </div>
+    </footer>
+
+  </body>
+</html>
