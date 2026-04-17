@@ -13,7 +13,7 @@ describe('executeAndIntrospect', { timeout: 120000 }, () => {
       const container = await new PostgreSqlContainer('postgres:16').withReuse().start();
       pool = new Pool({ connectionString: container.getConnectionUri() });
     }
-  });
+  }, 120000);
 
   afterAll(async () => {
     await pool?.end();
