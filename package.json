@@ -20,7 +20,8 @@
     "dev": "tsup --watch",
     "test": "vitest run tests/schema tests/generators",
     "test:watch": "vitest",
-    "test:integration": "vitest run tests/integration",
+    "test:parser": "vitest run tests/integration/parser.test.ts",
+    "test:integration": "vitest run tests/integration/e2e.test.ts",
     "test:examples": "vitest run examples",
     "typecheck": "tsc --noEmit"
   },

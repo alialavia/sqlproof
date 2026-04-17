@@ -1,15 +1,18 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { Pool } from 'pg';
-import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { executeAndIntrospect } from '../../src/schema/parser.js';
 
 describe('executeAndIntrospect', { timeout: 120000 }, () => {
-  let container: StartedPostgreSqlContainer;
   let pool: Pool;
 
   beforeAll(async () => {
-    container = await new PostgreSqlContainer('postgres:16').withReuse().start();
-    pool = new Pool({ connectionString: container.getConnectionUri() });
+    if (process.env.DATABASE_URL) {
+      pool = new Pool({ connectionString: process.env.DATABASE_URL });
+    } else {
+      const { PostgreSqlContainer } = await import('@testcontainers/postgresql');
+      const container = await new PostgreSqlContainer('postgres:16').withReuse().start();
+      pool = new Pool({ connectionString: container.getConnectionUri() });
+    }
   });
 
   afterAll(async () => {

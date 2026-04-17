@@ -24,3 +24,8 @@ jobs:
 
       - name: Unit tests
         run: npm test
+
+      - name: Parser tests
+        run: npm run test:parser
+        env:
+          DATABASE_URL: ${{ secrets.NEON_TEST_DATABASE_URL }}
