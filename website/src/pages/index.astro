@@ -1,6 +1,7 @@
 ---
 import '../styles/custom.css';
-const base = import.meta.env.BASE_URL;
+const rawBase = import.meta.env.BASE_URL;
+const base = ('/' + rawBase + '/').replace(/\/+/g, '/');
 const docsBase = `${base}getting-started/`;
 const apiBase = `${base}api/sqlproof-class/`;
 const examplesBase = `${base}examples/orders/`;
@@ -42,7 +43,7 @@ const githubUrl = 'https://github.com/alialavia/sqlproof';
 
     <!-- Hero -->
     <div class="sp-hero">
-      <div class="sp-badge">v0.1.0 — now on npm</div>
+      <div class="sp-badge">v0.1.0 — early development, not yet on npm</div>
       <h1>Find SQL bugs<br />before your <span>users</span> do</h1>
       <p>
         Property-based testing for PostgreSQL. Generates random valid datasets
@@ -52,6 +53,7 @@ const githubUrl = 'https://github.com/alialavia/sqlproof';
         <span class="prompt">$</span>
         <span>npm install sqlproof</span>
       </div>
+      <p class="sp-npm-disclaimer">⚠ Not yet published — follow the repo for updates</p>
       <div class="sp-hero-buttons">
         <a href={docsBase} class="sp-btn-primary">Get Started →</a>
         <a href={githubUrl} target="_blank" rel="noopener" class="sp-btn-secondary">View on GitHub</a>
