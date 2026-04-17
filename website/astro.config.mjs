@@ -2,8 +2,7 @@ import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 
 export default defineConfig({
-  site: 'https://alialavia.github.io',
-  base: '/sqlproof',
+  site: 'https://sqlproof.com',
   integrations: [
     starlight({
       title: 'SqlProof',
