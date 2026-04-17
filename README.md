@@ -1,6 +1,8 @@
 # SqlProof
 
-**→ Full docs: [alialavia.github.io/sqlproof](https://alialavia.github.io/sqlproof)**
+[![CI](https://github.com/alialavia/sqlproof/actions/workflows/ci.yml/badge.svg)](https://github.com/alialavia/sqlproof/actions/workflows/ci.yml)
+
+**→ Full docs: [sqlproof.com](https://sqlproof.com)**
 
 Property-based testing for SQL queries against PostgreSQL. Define invariants about your queries, and SqlProof generates random valid datasets to try to break them — then reports the minimal counterexample when it does.
 
