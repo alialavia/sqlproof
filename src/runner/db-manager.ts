@@ -5,6 +5,8 @@ import { getInsertionOrder } from '../schema/dependency-graph.js';
 export interface DBManagerOptions {
   connectionString?: string;
   useTestcontainers?: boolean;
+  neonBranchId?: string;
+  neonOptions?: import('../schema/types.js').NeonOptions;
 }
 
 /**
@@ -148,6 +150,15 @@ export class DBManager {
       this.pool = null;
     }
     // Note: testcontainers container with .withReuse() is not stopped on purpose
+    if (this.options.neonBranchId !== undefined && this.options.neonOptions !== undefined) {
+      const { deleteNeonBranch } = await import('./neon-provider.js');
+      const { apiKey, projectId } = this.options.neonOptions;
+      await deleteNeonBranch(apiKey, projectId, this.options.neonBranchId).catch(err => {
+        console.warn(
+          `[sqlproof] Failed to delete Neon branch ${this.options.neonBranchId}: ${(err as Error).message}`,
+        );
+      });
+    }
   }
 
   static generateSchemaName(): string {

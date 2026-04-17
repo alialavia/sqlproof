@@ -82,13 +82,32 @@ export interface TableCustomization {
   [columnName: string]: fc.Arbitrary<unknown> | Record<string, FkDistributionStrategy> | undefined;
 }
 
+export interface NeonOptions {
+  /** Neon API key (Neon Console → Account Settings → API Keys). */
+  apiKey: string;
+  /** Neon project ID. */
+  projectId: string;
+  /** Database name. Default: 'neondb'. */
+  database?: string;
+  /** Role name for the connection URI. Default: 'neondb_owner'. */
+  role?: string;
+  /** Parent branch name or ID to branch from. Default: project default branch. */
+  parentBranch?: string;
+}
+
 export interface SqlProofConnectOptions {
   /** Connect to an existing Postgres instance. */
   connectionString?: string;
-  /** Postgres schema name to introspect (default: 'public'). Only used with connectionString. */
+  /** Postgres schema name to introspect (default: 'public'). Used with `connectionString` or `neon`. */
   schema?: string;
-  /** Path to a SQL DDL file. Auto-starts a testcontainers Postgres. */
+  /**
+   * Path to a SQL DDL file.
+   * - Without `connectionString`: auto-starts a testcontainers Postgres (requires Docker).
+   * - With `connectionString`: applies DDL to a temp schema on the provided DB — no Docker needed.
+   */
   schemaFile?: string;
+  /** Use Neon branching for instant isolated test databases. Cannot be combined with `connectionString` or `schemaFile`. */
+  neon?: NeonOptions;
 }
 
 export interface CheckOptions {

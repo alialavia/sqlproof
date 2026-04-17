@@ -75,18 +75,50 @@ describe('order queries', () => {
 });
 ```
 
-## Connecting to an Existing Database
+## Connection Modes
 
-If you have a running Postgres instance, pass a connection string instead of a schema file:
+SqlProof supports three connection modes:
+
+| Mode | Options | Docker needed? | When to use |
+|------|---------|----------------|-------------|
+| Testcontainers | `schemaFile` only | Yes | Local dev with no external DB |
+| Connection string | `connectionString` + optionally `schemaFile` or `schema` | No | CI Postgres, staging, Supabase, Render |
+| Neon branching | `neon: { apiKey, projectId }` | No | Instant isolated branches on Neon |
+
+See the [Local Development](/guides/local-dev), [CI/CD Integration](/guides/ci-cd), and [Security & Credentials](/guides/security) guides for full setup instructions.
+
+### Connection String
+
+Point SqlProof at any running Postgres. Provide a DDL file to apply your schema, or introspect an existing one:
 
 ```typescript
+// Apply DDL to the external DB — no Docker needed
 const proof = await SqlProof.connect({
-  connectionString: 'postgresql://localhost:5432/mydb',
-  schema: 'public', // optional, defaults to 'public'
+  connectionString: process.env.DATABASE_URL!,
+  schemaFile: './schema.sql',
+});
+
+// Introspect an existing live schema
+const proof = await SqlProof.connect({
+  connectionString: process.env.DATABASE_URL!,
+  schema: 'public',
 });
 ```
 
-SqlProof will introspect your live database schema and use it for data generation.
+### Neon Branching
+
+Creates an instant isolated branch for each test session (~1 second). Deleted automatically on `disconnect()`.
+
+```typescript
+const proof = await SqlProof.connect({
+  neon: {
+    apiKey: process.env.NEON_API_KEY!,
+    projectId: process.env.NEON_PROJECT_ID!,
+    parentBranch: 'main', // optional
+  },
+  schema: 'public',
+});
+```
 
 ## Vitest Configuration
 

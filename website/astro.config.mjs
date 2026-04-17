@@ -25,6 +25,9 @@ export default defineConfig({
           items: [
             { label: 'FK Distribution Strategies', slug: 'guides/fk-distributions' },
             { label: 'Custom Generators', slug: 'guides/custom-generators' },
+            { label: 'CI/CD Integration', slug: 'guides/ci-cd' },
+            { label: 'Security & Credentials', slug: 'guides/security' },
+            { label: 'Local Development', slug: 'guides/local-dev' },
           ],
         },
         {

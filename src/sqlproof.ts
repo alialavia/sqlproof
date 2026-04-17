@@ -5,6 +5,7 @@ import type {
   CheckOptions,
   InvariantOptions,
   TableCustomization,
+  NeonOptions,
 } from './schema/types.js';
 import { executeAndIntrospect, introspectSchema } from './schema/parser.js';
 import { DBManager } from './runner/db-manager.js';
@@ -26,21 +27,39 @@ export class SqlProof {
    * Provide either `connectionString` (existing DB) or `schemaFile` (auto-managed container).
    */
   static async connect(options: SqlProofConnectOptions): Promise<SqlProof> {
-    const { connectionString, schema = 'public', schemaFile } = options;
+    const { connectionString, schema = 'public', schemaFile, neon } = options;
 
-    if (!connectionString && !schemaFile) {
+    if (!connectionString && !schemaFile && !neon) {
       throw new Error(
-        'SqlProof.connect: provide either `connectionString` or `schemaFile`, not neither.',
+        'SqlProof.connect: provide one of `connectionString`, `schemaFile`, or `neon`.',
       );
     }
-    if (connectionString && schemaFile) {
+    if (neon && (connectionString || schemaFile)) {
       throw new Error(
-        'SqlProof.connect: provide either `connectionString` or `schemaFile`, not both.',
+        'SqlProof.connect: `neon` cannot be combined with `connectionString` or `schemaFile`.',
       );
+    }
+
+    let resolvedConnectionString: string | undefined = connectionString;
+    let neonBranchId: string | undefined;
+    let neonOptions: NeonOptions | undefined;
+
+    if (neon) {
+      const { createNeonBranch } = await import('./runner/neon-provider.js');
+      const result = await createNeonBranch(neon);
+      resolvedConnectionString = result.connectionString;
+      neonBranchId = result.branchId;
+      neonOptions = neon;
     }
 
     const dbManager = new DBManager(
-      connectionString ? { connectionString } : { useTestcontainers: true },
+      resolvedConnectionString
+        ? {
+            connectionString: resolvedConnectionString,
+            ...(neonBranchId !== undefined ? { neonBranchId } : {}),
+            ...(neonOptions !== undefined ? { neonOptions } : {}),
+          }
+        : { useTestcontainers: true },
     );
     await dbManager.start();
 
@@ -83,11 +102,13 @@ export class SqlProof {
    */
   async invariant(name: string, options: InvariantOptions): Promise<void> {
     const { generate, query, runs, seed, timeout } = options;
+    const extras: Partial<CheckOptions> = {};
+    if (runs !== undefined) extras.runs = runs;
+    if (seed !== undefined) extras.seed = seed;
+    if (timeout !== undefined) extras.timeout = timeout;
     await this.check(name, {
       generate,
-      runs,
-      seed,
-      timeout,
+      ...extras,
       property: async db => {
         const result = await db.query(query);
         return result.rows.length === 0;
