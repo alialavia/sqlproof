@@ -13,8 +13,12 @@
       "require": "./dist/index.cjs"
     }
   },
-  "files": ["dist"],
-  "engines": { "node": ">=18" },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
@@ -22,6 +26,7 @@
     "test:watch": "vitest",
     "test:parser": "vitest run tests/integration/parser.test.ts",
     "test:integration": "vitest run tests/integration/e2e.test.ts",
+    "test:coverage": "vitest run tests/schema tests/generators --coverage",
     "test:examples": "vitest run examples",
     "typecheck": "tsc --noEmit"
   },
@@ -32,14 +37,17 @@
   "devDependencies": {
     "@testcontainers/postgresql": "^10.16.0",
     "@types/pg": "^8.11.0",
+    "@vitest/coverage-v8": "^1.6.1",
+    "tsup": "^8.3.0",
     "typescript": "^5.7.0",
-    "vitest": "^1.6.0",
-    "tsup": "^8.3.0"
+    "vitest": "^1.6.0"
   },
   "peerDependencies": {
     "@testcontainers/postgresql": "^10.x"
   },
   "peerDependenciesMeta": {
-    "@testcontainers/postgresql": { "optional": true }
+    "@testcontainers/postgresql": {
+      "optional": true
+    }
   }
 }

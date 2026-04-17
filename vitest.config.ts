@@ -7,5 +7,11 @@ export default defineConfig({
     poolOptions: { forks: { singleFork: true } },
     testTimeout: 30000,
     include: ['tests/**/*.test.ts', 'examples/**/*.test.ts'],
+    coverage: {
+      provider: 'v8',
+      include: ['src/**/*.ts'],
+      exclude: ['src/index.ts'],
+      reporter: ['text', 'lcov'],
+    },
   },
 });

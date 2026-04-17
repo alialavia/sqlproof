@@ -1,6 +1,7 @@
 # SqlProof
 
 [![CI](https://github.com/alialavia/sqlproof/actions/workflows/ci.yml/badge.svg)](https://github.com/alialavia/sqlproof/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/alialavia/sqlproof/branch/main/graph/badge.svg)](https://codecov.io/gh/alialavia/sqlproof)
 
 **→ Full docs: [sqlproof.com](https://sqlproof.com)**
 
