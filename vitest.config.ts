@@ -4,7 +4,7 @@ export default defineConfig({
     globals: false,
     environment: 'node',
     pool: 'forks',
-    poolOptions: { forks: { maxForks: 1 } },
+    poolOptions: { forks: { singleFork: true } },
     testTimeout: 30000,
     include: ['tests/**/*.test.ts', 'examples/**/*.test.ts'],
   },
