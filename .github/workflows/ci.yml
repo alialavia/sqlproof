@@ -26,7 +26,7 @@ jobs:
         run: npm test
 
       - name: Integration tests
-        run: npm run test:integration -- --maxWorkers=1
+        run: npm run test:integration
         env:
           TESTCONTAINERS_RYUK_DISABLED: 'true'
           NODE_OPTIONS: '--max-old-space-size=4096'
