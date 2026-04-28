@@ -162,7 +162,7 @@ interface SqlProofClient {
 
 When a property fails, SqlProof throws with a formatted counterexample:
 
-```
+```text
 ✗ Property failed: "order totals match sum of line items"
 
   After 23 run(s) (seed: 1708891234)
@@ -213,10 +213,45 @@ cd sqlproof
 npm install
 
 npm test                  # unit tests (no Docker needed)
-npm run test:integration  # e2e tests (requires Docker)
+SQLPROOF_TEST_DATABASE_URL='postgresql://postgres:postgres@127.0.0.1:54322/postgres' npm run test:integration
 npm run build             # build with tsup
 npm run typecheck         # type-check with tsc
 ```
+
+### Postgres-backed tests
+
+Parser, integration, and example tests read `SQLPROOF_TEST_DATABASE_URL`.
+For local Supabase, the default connection string is usually:
+
+```bash
+SQLPROOF_TEST_DATABASE_URL='postgresql://postgres:postgres@127.0.0.1:54322/postgres'
+```
+
+These tests do not write to existing application tables. Schema-file
+introspection uses temporary `_sqlproof_introspect_*` schemas, and property
+runs use isolated `run_*` schemas that are dropped after each run.
+
+### Why SqlProof tests itself with properties
+
+SqlProof uses fast-check internally, and the test suite uses fast-check where it
+can check broad invariants more effectively than examples. One recent regression
+was in schema-file DDL rebuilding. When SqlProof reads a `schemaFile`, it loads
+that file into a throwaway Postgres schema so your real application schema is not
+touched. Postgres may record enum defaults with that throwaway schema name, for
+example `'pending'::_sqlproof_introspect_x.order_status`.
+
+Before each property test, SqlProof recreates the tables in a fresh `run_*`
+schema. That enum default has to point at the enum type in the current `run_*`
+schema, not the throwaway schema that was already dropped. In other words,
+SqlProof rewrites the enum type reference inside the default value before
+creating the test table.
+
+An example-based test covered the common unquoted cast shape, but a fast-check
+property over valid identifier names found a quoted-cast boundary case:
+`''::"old_schema"."status"` was not rewritten to the new run schema. The
+property test now checks schema-qualified casts, unqualified casts, quoted casts,
+non-enum casts, and enum-name prefixes so this class of DDL rewrite bug stays
+covered.
 
 ## License
 

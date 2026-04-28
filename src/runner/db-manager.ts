@@ -1,6 +1,7 @@
 import { Pool, type PoolClient } from 'pg';
 import type { SchemaInfo, TableInfo, Dataset } from '../schema/types.js';
 import { getInsertionOrder } from '../schema/dependency-graph.js';
+import { rewriteDefaultValue } from './default-value-rewriter.js';
 
 export interface DBManagerOptions {
   connectionString?: string;
@@ -198,7 +199,10 @@ function buildCreateTableSql(table: TableInfo, schemaName: string, schemaInfo: S
       typePart = serialType(col.dataType);
     }
     const nullPart = col.nullable ? '' : ' NOT NULL';
-    const defaultPart = col.defaultValue && !col.isGenerated ? ` DEFAULT ${col.defaultValue}` : '';
+    const defaultPart =
+      col.defaultValue && !col.isGenerated
+        ? ` DEFAULT ${rewriteDefaultValue(col.defaultValue, schemaName, schemaInfo)}`
+        : '';
     lines.push(`  "${col.name}" ${typePart}${nullPart}${defaultPart}`);
   }
 

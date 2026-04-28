@@ -34,4 +34,4 @@ jobs:
       - name: Parser tests
         run: npm run test:parser
         env:
-          DATABASE_URL: ${{ secrets.NEON_TEST_DATABASE_URL }}
+          SQLPROOF_TEST_DATABASE_URL: ${{ secrets.NEON_TEST_DATABASE_URL }}

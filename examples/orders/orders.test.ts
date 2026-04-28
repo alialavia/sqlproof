@@ -1,13 +1,18 @@
 import { describe, it, beforeEach, afterEach } from 'vitest';
 import { SqlProof } from '../../src/index.js';
+import { getTestDatabaseUrl } from '../../tests/integration/test-database.js';
 
 const schemaFile = new URL('./schema.sql', import.meta.url).pathname;
+const connectionString = getTestDatabaseUrl();
 
 describe('e-commerce properties', { timeout: 120000 }, () => {
   let proof: SqlProof;
 
   beforeEach(async () => {
-    proof = await SqlProof.connect({ schemaFile });
+    proof = await SqlProof.connect({
+      connectionString,
+      schemaFile,
+    });
   }, 120000);
 
   afterEach(async () => {

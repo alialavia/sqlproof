@@ -1,13 +1,18 @@
 import { describe, it, beforeEach, afterEach } from 'vitest';
 import { SqlProof } from '../../src/index.js';
+import { getTestDatabaseUrl } from './test-database.js';
 
 const schemaFile = new URL('../../examples/orders/schema.sql', import.meta.url).pathname;
+const connectionString = getTestDatabaseUrl();
 
 describe('e2e integration tests', { timeout: 120000 }, () => {
   let proof: SqlProof;
 
   beforeEach(async () => {
-    proof = await SqlProof.connect({ schemaFile });
+    proof = await SqlProof.connect({
+      connectionString,
+      schemaFile,
+    });
   }, 120000);
 
   afterEach(async () => {
@@ -19,6 +24,17 @@ describe('e2e integration tests', { timeout: 120000 }, () => {
       generate: { customers: 3, orders: 3, products: 3, line_items: 3 },
       property: async () => true,
       runs: 10,
+    });
+  });
+
+  it('recreates enum defaults from schema files inside the run schema', async () => {
+    await proof.check('schema file enum defaults are valid in run schemas', {
+      generate: { customers: 0, orders: 0, products: 0, line_items: 0 },
+      property: async db => {
+        await db.query('SELECT 1');
+        return true;
+      },
+      runs: 1,
     });
   });
 

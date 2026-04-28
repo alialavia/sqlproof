@@ -22,5 +22,5 @@ jobs:
       - name: E2E tests
         run: npm run test:integration
         env:
-          TESTCONTAINERS_RYUK_DISABLED: 'true'
+          SQLPROOF_TEST_DATABASE_URL: ${{ secrets.NEON_TEST_DATABASE_URL }}
           NODE_OPTIONS: '--max-old-space-size=4096'

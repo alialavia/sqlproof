@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import * as fc from 'fast-check';
 import { getInsertionOrder } from '../../src/schema/dependency-graph.js';
 import type { TableInfo } from '../../src/schema/types.js';
 
@@ -82,5 +83,66 @@ describe('getInsertionOrder', () => {
   it('throws error listing involved table names', () => {
     const tables = [makeTable('x', ['y']), makeTable('y', ['x'])];
     expect(() => getInsertionOrder(tables)).toThrow(/x|y/);
+  });
+
+  it('returns a valid topological order for generated DAGs', () => {
+    fc.assert(
+      fc.property(
+        fc.integer({ min: 1, max: 8 }).chain(tableCount =>
+          fc
+            .array(fc.boolean(), {
+              minLength: (tableCount * (tableCount - 1)) / 2,
+              maxLength: (tableCount * (tableCount - 1)) / 2,
+            })
+            .map(edges => ({ tableCount, edges })),
+        ),
+        ({ tableCount, edges }) => {
+          const tableNames = Array.from({ length: tableCount }, (_, i) => `t${i}`);
+          let edgeIndex = 0;
+          const refsByTable = new Map<string, string[]>();
+
+          for (let childIdx = 0; childIdx < tableCount; childIdx++) {
+            const refs: string[] = [];
+            for (let parentIdx = 0; parentIdx < childIdx; parentIdx++) {
+              if (edges[edgeIndex]) refs.push(tableNames[parentIdx]!);
+              edgeIndex++;
+            }
+            refsByTable.set(tableNames[childIdx]!, refs);
+          }
+
+          const tables = tableNames.map(name => makeTable(name, refsByTable.get(name) ?? []));
+          const order = getInsertionOrder(tables);
+          const positions = new Map(order.map((name, index) => [name, index]));
+
+          expect(new Set(order)).toEqual(new Set(tableNames));
+          expect(order).toHaveLength(tableNames.length);
+
+          for (const table of tables) {
+            const childPosition = positions.get(table.name);
+            expect(childPosition).toBeDefined();
+
+            for (const fk of table.foreignKeys) {
+              const parentPosition = positions.get(fk.referencedTable);
+              expect(parentPosition).toBeDefined();
+              expect(parentPosition!).toBeLessThan(childPosition!);
+            }
+          }
+        },
+      ),
+    );
+  });
+
+  it('throws for generated circular dependencies', () => {
+    fc.assert(
+      fc.property(fc.integer({ min: 2, max: 8 }), tableCount => {
+        const tableNames = Array.from({ length: tableCount }, (_, i) => `t${i}`);
+        const tables = tableNames.map((name, index) => {
+          const referencedTable = tableNames[(index + 1) % tableCount]!;
+          return makeTable(name, [referencedTable]);
+        });
+
+        expect(() => getInsertionOrder(tables)).toThrow(/circular/i);
+      }),
+    );
   });
 });

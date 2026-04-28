@@ -22,11 +22,11 @@
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
-    "test": "vitest run tests/schema tests/generators",
+    "test": "vitest run tests/schema tests/generators tests/runner",
     "test:watch": "vitest",
     "test:parser": "vitest run tests/integration/parser.test.ts",
     "test:integration": "vitest run tests/integration/e2e.test.ts",
-    "test:coverage": "vitest run tests/schema tests/generators --coverage",
+    "test:coverage": "vitest run tests/schema tests/generators tests/runner --coverage",
     "test:examples": "vitest run examples",
     "typecheck": "tsc --noEmit"
   },
