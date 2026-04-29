@@ -120,6 +120,43 @@ def test_parse_schema_sql_models_tables_columns_keys_and_checks() -> None:
     assert orders.check_constraints[0].expression == "total >= 0"
 
 
+def test_parse_schema_sql_uses_postgres_ast_for_qualified_constraints() -> None:
+    schema = parse_schema_sql(
+        """
+        CREATE TYPE app.order_status AS ENUM ('pending', 'paid');
+
+        CREATE TABLE app.customers (
+          id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY
+        );
+
+        CREATE TABLE app.orders (
+          id INTEGER PRIMARY KEY,
+          customer_id INTEGER NOT NULL,
+          status app.order_status NOT NULL DEFAULT 'pending',
+          total NUMERIC(10, 2) NOT NULL,
+          CONSTRAINT orders_total_non_negative CHECK (total >= 0),
+          CONSTRAINT orders_customer_fk
+            FOREIGN KEY (customer_id) REFERENCES app.customers(id) ON DELETE CASCADE,
+          UNIQUE (customer_id, status)
+        );
+        """,
+        schema="app",
+    )
+
+    customers = schema.table("customers", schema="app")
+    orders = schema.table("orders", schema="app")
+
+    assert schema.enums[0].name == "order_status"
+    assert customers.column("id").identity == "always"
+    assert orders.column("status").type.kind == "enum"
+    assert orders.column("status").default == "'pending'"
+    assert orders.foreign_keys[0].columns == ("customer_id",)
+    assert orders.foreign_keys[0].referenced_table == "customers"
+    assert orders.foreign_keys[0].on_delete == "CASCADE"
+    assert orders.unique_constraints == (("customer_id", "status"),)
+    assert orders.check_constraints[0].expression == "total >= 0"
+
+
 class FakeIntrospectionConnection:
     def execute(self, sql: str, params: tuple[object, ...] = ()) -> object:
         del params

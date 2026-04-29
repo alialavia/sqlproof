@@ -1,76 +1,79 @@
 from __future__ import annotations
 
 import re
+from typing import Any, Literal, cast
+
+from pglast import parse_sql as parse_postgres_sql
+from pglast.enums import ConstrType
+from pglast.stream import RawStream
 
 from sqlproof.exceptions import SqlProofSchemaError
 from sqlproof.schema.model import CheckConstraint, Column, ForeignKey, PgType, SchemaInfo, Table
 
-_CREATE_TYPE_RE = re.compile(
-    r"CREATE\s+TYPE\s+(?P<name>[a-zA-Z_][\w.]*)\s+AS\s+ENUM\s*\((?P<values>.*?)\)",
-    re.IGNORECASE | re.DOTALL,
-)
-_CREATE_TABLE_RE = re.compile(
-    r"CREATE\s+TABLE\s+(?P<name>[a-zA-Z_][\w.]*)\s*\((?P<body>.*?)\)\s*;",
-    re.IGNORECASE | re.DOTALL,
-)
-
 
 def parse_schema_sql(sql: str, *, schema: str = "public") -> SchemaInfo:
-    enums = _parse_enums(sql)
-    enum_names = {enum.name: enum for enum in enums}
+    try:
+        statements: tuple[Any, ...] = tuple(parse_postgres_sql(sql))
+    except Exception as exc:
+        raise SqlProofSchemaError(str(exc)) from exc
+
+    enums: list[PgType] = []
+    enum_names: dict[str, PgType] = {}
+    for raw_statement in statements:
+        statement: Any = raw_statement.stmt
+        if type(statement).__name__ == "CreateEnumStmt":
+            enum_schema, enum_name = _qualified_parts(statement.typeName, default_schema=schema)
+            enum = PgType(
+                kind="enum",
+                name=enum_name,
+                enum_values=tuple(_sval(value) for value in statement.vals),
+            )
+            enums.append(enum)
+            enum_names[enum_name] = enum
+            enum_names[f"{enum_schema}.{enum_name}"] = enum
+
     tables = tuple(
-        _parse_table(match, enum_names, schema) for match in _CREATE_TABLE_RE.finditer(sql)
+        _parse_table_statement(raw_statement.stmt, enum_names, schema)
+        for raw_statement in statements
+        if type(raw_statement.stmt).__name__ == "CreateStmt"
     )
     if not tables and "CREATE TABLE" in sql.upper():
         raise SqlProofSchemaError("Could not parse CREATE TABLE statement.")
-    return SchemaInfo(tables=tables, enums=enums)
+    return SchemaInfo(tables=tables, enums=tuple(enums))
 
 
-def _parse_enums(sql: str) -> tuple[PgType, ...]:
-    enums: list[PgType] = []
-    for match in _CREATE_TYPE_RE.finditer(sql):
-        values = tuple(value.strip().strip("'\"") for value in match.group("values").split(","))
-        enums.append(PgType(kind="enum", name=_unqualify(match.group("name")), enum_values=values))
-    return tuple(enums)
-
-
-def _parse_table(match: re.Match[str], enum_names: dict[str, PgType], schema: str) -> Table:
-    raw_name = match.group("name")
-    table_schema, table_name = _split_qualified(raw_name, default_schema=schema)
+def _parse_table_statement(statement: Any, enum_names: dict[str, PgType], schema: str) -> Table:
+    relation = statement.relation
+    table_schema = relation.schemaname or schema
+    table_name = relation.relname
     columns: list[Column] = []
     primary_key: tuple[str, ...] = ()
     foreign_keys: list[ForeignKey] = []
     unique_constraints: list[tuple[str, ...]] = []
     check_constraints: list[CheckConstraint] = []
 
-    for item in _split_top_level_commas(match.group("body")):
-        text = item.strip()
-        upper = text.upper()
-        if upper.startswith("PRIMARY KEY"):
-            primary_key = tuple(_parse_column_list(text))
+    for element in statement.tableElts or ():
+        if type(element).__name__ == "ColumnDef":
+            column = _parse_column(element, enum_names)
+            columns.append(column)
+            for constraint in element.constraints or ():
+                if constraint.contype == ConstrType.CONSTR_PRIMARY:
+                    primary_key = (column.name,)
+                elif constraint.contype == ConstrType.CONSTR_UNIQUE:
+                    unique_constraints.append((column.name,))
+                elif constraint.contype == ConstrType.CONSTR_FOREIGN:
+                    foreign_keys.append(_parse_foreign_key(constraint, columns=(column.name,)))
+                elif constraint.contype == ConstrType.CONSTR_CHECK:
+                    check_constraints.append(_parse_check(constraint))
             continue
-        if upper.startswith("UNIQUE"):
-            unique_constraints.append(tuple(_parse_column_list(text)))
-            continue
-        if upper.startswith("FOREIGN KEY"):
-            foreign_keys.append(_parse_table_fk(text))
-            continue
-        if upper.startswith("CHECK"):
-            check_constraints.append(CheckConstraint(_inside_parentheses(text)))
-            continue
-
-        column = _parse_column(text, enum_names)
-        columns.append(column)
-        if "PRIMARY KEY" in upper:
-            primary_key = (column.name,)
-        if "UNIQUE" in upper:
-            unique_constraints.append((column.name,))
-        fk = _parse_inline_fk(column.name, text)
-        if fk is not None:
-            foreign_keys.append(fk)
-        check = _parse_inline_check(text)
-        if check is not None:
-            check_constraints.append(check)
+        if element.contype == ConstrType.CONSTR_PRIMARY:
+            primary_key = _constraint_keys(element)
+        elif element.contype == ConstrType.CONSTR_UNIQUE:
+            unique_constraints.append(_constraint_keys(element))
+        elif element.contype == ConstrType.CONSTR_FOREIGN:
+            foreign_keys.append(_parse_foreign_key(element))
+        elif element.contype == ConstrType.CONSTR_CHECK:
+            check_constraints.append(_parse_check(element))
 
     return Table(
         schema=table_schema,
@@ -83,130 +86,119 @@ def _parse_table(match: re.Match[str], enum_names: dict[str, PgType], schema: st
     )
 
 
-def _parse_column(text: str, enum_names: dict[str, PgType]) -> Column:
-    parts = text.split()
-    if len(parts) < 2:
-        raise SqlProofSchemaError(f"Could not parse column definition: {text}")
-    name = _clean_identifier(parts[0])
-    type_tokens: list[str] = []
-    for token in parts[1:]:
-        if token.upper() in {
-            "NOT",
-            "NULL",
-            "DEFAULT",
-            "PRIMARY",
-            "REFERENCES",
-            "UNIQUE",
-            "CHECK",
-            "GENERATED",
-            "IDENTITY",
-        }:
-            break
-        type_tokens.append(token)
-    type_sql = " ".join(type_tokens)
-    pg_type = _parse_type(type_sql, enum_names)
-    upper = text.upper()
+def _parse_column(column: Any, enum_names: dict[str, PgType]) -> Column:
+    constraints = tuple(column.constraints or ())
+    pg_type = _parse_type_node(column.typeName, enum_names)
+    identity = _identity_for_constraints(constraints)
+    primary = any(constraint.contype == ConstrType.CONSTR_PRIMARY for constraint in constraints)
+    not_null = (
+        column.is_not_null
+        or primary
+        or any(constraint.contype == ConstrType.CONSTR_NOTNULL for constraint in constraints)
+    )
     return Column(
-        name=name,
+        name=column.colname,
         type=pg_type,
-        nullable="NOT NULL" not in upper and "PRIMARY KEY" not in upper,
-        default=_parse_default(text),
-        is_generated=pg_type.name in {"serial", "bigserial"} or "GENERATED" in upper,
+        nullable=not not_null,
+        default=_default_for_constraints(constraints),
+        is_generated=pg_type.name in {"serial", "bigserial"} or identity is not None,
+        identity=identity,
     )
 
 
-def _parse_type(type_sql: str, enum_names: dict[str, PgType]) -> PgType:
-    normalized = type_sql.strip().lower()
-    bare = re.sub(r"\s+", " ", normalized)
-    if bare in enum_names:
-        return enum_names[bare]
-    modifier_match = re.match(r"(?P<name>\w+)\((?P<mods>[\d,\s]+)\)", bare)
-    if modifier_match:
-        modifiers = tuple(int(part.strip()) for part in modifier_match.group("mods").split(","))
-        return PgType(kind="scalar", name=modifier_match.group("name"), modifiers=modifiers)
-    return PgType(kind="scalar", name=bare)
+def _parse_type_node(type_node: Any, enum_names: dict[str, PgType]) -> PgType:
+    parts = tuple(_sval(part) for part in type_node.names)
+    name = _normalize_type_name(".".join(parts))
+    if name in enum_names:
+        return enum_names[name]
+    unqualified = name.rsplit(".", 1)[-1]
+    if unqualified in enum_names:
+        return enum_names[unqualified]
+    modifiers = tuple(_const_int(modifier) for modifier in type_node.typmods or ())
+    return PgType(kind="scalar", name=unqualified, modifiers=modifiers)
 
 
-def _parse_default(text: str) -> str | None:
-    match = re.search(
-        r"\bDEFAULT\s+(.+?)(?:\s+NOT\s+NULL|\s+PRIMARY\s+KEY|\s+UNIQUE|\s+CHECK|\s+REFERENCES|$)",
-        text,
-        re.I,
-    )
-    return match.group(1).strip() if match else None
-
-
-def _parse_inline_fk(column_name: str, text: str) -> ForeignKey | None:
-    match = re.search(r"\bREFERENCES\s+([a-zA-Z_][\w.]*)\s*\(([^)]+)\)", text, re.I)
-    if match is None:
-        return None
+def _parse_foreign_key(constraint: Any, *, columns: tuple[str, ...] | None = None) -> ForeignKey:
     return ForeignKey(
-        columns=(column_name,),
-        referenced_table=_unqualify(match.group(1)),
-        referenced_columns=tuple(_clean_identifier(part) for part in match.group(2).split(",")),
-        on_delete="NO ACTION",
-        on_update="NO ACTION",
+        columns=columns or tuple(_sval(value) for value in constraint.fk_attrs),
+        referenced_table=constraint.pktable.relname,
+        referenced_columns=tuple(_sval(value) for value in constraint.pk_attrs),
+        on_delete=_referential_action(constraint.fk_del_action),
+        on_update=_referential_action(constraint.fk_upd_action),
     )
 
 
-def _parse_table_fk(text: str) -> ForeignKey:
-    source = tuple(_parse_column_list(text))
-    match = re.search(r"\bREFERENCES\s+([a-zA-Z_][\w.]*)\s*\(([^)]+)\)", text, re.I)
-    if match is None:
-        raise SqlProofSchemaError(f"Could not parse foreign key: {text}")
-    return ForeignKey(
-        columns=source,
-        referenced_table=_unqualify(match.group(1)),
-        referenced_columns=tuple(_clean_identifier(part) for part in match.group(2).split(",")),
-        on_delete="NO ACTION",
-        on_update="NO ACTION",
+def _parse_check(constraint: Any) -> CheckConstraint:
+    return CheckConstraint(_render(constraint.raw_expr))
+
+
+def _constraint_keys(constraint: Any) -> tuple[str, ...]:
+    return tuple(_sval(value) for value in constraint.keys)
+
+
+def _default_for_constraints(constraints: tuple[Any, ...]) -> str | None:
+    for constraint in constraints:
+        if constraint.contype == ConstrType.CONSTR_DEFAULT:
+            return _render(constraint.raw_expr)
+    return None
+
+
+def _identity_for_constraints(
+    constraints: tuple[Any, ...],
+) -> Literal["always", "by_default"] | None:
+    for constraint in constraints:
+        if constraint.contype == ConstrType.CONSTR_IDENTITY:
+            if constraint.generated_when == "a":
+                return "always"
+            if constraint.generated_when == "d":
+                return "by_default"
+    return None
+
+
+def _referential_action(
+    action: str,
+) -> Literal["NO ACTION", "RESTRICT", "CASCADE", "SET NULL", "SET DEFAULT"]:
+    return cast(
+        Literal["NO ACTION", "RESTRICT", "CASCADE", "SET NULL", "SET DEFAULT"],
+        {
+            "a": "NO ACTION",
+            "r": "RESTRICT",
+            "c": "CASCADE",
+            "n": "SET NULL",
+            "d": "SET DEFAULT",
+            "\x00": "NO ACTION",
+        }.get(action, "NO ACTION"),
     )
 
 
-def _parse_inline_check(text: str) -> CheckConstraint | None:
-    match = re.search(r"\bCHECK\s*\((?P<expr>.*)\)\s*$", text, re.I)
-    if match is None:
-        return None
-    return CheckConstraint(match.group("expr").strip())
+def _qualified_parts(parts: tuple[Any, ...], *, default_schema: str) -> tuple[str, str]:
+    values = tuple(_sval(part) for part in parts)
+    if len(values) == 1:
+        return default_schema, values[0]
+    return values[-2], values[-1]
 
 
-def _split_top_level_commas(body: str) -> list[str]:
-    items: list[str] = []
-    start = 0
-    depth = 0
-    for index, char in enumerate(body):
-        if char == "(":
-            depth += 1
-        elif char == ")":
-            depth -= 1
-        elif char == "," and depth == 0:
-            items.append(body[start:index])
-            start = index + 1
-    items.append(body[start:])
-    return [item for item in items if item.strip()]
+def _sval(node: Any) -> str:
+    return str(node.sval)
 
 
-def _parse_column_list(text: str) -> tuple[str, ...]:
-    inside = _inside_parentheses(text)
-    return tuple(_clean_identifier(part) for part in inside.split(","))
+def _const_int(node: Any) -> int:
+    return int(node.val.ival)
 
 
-def _inside_parentheses(text: str) -> str:
-    start = text.index("(") + 1
-    end = text.rindex(")")
-    return text[start:end].strip()
+def _render(node: Any) -> str:
+    return RawStream()(node)
 
 
-def _split_qualified(name: str, *, default_schema: str) -> tuple[str, str]:
-    parts = [_clean_identifier(part) for part in name.split(".")]
-    if len(parts) == 2:
-        return parts[0], parts[1]
-    return default_schema, parts[0]
-
-
-def _unqualify(name: str) -> str:
-    return _split_qualified(name, default_schema="public")[1]
-
-
-def _clean_identifier(identifier: str) -> str:
-    return identifier.strip().strip('"').lower()
+def _normalize_type_name(name: str) -> str:
+    normalized = re.sub(r"\s+", " ", name.lower())
+    return {
+        "pg_catalog.int2": "smallint",
+        "pg_catalog.int4": "integer",
+        "pg_catalog.int8": "bigint",
+        "pg_catalog.float4": "real",
+        "pg_catalog.float8": "double precision",
+        "pg_catalog.bool": "boolean",
+        "pg_catalog.varchar": "varchar",
+        "pg_catalog.bpchar": "char",
+    }.get(normalized, normalized)
