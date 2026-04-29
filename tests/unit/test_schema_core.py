@@ -5,6 +5,7 @@ import pytest
 from sqlproof.exceptions import CircularDependencyError
 from sqlproof.schema.dependency_graph import insertion_order
 from sqlproof.schema.fingerprint import compute
+from sqlproof.schema.introspect import introspect_schema
 from sqlproof.schema.model import Column, ForeignKey, PgType, SchemaInfo, Table
 from sqlproof.schema.parse_sql import parse_schema_sql
 
@@ -117,3 +118,111 @@ def test_parse_schema_sql_models_tables_columns_keys_and_checks() -> None:
     assert orders.foreign_keys[0].referenced_table == "customers"
     assert orders.column("status").type.kind == "enum"
     assert orders.check_constraints[0].expression == "total >= 0"
+
+
+class FakeIntrospectionConnection:
+    def execute(self, sql: str, params: tuple[object, ...] = ()) -> object:
+        del params
+        if "pg_type" in sql and "enum_values" in sql:
+            return FakeRows(
+                [
+                    {
+                        "schema_name": "public",
+                        "enum_name": "order_status",
+                        "enum_values": ["pending", "paid"],
+                    }
+                ]
+            )
+        if "contype = 'p'" in sql:
+            return FakeRows(
+                [{"schema_name": "public", "table_name": "customers", "columns": ["id"]}]
+            )
+        if "contype = 'u'" in sql:
+            return FakeRows(
+                [{"schema_name": "public", "table_name": "customers", "columns": ["email"]}]
+            )
+        if "contype = 'f'" in sql:
+            return FakeRows(
+                [
+                    {
+                        "schema_name": "public",
+                        "table_name": "orders",
+                        "columns": ["customer_id"],
+                        "referenced_table": "customers",
+                        "referenced_columns": ["id"],
+                        "on_delete": "NO ACTION",
+                        "on_update": "NO ACTION",
+                    }
+                ]
+            )
+        if "contype = 'c'" in sql:
+            return FakeRows(
+                [
+                    {
+                        "schema_name": "public",
+                        "table_name": "orders",
+                        "expression": "customer_id > 0",
+                    }
+                ]
+            )
+        if "pg_proc" in sql:
+            return FakeRows([])
+        if "pg_attribute att" in sql and "column_name" in sql:
+            return FakeRows(
+                [
+                    {
+                        "schema_name": "public",
+                        "table_name": "customers",
+                        "column_name": "id",
+                        "type_name": "integer",
+                        "nullable": False,
+                        "default": "nextval('customers_id_seq'::regclass)",
+                        "is_generated": False,
+                        "identity": None,
+                        "modifiers": [],
+                    },
+                    {
+                        "schema_name": "public",
+                        "table_name": "customers",
+                        "column_name": "email",
+                        "type_name": "text",
+                        "nullable": False,
+                        "default": None,
+                        "is_generated": False,
+                        "identity": None,
+                        "modifiers": [],
+                    },
+                    {
+                        "schema_name": "public",
+                        "table_name": "orders",
+                        "column_name": "customer_id",
+                        "type_name": "integer",
+                        "nullable": False,
+                        "default": None,
+                        "is_generated": False,
+                        "identity": None,
+                        "modifiers": [],
+                    },
+                ]
+            )
+        raise AssertionError(f"Unexpected introspection SQL: {sql}")
+
+
+class FakeRows:
+    def __init__(self, rows: list[dict[str, object]]) -> None:
+        self._rows = rows
+
+    def fetchall(self) -> list[dict[str, object]]:
+        return self._rows
+
+
+def test_introspect_schema_models_catalog_columns_constraints_and_enums() -> None:
+    schema = introspect_schema(FakeIntrospectionConnection())
+
+    assert schema.enums[0].enum_values == ("pending", "paid")
+    customers = schema.table("customers")
+    orders = schema.table("orders")
+    assert customers.primary_key == ("id",)
+    assert customers.unique_constraints == (("email",),)
+    assert orders.foreign_keys[0].referenced_table == "customers"
+    assert orders.check_constraints[0].expression == "customer_id > 0"

@@ -4,23 +4,31 @@ from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from pathlib import Path
 from types import TracebackType
-from typing import Any, Self
+from typing import Any, Self, cast
 
-from sqlproof.client import InMemorySqlProofClient
+import psycopg
+from psycopg.rows import dict_row
+
+from sqlproof.client import InMemorySqlProofClient, SqlProofClient
 from sqlproof.config import SqlProofConfig
 from sqlproof.exceptions import SqlProofPropertyFailure
 from sqlproof.generators.graph import dataset_strategy
 from sqlproof.generators.sampling import draw_example
+from sqlproof.schema.dependency_graph import insertion_order
 from sqlproof.schema.fingerprint import compute
+from sqlproof.schema.introspect import introspect_schema
 from sqlproof.schema.model import SchemaInfo
 from sqlproof.schema.parse_sql import parse_schema_sql
 
 
 class SqlProof:
     def __init__(self, config: SqlProofConfig) -> None:
+        from sqlproof.runners.db import DBManager
+
         self.config = config
         self.schema_info = self._load_schema(config)
         self.schema_fingerprint = compute(self.schema_info)
+        self._db_manager = DBManager(config) if config.connection_string is not None else None
 
     @classmethod
     def from_schema_file(cls, path: str | Path, **kwargs: Any) -> Self:
@@ -41,8 +49,18 @@ class SqlProof:
     @contextmanager
     def client_for_dataset(
         self, dataset: dict[str, list[dict[str, Any]]]
-    ) -> Generator[InMemorySqlProofClient]:
-        yield InMemorySqlProofClient(dataset)
+    ) -> Generator[SqlProofClient]:
+        if self._db_manager is None:
+            yield InMemorySqlProofClient(dataset)
+            return
+        with self._db_manager.acquire() as client:
+            client.execute("SAVEPOINT sqlproof_run")
+            try:
+                _insert_dataset(client, self.schema_info, dataset)
+                yield client
+            finally:
+                client.execute("ROLLBACK TO SAVEPOINT sqlproof_run")
+                client.execute("RELEASE SAVEPOINT sqlproof_run")
 
     def check(
         self,
@@ -95,6 +113,8 @@ class SqlProof:
                 )
 
     def disconnect(self) -> None:
+        if self._db_manager is not None:
+            self._db_manager.stop()
         return None
 
     def __enter__(self) -> Self:
@@ -113,4 +133,35 @@ class SqlProof:
         if config.schema_file is not None:
             path = Path(config.schema_file)
             return parse_schema_sql(path.read_text(encoding="utf-8"), schema=config.schema)
+        if config.connection_string is not None:
+            connection = psycopg.connect(
+                conninfo=config.connection_string,
+                autocommit=True,
+                row_factory=cast(Any, dict_row),
+            )
+            try:
+                return introspect_schema(connection, schema=config.schema)
+            finally:
+                connection.close()
         return SchemaInfo()
+
+
+def _insert_dataset(
+    client: SqlProofClient,
+    schema_info: SchemaInfo,
+    dataset: dict[str, list[dict[str, Any]]],
+) -> None:
+    for table in insertion_order(schema_info.tables):
+        for row in dataset.get(table.name, []):
+            if not row:
+                continue
+            columns = list(row)
+            placeholders = ", ".join(["%s"] * len(columns))
+            column_sql = ", ".join(_quote_identifier(column) for column in columns)
+            table_sql = f"{_quote_identifier(table.schema)}.{_quote_identifier(table.name)}"
+            sql = f"INSERT INTO {table_sql} ({column_sql}) VALUES ({placeholders})"
+            client.execute(sql, *(row[column] for column in columns))
+
+
+def _quote_identifier(identifier: str) -> str:
+    return '"' + identifier.replace('"', '""') + '"'

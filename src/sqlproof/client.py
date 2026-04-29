@@ -4,6 +4,7 @@ import re
 from collections.abc import Generator
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import fields, is_dataclass
+from pathlib import Path
 from typing import Any, Protocol, TypeVar, cast
 
 from sqlproof.exceptions import SqlProofMappingError, SqlProofUsageError
@@ -67,6 +68,60 @@ class InMemorySqlProofClient:
 
     def get_generated_data(self) -> dict[str, list[dict[str, Any]]]:
         return self._dataset
+
+
+class PsycopgSqlProofClient:
+    def __init__(
+        self,
+        connection: Any,
+        *,
+        dataset: dict[str, list[dict[str, Any]]] | None = None,
+    ) -> None:
+        self._connection = connection
+        self._dataset = dataset or {}
+
+    def query(self, sql: str, *params: Any) -> list[dict[str, Any]]:
+        cursor = self._connection.execute(sql, params)
+        return [dict(row) for row in cursor.fetchall()]
+
+    def query_typed(self, sql: str, model: type[T], *params: Any) -> list[T]:
+        rows = self.query(sql, *params)
+        return [_map_row(row, model) for row in rows]
+
+    def scalar(self, sql: str, *params: Any) -> Any:
+        rows = self.query(sql, *params)
+        if not rows:
+            return None
+        return next(iter(rows[0].values()))
+
+    def execute(self, sql: str, *params: Any) -> int:
+        cursor = self._connection.execute(sql, params)
+        return int(cursor.rowcount)
+
+    def execute_file(self, path: str | Path) -> None:
+        sql = Path(path).read_text(encoding="utf-8")
+        for statement in _split_sql_statements(sql):
+            self.execute(statement)
+
+    @contextmanager
+    def savepoint(self) -> Generator[None]:
+        name = "sqlproof_client"
+        self.execute(f"SAVEPOINT {name}")
+        try:
+            yield
+        except BaseException:
+            self.execute(f"ROLLBACK TO SAVEPOINT {name}")
+            raise
+        finally:
+            self.execute(f"RELEASE SAVEPOINT {name}")
+
+    def get_generated_data(self) -> dict[str, list[dict[str, Any]]]:
+        return self._dataset
+
+
+def _split_sql_statements(sql: str) -> list[str]:
+    statements = [statement.strip() for statement in sql.split(";")]
+    return [statement for statement in statements if statement]
 
 
 def _clean_selected_column(sql: str) -> str:

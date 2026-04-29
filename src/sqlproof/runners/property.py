@@ -6,7 +6,6 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, ParamSpec, TypeVar
 
-from sqlproof.client import InMemorySqlProofClient
 from sqlproof.exceptions import SqlProofPropertyFailure
 from sqlproof.generators.graph import dataset_strategy
 from sqlproof.generators.sampling import draw_example
@@ -76,13 +75,13 @@ def run_property(
     wants_check = "check" in signature.parameters
     for run_index in range(runs):
         dataset = draw_example(strategy)
-        client = InMemorySqlProofClient(dataset)
         check = Check()
         try:
-            if wants_check:
-                function(client, check)
-            else:
-                function(client)
+            with proof.client_for_dataset(dataset) as client:
+                if wants_check:
+                    function(client, check)
+                else:
+                    function(client)
         except Exception as exc:
             payload: dict[str, Any] = {
                 "$schema": "https://sqlproof.dev/schemas/counterexample-v1.json",
