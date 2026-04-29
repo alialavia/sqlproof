@@ -6,9 +6,10 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, ParamSpec, TypeVar
 
+from hypothesis import HealthCheck, given, settings
+
 from sqlproof.exceptions import SqlProofPropertyFailure
 from sqlproof.generators.graph import dataset_strategy
-from sqlproof.generators.sampling import draw_example
 from sqlproof.reporter.json_io import write_counterexample
 
 P = ParamSpec("P")
@@ -73,8 +74,17 @@ def run_property(
     strategy = dataset_strategy(proof.schema_info, sizes=sizes)
     signature = inspect.signature(function)
     wants_check = "check" in signature.parameters
-    for run_index in range(runs):
-        dataset = draw_example(strategy)
+    run_count = 0
+
+    @given(strategy)
+    @settings(
+        max_examples=runs,
+        deadline=None,
+        suppress_health_check=[HealthCheck.function_scoped_fixture],
+    )
+    def execute(dataset: dict[str, list[dict[str, Any]]]) -> None:
+        nonlocal run_count
+        run_count += 1
         check = Check()
         try:
             with proof.client_for_dataset(dataset) as client:
@@ -88,7 +98,7 @@ def run_property(
                 "version": 1,
                 "property_name": function.__name__,
                 "seed": None,
-                "runs": run_index + 1,
+                "runs": run_count,
                 "shrink_steps": 0,
                 "schema_fingerprint": proof.schema_fingerprint,
                 "row_context": check.row_context or {},
@@ -102,3 +112,5 @@ def run_property(
             }
             write_counterexample(failure_dir / f"{function.__name__}.json", payload)
             raise SqlProofPropertyFailure(str(exc), counterexample=payload) from exc
+
+    execute()
