@@ -1,136 +1,89 @@
 ---
 title: SqlProof Class
-description: The main class for connecting to Postgres and running property tests.
+description: The main Python class for configuring schemas and running properties.
 ---
 
-The `SqlProof` class is the entry point for all property tests. Create one instance per test suite via `SqlProof.connect()`, share it across all `check()` and `invariant()` calls, then call `disconnect()` in cleanup.
+`SqlProof` is the entry point for a test suite. Create one instance from a schema file,
+connection string, or config object, then use `@sqlproof`, `check()`, or `invariant()`.
 
-## `SqlProof.connect(options)`
+## Constructors
 
-Factory method. Connects to Postgres (or starts a testcontainers instance), introspects the schema, and returns a ready `SqlProof` instance.
+```python
+from sqlproof import SqlProof
 
-```typescript
-static async connect(options: SqlProofConnectOptions): Promise<SqlProof>
+proof = SqlProof.from_schema_file("./schema.sql")
+proof = SqlProof.from_connection_string("postgresql://localhost:5432/testdb")
 ```
 
-**Options:**
+For explicit configuration:
 
-| Field | Type | Description |
-|---|---|---|
-| `schemaFile` | `string` | Path to a `.sql` DDL file. Auto-starts a testcontainers Postgres. |
-| `connectionString` | `string` | `postgresql://` URL. Connects to an existing Postgres instance. |
-| `schema` | `string` | Postgres schema name to introspect. Default: `'public'`. Only used with `connectionString`. |
+```python
+from sqlproof import SqlProof, SqlProofConfig
 
-Exactly one of `schemaFile` or `connectionString` must be provided.
-
-**Example:**
-
-```typescript
-// With a SQL file (auto-manages Postgres via testcontainers):
-const proof = await SqlProof.connect({ schemaFile: './schema.sql' });
-
-// With an existing database:
-const proof = await SqlProof.connect({
-  connectionString: 'postgresql://localhost:5432/mydb',
-});
+proof = SqlProof.from_config(
+    SqlProofConfig(
+        schema_file="./schema.sql",
+        image="postgres:16",
+        reuse_container=True,
+    )
+)
 ```
 
----
+Exactly one of `schema_file` or `connection_string` must be provided.
 
-## `proof.customize(table, overrides)`
+## Decorator Usage
 
-Register custom generators or FK distribution strategies for a table. Returns `this` for fluent chaining. Must be called before `check()` or `invariant()`.
+```python
+from sqlproof import SqlProof, sqlproof
 
-```typescript
-customize(table: string, overrides: TableCustomization): this
+proof = SqlProof.from_schema_file("./schema.sql")
+
+
+@sqlproof(proof, sizes={"customers": 10, "orders": 50}, runs=50)
+def test_order_totals_non_negative(db):
+    rows = db.query("SELECT total FROM orders")
+    assert all(row["total"] >= 0 for row in rows)
 ```
 
-**Example:**
+## Imperative Usage
 
-```typescript
-import fc from 'fast-check';
+```python
+def check_totals(db):
+    rows = db.query("SELECT total FROM orders")
+    assert all(row["total"] >= 0 for row in rows)
 
-proof
-  .customize('products', {
-    price: fc.float({ min: 0.01, max: 9999.99, noNaN: true }),
-    name: fc.string({ minLength: 1, maxLength: 100 }),
-  })
-  .customize('orders', {
-    fkDistribution: { customer_id: 'zipf' },
-  });
+
+proof.check(
+    name="order totals are non-negative",
+    sizes={"customers": 10, "orders": 50},
+    property=check_totals,
+    runs=100,
+)
 ```
 
----
+## Invariants
 
-## `proof.check(name, options)`
+Use `invariant()` when a SQL query should return zero rows.
 
-Run a property-based test. Throws `SqlProofError` on failure with a formatted counterexample including a reproducible seed.
-
-```typescript
-async check(name: string, options: CheckOptions): Promise<void>
+```python
+proof.invariant(
+    name="no orphan orders",
+    sizes={"customers": 10, "orders": 50},
+    query="""
+        SELECT o.id
+        FROM orders o
+        LEFT JOIN customers c ON o.customer_id = c.id
+        WHERE c.id IS NULL
+    """,
+    expect_empty=True,
+)
 ```
 
-**Example:**
+## Cleanup
 
-```typescript
-await proof.check('order totals are non-negative', {
-  generate: { customers: 10, orders: 50, line_items: 200 },
-  property: async (db) => {
-    const result = await db.query('SELECT total FROM orders');
-    return result.rows.every(row => Number(row.total) >= 0);
-  },
-  runs: 100,
-});
-```
+`SqlProof` is a context manager:
 
----
-
-## `proof.invariant(name, options)`
-
-Declarative shorthand: asserts that a SQL query returns zero rows for all generated datasets.
-
-```typescript
-async invariant(name: string, options: InvariantOptions): Promise<void>
-```
-
-| Field | Type | Description |
-|---|---|---|
-| `generate` | `Record<string, number>` | Per-table row counts. |
-| `query` | `string` | SQL query. Must return 0 rows for the invariant to hold. |
-| `expectEmpty` | `true` | Always `true` — makes the intent explicit. |
-| `runs` | `number` | Number of datasets to test. Default: `100`. |
-| `seed` | `number` | Reproduce a specific failure. |
-| `timeout` | `number` | Per-run timeout in ms. Default: `5000`. |
-
-**Example:**
-
-```typescript
-await proof.invariant('no orphan line items', {
-  generate: { customers: 10, orders: 50, line_items: 200 },
-  query: `
-    SELECT li.id FROM line_items li
-    LEFT JOIN orders o ON li.order_id = o.id
-    WHERE o.id IS NULL
-  `,
-  expectEmpty: true,
-  runs: 50,
-});
-```
-
----
-
-## `proof.disconnect()`
-
-Close the Postgres connection and stop the testcontainers instance (if auto-managed). Call in `afterEach` or `afterAll`.
-
-```typescript
-async disconnect(): Promise<void>
-```
-
-**Example:**
-
-```typescript
-afterEach(async () => {
-  await proof?.disconnect();
-});
+```python
+with SqlProof.from_schema_file("./schema.sql") as proof:
+    proof.invariant(...)
 ```

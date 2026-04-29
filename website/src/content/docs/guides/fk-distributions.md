@@ -3,78 +3,51 @@ title: FK Distribution Strategies
 description: Control how foreign key references are distributed across parent rows.
 ---
 
-By default, SqlProof picks parent rows uniformly at random when generating FK references. Distribution strategies let you change this to simulate more realistic or adversarial data patterns.
+By default, SqlProof picks parent rows uniformly when generating FK references.
+Distribution strategies let you simulate realistic skew or adversarial boundary
+cases.
 
-## Why It Matters
+## Built-In Strategies
 
-Real-world databases are rarely uniform. A small set of customers places the majority of orders. If your queries have issues under skewed load, uniform random data might never surface them.
+```python
+proof.customize(
+    "orders",
+    fk_distribution={"customer_id": "uniform"},
+)
 
-## Available Strategies
+proof.customize(
+    "orders",
+    fk_distribution={"customer_id": "zipf"},
+)
 
-### `uniform` (default)
-
-Each parent row has equal probability of being referenced.
-
-```typescript
-proof.customize('orders', {
-  fkDistribution: { customer_id: 'uniform' },
-});
+proof.customize(
+    "line_items",
+    fk_distribution={"product_id": "adversarial"},
+)
 ```
 
-### `zipf`
+| Strategy      | Behavior                                      |
+| ------------- | --------------------------------------------- |
+| `uniform`     | Each parent row has equal probability         |
+| `zipf`        | Early parents are referenced more often       |
+| `adversarial` | Only first, middle, and last parents are used |
+| `single`      | All children point to one parent              |
 
-References are skewed: the first parent is referenced most often, following a Zipf distribution (weight ∝ 1/(rank+1)). Simulates realistic hot-row scenarios.
+## Custom Strategy
 
-```typescript
-proof.customize('orders', {
-  fkDistribution: { customer_id: 'zipf' },
-});
+```python
+from hypothesis import strategies as st
+
+
+def hottest_parent(parent_pks, ctx):
+    return st.just(parent_pks[0])
+
+
+proof.customize(
+    "orders",
+    fk_distribution={"customer_id": hottest_parent},
+)
 ```
 
-With 5 parent rows, approximate probabilities: Row 1: ~44%, Row 2: ~22%, Row 3: ~15%, Row 4: ~11%, Row 5: ~7%.
-
-### `adversarial`
-
-Only picks from the first, middle, and last parent rows — boundary stress testing.
-
-```typescript
-proof.customize('line_items', {
-  fkDistribution: { product_id: 'adversarial' },
-});
-```
-
-## Combining Strategies
-
-```typescript
-proof.customize('line_items', {
-  fkDistribution: {
-    order_id: 'zipf',
-    product_id: 'adversarial',
-  },
-});
-```
-
-## Full Example
-
-```typescript
-const proof = await SqlProof.connect({ schemaFile: './schema.sql' });
-
-proof
-  .customize('orders', { fkDistribution: { customer_id: 'zipf' } })
-  .customize('line_items', {
-    fkDistribution: { order_id: 'zipf', product_id: 'adversarial' },
-  });
-
-await proof.invariant('FK integrity holds under skewed load', {
-  generate: { customers: 5, orders: 20, products: 5, line_items: 100 },
-  query: `
-    SELECT li.id FROM line_items li
-    LEFT JOIN orders o ON li.order_id = o.id
-    WHERE o.id IS NULL
-  `,
-  expectEmpty: true,
-  runs: 50,
-});
-
-await proof.disconnect();
-```
+The callable returns a strategy, not a value, so Hypothesis can still shrink
+counterexamples.

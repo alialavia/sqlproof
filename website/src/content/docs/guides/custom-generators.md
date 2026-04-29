@@ -1,79 +1,52 @@
 ---
 title: Custom Generators
-description: Override default column generators with fast-check arbitraries.
+description: Override default column generators with Hypothesis strategies.
 ---
 
-SqlProof maps PostgreSQL types to [fast-check](https://github.com/dubzzz/fast-check) arbitraries automatically. For tighter control — realistic emails, specific numeric ranges, domain-constrained strings — override them via `proof.customize()`.
+SqlProof maps PostgreSQL types to [Hypothesis](https://hypothesis.works/)
+strategies automatically. For tighter control, override columns via
+`proof.customize()`.
 
 ## Basic Override
 
-```typescript
-import fc from 'fast-check';
+```python
+from hypothesis import strategies as st
 
-proof.customize('products', {
-  price: fc.float({ min: 0.01, max: 9999.99, noNaN: true }),
-  name: fc.string({ minLength: 1, maxLength: 100 }),
-});
+proof.customize(
+    "products",
+    price=st.decimals(min_value="0.01", max_value="9999.99", places=2),
+    name=st.text(min_size=1, max_size=100),
+)
 ```
 
-## Common Patterns
+## Well-Known Strategies
 
-### Numeric ranges
+SqlProof also ships helpers for common string domains:
 
-```typescript
-proof.customize('products', {
-  price: fc.float({ min: 0.01, max: 9999.99, noNaN: true }),
-  stock: fc.integer({ min: 0, max: 10000 }),
-  discount_pct: fc.float({ min: 0, max: 0.5, noNaN: true }),
-});
+```python
+from sqlproof.generators.well_known import emails, slugs, urls
+
+proof.customize(
+    "customers",
+    email=emails(),
+)
+
+proof.customize(
+    "content",
+    slug=slugs(max_length=64),
+    canonical_url=urls(include_fragment=False),
+)
 ```
 
-### Constrained strings
+## Type Mapping Examples
 
-```typescript
-proof.customize('customers', {
-  email: fc.emailAddress(),
-  name: fc.string({ minLength: 2, maxLength: 100 }),
-});
-```
-
-### Picking from a fixed set
-
-```typescript
-proof.customize('orders', {
-  currency: fc.constantFrom('USD', 'EUR', 'GBP'),
-  region: fc.constantFrom('us-east', 'us-west', 'eu-central'),
-});
-```
-
-### Dates in a specific range
-
-```typescript
-proof.customize('orders', {
-  created_at: fc.date({
-    min: new Date('2020-01-01'),
-    max: new Date('2024-12-31'),
-    noInvalidDate: true,
-  }),
-});
-```
-
-## Default Type Mappings
-
-| PostgreSQL Type | Default Arbitrary |
-|---|---|
-| `integer`, `int4` | `fc.integer({ min: -2147483648, max: 2147483647 })` |
-| `bigint` | `fc.bigInt()` |
-| `smallint` | `fc.integer({ min: -32768, max: 32767 })` |
-| `numeric(p,s)`, `decimal` | `fc.float()` scaled to precision |
-| `real`, `float4` | `fc.float({ noNaN: true, noDefaultInfinity: true })` |
-| `double precision` | `fc.double({ noNaN: true, noDefaultInfinity: true })` |
-| `boolean` | `fc.boolean()` |
-| `text` | `fc.string({ unit: 'grapheme', maxLength: 255 })` |
-| `varchar(n)` | `fc.string({ unit: 'grapheme', maxLength: n })` |
-| `uuid` | `fc.uuid()` |
-| `timestamp`, `timestamptz` | `fc.date({ noInvalidDate: true })` clamped to 1970–2099 |
-| `date` | `fc.date()` formatted as `YYYY-MM-DD` |
-| `json`, `jsonb` | `fc.jsonValue()` |
-| `enum` types | `fc.constantFrom(...enumValues)` |
-| `integer[]`, etc. | `fc.array()` of base type |
+| PostgreSQL type | Default strategy |
+| --------------- | ---------------- |
+| `integer`       | `st.integers(-2147483648, 2147483647)` |
+| `bigint`        | `st.integers(-(2**63), 2**63 - 1)` |
+| `boolean`       | `st.booleans()` |
+| `text`          | `st.text(max_size=255)` |
+| `varchar(n)`    | `st.text(max_size=n)` |
+| `uuid`          | `st.uuids()` |
+| `jsonb`         | Recursive JSON value strategies |
+| enum types      | `st.sampled_from(enum_values)` |

@@ -1,58 +1,39 @@
 ---
-title: TableCustomization
-description: Override column generators and FK distribution strategies per table.
+title: Table Customization
+description: Override column strategies and FK distributions per table.
 ---
 
-`TableCustomization` is passed to `proof.customize(table, overrides)`.
+`customize()` lets you tune generated data while keeping the rest of the schema
+generation automatic.
 
-```typescript
-interface TableCustomization {
-  fkDistribution?: Record<string, FkDistributionStrategy>;
-  [columnName: string]: fc.Arbitrary<unknown> | Record<string, FkDistributionStrategy> | undefined;
-}
+```python
+from hypothesis import strategies as st
 
-type FkDistributionStrategy = 'zipf' | 'uniform' | 'adversarial';
-```
-
-## Custom Column Generators
-
-Override the default generator for any column with a [fast-check](https://github.com/dubzzz/fast-check) arbitrary:
-
-```typescript
-import fc from 'fast-check';
-
-proof.customize('products', {
-  price: fc.float({ min: 0.01, max: 9999.99, noNaN: true }),
-  name: fc.string({ minLength: 1, maxLength: 100 }),
-  sku: fc.stringMatching(/^[A-Z]{2}-\d{4}$/),
-});
+proof.customize(
+    "products",
+    price=st.decimals(min_value="0.01", max_value="9999.99", places=2),
+    sku=st.from_regex(r"^[A-Z]{2}-\d{4}$", fullmatch=True),
+)
 ```
 
 ## FK Distribution Strategies
 
-Control how foreign key values are assigned when referencing parent rows:
+Control how child rows pick parent rows:
 
-```typescript
-proof.customize('orders', {
-  fkDistribution: { customer_id: 'zipf' },
-});
+```python
+proof.customize(
+    "orders",
+    fk_distribution={"customer_id": "zipf"},
+)
 ```
 
-| Strategy | Behavior | Best for |
-|---|---|---|
-| `uniform` (default) | Equal probability per parent | General coverage |
-| `zipf` | First parents get many children; later ones few | Realistic skewed data |
-| `adversarial` | Only picks first, middle, and last parent | Boundary stress testing |
+| Strategy                | Behavior                                  |
+| ----------------------- | ----------------------------------------- |
+| `uniform`               | Equal probability per parent              |
+| `zipf`                  | A few parents receive most child rows     |
+| `adversarial`           | First, middle, and last parents only      |
+| `single`                | All children point to one parent          |
+| custom callable         | Return any Hypothesis strategy per FK     |
 
-## Fluent Chaining
-
-`customize()` returns `this`, enabling chaining:
-
-```typescript
-proof
-  .customize('products', { price: fc.float({ min: 0.01, max: 9999.99, noNaN: true }) })
-  .customize('orders', { fkDistribution: { customer_id: 'zipf' } })
-  .customize('line_items', { fkDistribution: { order_id: 'zipf', product_id: 'adversarial' } });
-```
-
-Multiple calls to `customize()` for the same table are merged — later calls add to earlier ones.
+Custom FK distribution callables receive the available parent primary keys and a
+draw context, and must return a Hypothesis strategy so values still shrink.

@@ -1,82 +1,63 @@
 ---
-title: CheckOptions
-description: Options for proof.check() — per-table row counts, property function, and test configuration.
+title: Check Options
+description: Options for proof.check() and the @sqlproof decorator.
 ---
 
-`CheckOptions` is passed as the second argument to `proof.check()`.
+`proof.check()` and `@sqlproof` share the same core ideas: table sizes, run count,
+optional seed, optional setup, and a property function.
 
-```typescript
-interface CheckOptions {
-  generate: Record<string, number>;
-  setup?: (db: SqlProofClient) => Promise<void>;
-  property: (db: SqlProofClient) => Promise<boolean>;
-  runs?: number;
-  seed?: number;
-  timeout?: number;
-}
+## Decorator Form
+
+```python
+@sqlproof(
+    proof,
+    sizes={"customers": 20, "orders": 100, "line_items": 500},
+    runs=100,
+    seed=1708891234,
+    timeout_ms=5000,
+)
+def test_order_totals_non_negative(db):
+    rows = db.query("SELECT total FROM orders")
+    assert all(row["total"] >= 0 for row in rows)
+```
+
+## Imperative Form
+
+```python
+def check_totals(db):
+    rows = db.query("SELECT total FROM orders")
+    assert all(row["total"] >= 0 for row in rows)
+
+
+proof.check(
+    name="order totals are non-negative",
+    sizes={"customers": 20, "orders": 100},
+    property=check_totals,
+    runs=100,
+)
 ```
 
 ## Fields
 
-### `generate` (required)
+| Field        | Description                                      |
+| ------------ | ------------------------------------------------ |
+| `sizes`      | Per-table row counts for generated datasets      |
+| `property`   | Callable that asserts the SQL property           |
+| `setup`      | Optional callable run after data insertion       |
+| `runs`       | Number of generated datasets to test             |
+| `seed`       | Reproduce a specific generation and shrink trace |
+| `timeout_ms` | Per-run timeout in milliseconds                  |
+| `commit`     | Use schema-isolation mode instead of rollback    |
 
-Per-table row counts. Keys are table names; values are the number of rows to generate per run. Only tables listed here will have data generated.
+## SqlProofClient
 
-```typescript
-generate: { customers: 20, orders: 100, line_items: 500 }
+The `db` object exposes convenience helpers:
+
+```python
+rows = db.query("SELECT id, total FROM orders")
+total = db.scalar("SELECT SUM(total) FROM orders")
+affected = db.execute("UPDATE orders SET status = %s", "confirmed")
+dataset = db.get_generated_data()
 ```
 
-### `property` (required)
-
-A function that receives a `SqlProofClient` and returns `Promise<boolean>`. Return `true` if the property holds, `false` if violated. Throwing also counts as a violation.
-
-```typescript
-property: async (db) => {
-  const result = await db.query('SELECT total FROM orders WHERE total < 0');
-  return result.rows.length === 0;
-}
-```
-
-### `setup` (optional)
-
-Runs after data insertion but before the property check. Use for mutations or additional setup.
-
-```typescript
-setup: async (db) => {
-  await db.query(`UPDATE orders SET status = 'confirmed' WHERE total > 100`);
-}
-```
-
-### `runs` (optional)
-
-Number of random datasets to generate and test. Default: `100`.
-
-### `seed` (optional)
-
-Integer seed for deterministic data generation. Use the seed from a failure report to reproduce it:
-
-```typescript
-await proof.check('order totals are non-negative', {
-  generate: { customers: 10, orders: 50 },
-  property: async (db) => { /* ... */ },
-  seed: 1708891234,
-});
-```
-
-### `timeout` (optional)
-
-Per-run timeout in milliseconds. Default: `5000`.
-
-## `SqlProofClient`
-
-The `db` object passed to `property` and `setup`:
-
-```typescript
-interface SqlProofClient {
-  query(sql: string, params?: unknown[]): Promise<{ rows: Record<string, unknown>[] }>;
-  getGeneratedData(): Dataset;
-}
-```
-
-- `query()` — runs SQL against the isolated test schema for the current run
-- `getGeneratedData()` — returns the full inserted dataset (useful for debugging)
+Use `db.connection` when you need raw psycopg access.
