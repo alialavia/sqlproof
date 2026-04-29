@@ -56,6 +56,64 @@ def test_row_generation_refines_simple_range_check() -> None:
     assert_check_is_refined()
 
 
+def test_row_generation_refines_in_set_and_length_checks() -> None:
+    schema = SchemaInfo(
+        tables=(
+            Table(
+                schema="public",
+                name="products",
+                columns=(
+                    Column("id", PgType("scalar", "integer"), False, None, False),
+                    Column("status", PgType("scalar", "text"), False, None, False),
+                    Column("code", PgType("scalar", "text"), False, None, False),
+                ),
+                primary_key=("id",),
+                foreign_keys=(),
+                unique_constraints=(),
+                check_constraints=(
+                    CheckConstraint("status IN ('draft', 'active')"),
+                    CheckConstraint("length(code) <= 4"),
+                ),
+            ),
+        ),
+    )
+
+    @given(dataset_strategy(schema, sizes={"products": 5}))
+    @settings(max_examples=10)
+    def assert_check_is_refined(dataset: dict[str, list[dict[str, object]]]) -> None:
+        assert {row["status"] for row in dataset["products"]} <= {"draft", "active"}
+        assert all(len(row["code"]) <= 4 for row in dataset["products"])
+
+    assert_check_is_refined()
+
+
+def test_dataset_strategy_generates_unique_single_column_constraints() -> None:
+    schema = SchemaInfo(
+        tables=(
+            Table(
+                schema="public",
+                name="users",
+                columns=(
+                    Column("id", PgType("scalar", "integer"), False, None, False),
+                    Column("email", PgType("scalar", "text"), False, None, False),
+                ),
+                primary_key=("id",),
+                foreign_keys=(),
+                unique_constraints=(("email",),),
+                check_constraints=(),
+            ),
+        ),
+    )
+
+    @given(dataset_strategy(schema, sizes={"users": 5}))
+    @settings(max_examples=10)
+    def assert_unique_values(dataset: dict[str, list[dict[str, object]]]) -> None:
+        emails = [row["email"] for row in dataset["users"]]
+        assert len(set(emails)) == len(emails)
+
+    assert_unique_values()
+
+
 def test_dataset_strategy_generates_unique_primary_keys_and_valid_foreign_keys() -> None:
     integer = PgType("scalar", "integer")
     schema = SchemaInfo(

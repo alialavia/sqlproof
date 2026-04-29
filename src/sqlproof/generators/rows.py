@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Any
+from uuid import UUID
 
 from hypothesis import strategies as st
 from hypothesis.strategies import SearchStrategy
@@ -36,6 +38,9 @@ def table_rows_strategy(
                         parent = draw(st.sampled_from(parents))
                         row[column.name] = parent[fk.referenced_columns[0]]
                         continue
+                if _is_single_column_unique(table, column.name):
+                    row[column.name] = _unique_value(column.name, column.type.name, index)
+                    continue
                 strategy = refine_for_checks(
                     column, strategy_for_column(column), table.check_constraints
                 )
@@ -51,3 +56,21 @@ def _foreign_key_for_column(table: Table, column_name: str) -> ForeignKey | None
         if foreign_key.columns == (column_name,):
             return foreign_key
     return None
+
+
+def _is_single_column_unique(table: Table, column_name: str) -> bool:
+    return any(columns == (column_name,) for columns in table.unique_constraints)
+
+
+def _unique_value(column_name: str, type_name: str, index: int) -> Any:
+    normalized = type_name.lower()
+    value = index + 1
+    if normalized in {"smallint", "int2", "integer", "int", "int4", "serial"}:
+        return value
+    if normalized in {"bigint", "int8", "bigserial"}:
+        return value
+    if normalized in {"numeric", "decimal"}:
+        return Decimal(value)
+    if normalized == "uuid":
+        return str(UUID(int=value))
+    return f"{column_name}_{value}"
