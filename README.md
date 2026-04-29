@@ -1,14 +1,43 @@
 # SqlProof
 
-SqlProof is a Python library for property-based testing of PostgreSQL schemas and SQL
-behavior. Developers define properties; SqlProof generates valid datasets from a
-Postgres schema and tries to falsify those properties.
+[![CI](https://github.com/alialavia/sqlproof/actions/workflows/ci.yml/badge.svg)](https://github.com/alialavia/sqlproof/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/alialavia/sqlproof/branch/main/graph/badge.svg)](https://codecov.io/gh/alialavia/sqlproof)
 
-## Quick Start
+**→ Full docs: [sqlproof.com](https://sqlproof.com)**
+
+Property-based testing for PostgreSQL schemas and SQL behavior. Define properties about
+your database code; SqlProof generates valid datasets with Hypothesis, executes your
+queries through `psycopg`, and saves the smallest counterexample it finds.
+
+## Install
 
 ```bash
 pip install sqlproof
 ```
+
+Requires Python 3.11+ and PostgreSQL 13+.
+
+## Quick Start
+
+Given a schema file:
+
+```sql
+-- schema.sql
+CREATE TABLE orders (
+  id SERIAL PRIMARY KEY,
+  customer_id INTEGER NOT NULL,
+  total NUMERIC(10,2) NOT NULL CHECK (total >= 0)
+);
+
+CREATE TABLE line_items (
+  id SERIAL PRIMARY KEY,
+  order_id INTEGER NOT NULL REFERENCES orders(id),
+  quantity INTEGER NOT NULL CHECK (quantity > 0),
+  price NUMERIC(10,2) NOT NULL CHECK (price > 0)
+);
+```
+
+Write property tests with pytest:
 
 ```python
 from sqlproof import SqlProof, sqlproof
@@ -16,14 +45,143 @@ from sqlproof import SqlProof, sqlproof
 proof = SqlProof.from_schema_file("./schema.sql")
 
 
-@sqlproof(proof, sizes={"orders": 10}, runs=25)
-def test_order_totals_non_negative(db):
-    rows = db.query("SELECT total FROM orders")
-    assert all(row["total"] >= 0 for row in rows)
+@sqlproof(proof, sizes={"orders": 20, "line_items": 50}, runs=50)
+def test_no_orphan_line_items(db):
+    rows = db.query("""
+        SELECT li.id
+        FROM line_items li
+        LEFT JOIN orders o ON li.order_id = o.id
+        WHERE o.id IS NULL
+    """)
+    assert rows == []
 ```
 
-Run with pytest:
+SqlProof will:
+
+1. Parse your schema (tables, columns, FKs, CHECK constraints, enums)
+2. Topologically order tables by foreign-key dependencies
+3. Generate datasets that respect common type, FK, CHECK, UNIQUE, and NOT NULL constraints
+4. Run your property with Hypothesis-managed execution and shrinking
+5. Save the shrunk counterexample as JSON when a property fails
+
+## API
+
+See the full API reference at [sqlproof.com](https://sqlproof.com).
+
+### Quick reference
+
+```python
+proof = SqlProof.from_schema_file("./schema.sql")
+proof = SqlProof.from_connection_string("postgresql://localhost/postgres")
+
+proof.check("name", sizes={"orders": 10}, property=lambda db: ...)
+proof.invariant(
+    "no bad rows",
+    sizes={"orders": 10},
+    query="SELECT id FROM orders WHERE total < 0",
+    expect_empty=True,
+)
+
+proof.disconnect()
+```
+
+### Schema Sources
+
+**SQL file** — SqlProof parses `CREATE TABLE`, `CREATE TYPE ... AS ENUM`, foreign keys, CHECK constraints, UNIQUE constraints, and column types directly from `.sql` files.
+
+**Connection string** — Pass a `postgresql://` URL and SqlProof introspects the live database via `information_schema` and `pg_catalog`.
+
+```python
+proof = SqlProof.from_connection_string("postgresql://localhost:5432/mydb")
+```
+
+### Custom Column Generators
+
+SqlProof maps PostgreSQL types to Hypothesis strategies and refines simple range,
+`IN (...)`, length, FK, and unique constraints. The public customization API is present
+for v0.1 and will grow with richer per-column strategy overrides.
+
+### The `db` Client
+
+The property function receives a `SqlProofClient`:
+
+```python
+rows = db.query("SELECT id, total FROM orders WHERE total >= %s", 0)
+total = db.scalar("SELECT count(*) FROM orders")
+typed = db.query_typed("SELECT id, total FROM orders", OrderRow)
+data = db.get_generated_data()
+```
+
+- `query()` returns a list of dictionaries.
+- `query_typed()` maps rows into `TypedDict`, dataclass, or Pydantic models.
+- `get_generated_data()` returns the dataset for the current run.
+
+## Failure Output
+
+When a property fails, SqlProof throws with a formatted counterexample:
+
+```text
+Property failed: order totals match sum of line items
+Failure: AssertionError: expected totals to match
+Row context: {'order_id': 1}
+Dataset shape: {'orders': {'rows': 1}, 'line_items': {'rows': 2}}
+```
+
+Counterexamples are written under `.sqlproof/failures/` and can be inspected with:
 
 ```bash
-pytest
+sqlproof report .sqlproof/failures/test_name.json
+sqlproof report .sqlproof/failures/test_name.json --format json
+sqlproof replay .sqlproof/failures/test_name.json
 ```
+
+## How It Works
+
+1. **Schema parsing** — Reads your SQL file (or introspects a live DB) to extract tables, columns, types, foreign keys, CHECK/UNIQUE constraints, and enums
+
+2. **Dependency ordering** — Topologically sorts tables by foreign key references so parent rows are always inserted first
+
+3. **Data generation** — Maps PostgreSQL types to Hypothesis strategies and applies constraint-aware generation for CHECK, UNIQUE, NOT NULL, and FK constraints
+
+4. **Isolated execution** — Schema-file proofs run against an in-memory client for fast local feedback. DSN-backed proofs introspect PostgreSQL, insert generated data inside savepoints, run the property, then roll back the run.
+
+5. **Shrinking** — When a property fails, Hypothesis shrinks the dataset to find the simplest counterexample
+
+## Supported PostgreSQL Types
+
+`integer`, `smallint`, `bigint`, `serial`, `bigserial`, `numeric(p,s)`, `real`, `double precision`, `boolean`, `text`, `varchar(n)`, `char(n)`, `uuid`, `timestamp`, `timestamptz`, `date`, `time`, `json`, `jsonb`, `bytea`, and custom `ENUM` types.
+
+## Development
+
+```bash
+git clone https://github.com/your-org/sqlproof.git
+cd sqlproof
+uv sync --extra dev
+
+uv run pytest
+uv run ruff check src tests
+uv run pyright src/sqlproof
+uv run mypy src/sqlproof
+```
+
+### Postgres-backed tests
+
+Integration tests are optional and read `SQLPROOF_TEST_DATABASE_URL`:
+
+```bash
+SQLPROOF_TEST_DATABASE_URL='postgresql://postgres:postgres@127.0.0.1:5432/postgres' uv run pytest tests/integration
+uv run pytest tests/benchmarks
+```
+
+The integration tests create a temporary schema named `sqlproof_it_*` and drop it at the end.
+
+### Why SqlProof tests itself with properties
+
+SqlProof uses Hypothesis internally, and its own tests use properties for schema
+fingerprinting, dependency ordering, FK validity, constraint generation, shrinking,
+parser idempotence, and counterexample replay. This keeps the library honest about
+the same invariants it asks users to write.
+
+## License
+
+MIT

@@ -187,7 +187,8 @@ def _const_int(node: Any) -> int:
 
 
 def _render(node: Any) -> str:
-    return RawStream()(node)
+    stream = RawStream()  # type: ignore[no-untyped-call]
+    return str(stream(node))
 
 
 def _normalize_type_name(name: str) -> str:
