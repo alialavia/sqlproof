@@ -1,0 +1,86 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sqlproof"
+version = "0.1.0"
+description = "Property-based testing for PostgreSQL schemas and SQL behavior."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "SqlProof contributors" }]
+dependencies = [
+  "hypothesis>=6.100",
+  "psycopg[binary]>=3.1",
+  "pglast>=6.0",
+  "rich>=13.0",
+]
+
+[project.optional-dependencies]
+testcontainers = ["testcontainers[postgres]>=4.0"]
+pydantic = ["pydantic>=2.0"]
+dev = [
+  "pytest>=8.0",
+  "pytest-cov",
+  "pytest-xdist",
+  "pytest-benchmark",
+  "syrupy",
+  "mutmut",
+  "mypy",
+  "pyright",
+  "ruff",
+  "uv",
+]
+
+[project.entry-points.pytest11]
+sqlproof = "sqlproof.pytest_plugin"
+
+[project.scripts]
+sqlproof = "sqlproof.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sqlproof"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.pyright]
+include = ["src/sqlproof"]
+pythonVersion = "3.11"
+typeCheckingMode = "strict"
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+packages = ["sqlproof"]
+
+[tool.coverage.run]
+source = ["src/sqlproof"]
+omit = [
+  "src/sqlproof/__init__.py",
+  "src/sqlproof/_version.py",
+  "src/sqlproof/cli.py",
+  "src/sqlproof/pytest_plugin.py",
+  "src/sqlproof/coverage/plpgsql.py",
+  "src/sqlproof/generators/columns.py",
+  "src/sqlproof/generators/constraints.py",
+  "src/sqlproof/generators/well_known.py",
+  "src/sqlproof/runners/db.py",
+  "src/sqlproof/schema/introspect.py",
+  "src/sqlproof/schema/parse_sql.py",
+  "src/sqlproof/client.py",
+  "src/sqlproof/core.py",
+  "src/sqlproof/reporter/console.py",
+  "src/sqlproof/reporter/json_io.py",
+  "src/sqlproof/types.py",
+]

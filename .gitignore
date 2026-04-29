@@ -5,3 +5,9 @@ dist/
 .superpowers/
 .worktrees/
 website/.astro/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.hypothesis/
+.coverage
+.venv/
