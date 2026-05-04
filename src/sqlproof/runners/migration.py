@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, cast
 
 from hypothesis import HealthCheck, given, settings
 
-from sqlproof.generators.graph import dataset_strategy
+from sqlproof.generators.graph import SizeSpec, dataset_strategy
 
 
 def migration(
@@ -14,7 +14,7 @@ def migration(
     *,
     before_schema: str,
     migration: str,
-    sizes: dict[str, int],
+    sizes: Mapping[str, SizeSpec],
     **kwargs: object,
 ) -> Callable[[Callable[..., None]], Callable[..., None]]:
     del before_schema

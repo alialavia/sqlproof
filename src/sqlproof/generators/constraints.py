@@ -35,7 +35,19 @@ def _refine_for_check(
         values = tuple(
             _parse_sql_literal(value) for value in in_set_match.group("values").split(",")
         )
-        return st.sampled_from(values)
+        return _sampled_values_for_column(column, values)
+
+    any_array_match = re.fullmatch(
+        rf"\(?\s*{re.escape(column.name)}\s*=\s*ANY\s*"
+        r"\(\s*ARRAY\[(?P<values>.+)\]\s*\)\s*\)?",
+        expression,
+        flags=re.IGNORECASE,
+    )
+    if any_array_match is not None:
+        values = tuple(
+            _parse_sql_literal(value) for value in any_array_match.group("values").split(",")
+        )
+        return _sampled_values_for_column(column, values)
 
     length_match = re.fullmatch(
         rf"(?:char_length|length)\s*\(\s*{re.escape(column.name)}\s*\)\s*"
@@ -88,6 +100,12 @@ def _normalize_check_expression(expression: str) -> str:
 
 def _parse_sql_literal(value: str) -> Any:
     stripped = value.strip()
+    cast_match = re.fullmatch(
+        r"(?P<literal>'(?:''|[^'])*'|-?\d+(?:\.\d+)?)(?:\s*::[\w. ]+)?",
+        stripped,
+    )
+    if cast_match is not None:
+        stripped = cast_match.group("literal")
     if stripped.startswith("'") and stripped.endswith("'"):
         return stripped[1:-1].replace("''", "'")
     try:
@@ -97,6 +115,13 @@ def _parse_sql_literal(value: str) -> Any:
             return Decimal(stripped)
         except Exception:
             return stripped
+
+
+def _sampled_values_for_column(column: Column, values: tuple[Any, ...]) -> SearchStrategy[Any]:
+    strategy = st.sampled_from(values)
+    if column.nullable:
+        return st.none() | strategy
+    return strategy
 
 
 def _direct_length_strategy(column: Column, op: str, value: int) -> SearchStrategy[str] | None:

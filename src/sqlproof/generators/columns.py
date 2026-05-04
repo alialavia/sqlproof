@@ -8,6 +8,11 @@ from hypothesis.strategies import SearchStrategy
 
 from sqlproof.schema.model import Column, PgType
 
+POSTGRES_TEXT_ALPHABET = st.characters(
+    blacklist_characters="\x00",
+    blacklist_categories=("Cs",),
+)
+
 
 def strategy_for_column(column: Column) -> SearchStrategy[Any]:
     strategy = strategy_for_type(column.type)
@@ -42,13 +47,13 @@ def strategy_for_type(pg_type: PgType) -> SearchStrategy[Any]:
     if name in {"boolean", "bool"}:
         return st.booleans()
     if name in {"text", "citext"}:
-        return st.text(max_size=255)
+        return _postgres_text(max_size=255)
     if name in {"varchar", "character varying"}:
         max_size = pg_type.modifiers[0] if pg_type.modifiers else 255
-        return st.text(max_size=max_size)
+        return _postgres_text(max_size=max_size)
     if name in {"char", "character"}:
         size = pg_type.modifiers[0] if pg_type.modifiers else 1
-        return st.text(min_size=size, max_size=size)
+        return _postgres_text(min_size=size, max_size=size)
     if name == "uuid":
         return st.uuids().map(str)
     if name in {
@@ -66,16 +71,23 @@ def strategy_for_type(pg_type: PgType) -> SearchStrategy[Any]:
         return st.timedeltas()
     if name in {"json", "jsonb"}:
         json_scalar = (
-            st.none() | st.booleans() | st.floats(allow_nan=False, allow_infinity=False) | st.text()
+            st.none()
+            | st.booleans()
+            | st.floats(allow_nan=False, allow_infinity=False)
+            | _postgres_text()
         )
         return st.recursive(
             json_scalar,
             lambda children: (
                 st.lists(children, max_size=5)
-                | st.dictionaries(st.text(max_size=20), children, max_size=5)
+                | st.dictionaries(_postgres_text(max_size=20), children, max_size=5)
             ),
             max_leaves=10,
         )
     if name == "bytea":
         return st.binary()
-    return st.text(max_size=255)
+    return _postgres_text(max_size=255)
+
+
+def _postgres_text(*, min_size: int = 0, max_size: int | None = None) -> SearchStrategy[str]:
+    return st.text(alphabet=POSTGRES_TEXT_ALPHABET, min_size=min_size, max_size=max_size)

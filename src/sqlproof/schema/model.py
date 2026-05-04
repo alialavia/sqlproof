@@ -46,6 +46,7 @@ class ForeignKey:
     referenced_columns: tuple[str, ...]
     on_delete: Literal["NO ACTION", "RESTRICT", "CASCADE", "SET NULL", "SET DEFAULT"]
     on_update: Literal["NO ACTION", "RESTRICT", "CASCADE", "SET NULL", "SET DEFAULT"]
+    referenced_schema: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

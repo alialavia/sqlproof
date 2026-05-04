@@ -152,6 +152,7 @@ def test_parse_schema_sql_uses_postgres_ast_for_qualified_constraints() -> None:
     assert orders.column("status").default == "'pending'"
     assert orders.foreign_keys[0].columns == ("customer_id",)
     assert orders.foreign_keys[0].referenced_table == "customers"
+    assert orders.foreign_keys[0].referenced_schema == "app"
     assert orders.foreign_keys[0].on_delete == "CASCADE"
     assert orders.unique_constraints == (("customer_id", "status"),)
     assert orders.check_constraints[0].expression == "total >= 0"
@@ -185,6 +186,7 @@ class FakeIntrospectionConnection:
                         "schema_name": "public",
                         "table_name": "orders",
                         "columns": ["customer_id"],
+                        "referenced_schema": "auth",
                         "referenced_table": "customers",
                         "referenced_columns": ["id"],
                         "on_delete": "NO ACTION",
@@ -262,4 +264,5 @@ def test_introspect_schema_models_catalog_columns_constraints_and_enums() -> Non
     assert customers.primary_key == ("id",)
     assert customers.unique_constraints == (("email",),)
     assert orders.foreign_keys[0].referenced_table == "customers"
+    assert orders.foreign_keys[0].referenced_schema == "auth"
     assert orders.check_constraints[0].expression == "customer_id > 0"

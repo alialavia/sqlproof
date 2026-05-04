@@ -1,15 +1,15 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any, cast
 
 from hypothesis import HealthCheck, given, settings
 
-from sqlproof.generators.graph import dataset_strategy
+from sqlproof.generators.graph import SizeSpec, dataset_strategy
 
 
 def stateful(
-    proof: Any, *, sizes: dict[str, int], **kwargs: object
+    proof: Any, *, sizes: Mapping[str, SizeSpec], **kwargs: object
 ) -> Callable[[type[Any]], type[Any]]:
     runs = int(cast(Any, kwargs.pop("runs", 1)))
 

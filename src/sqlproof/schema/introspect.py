@@ -99,6 +99,7 @@ def _foreign_keys(connection: Any, *, schema: str) -> dict[tuple[str, str], list
                     Literal["NO ACTION", "RESTRICT", "CASCADE", "SET NULL", "SET DEFAULT"],
                     str(row["on_update"]),
                 ),
+                referenced_schema=str(row["referenced_schema"]),
             )
         )
     return grouped
@@ -188,6 +189,7 @@ SELECT
   ns.nspname AS schema_name,
   cls.relname AS table_name,
   array_agg(src_att.attname ORDER BY src_key.ordinality) AS columns,
+  ref_ns.nspname AS referenced_schema,
   ref_cls.relname AS referenced_table,
   array_agg(ref_att.attname ORDER BY ref_key.ordinality) AS referenced_columns,
   CASE con.confdeltype
@@ -202,6 +204,7 @@ FROM pg_catalog.pg_constraint con
 JOIN pg_catalog.pg_class cls ON cls.oid = con.conrelid
 JOIN pg_catalog.pg_namespace ns ON ns.oid = cls.relnamespace
 JOIN pg_catalog.pg_class ref_cls ON ref_cls.oid = con.confrelid
+JOIN pg_catalog.pg_namespace ref_ns ON ref_ns.oid = ref_cls.relnamespace
 JOIN unnest(con.conkey) WITH ORDINALITY AS src_key(attnum, ordinality) ON true
 JOIN unnest(con.confkey) WITH ORDINALITY AS ref_key(attnum, ordinality)
   ON ref_key.ordinality = src_key.ordinality
@@ -210,7 +213,7 @@ JOIN pg_catalog.pg_attribute src_att
 JOIN pg_catalog.pg_attribute ref_att
   ON ref_att.attrelid = ref_cls.oid AND ref_att.attnum = ref_key.attnum
 WHERE ns.nspname = %s AND con.contype = 'f'
-GROUP BY ns.nspname, cls.relname, ref_cls.relname, con.oid
+GROUP BY ns.nspname, cls.relname, ref_ns.nspname, ref_cls.relname, con.oid
 """
 
 _CHECKS_SQL = """

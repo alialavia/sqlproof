@@ -125,6 +125,7 @@ def _parse_foreign_key(constraint: Any, *, columns: tuple[str, ...] | None = Non
         referenced_columns=tuple(_sval(value) for value in constraint.pk_attrs),
         on_delete=_referential_action(constraint.fk_del_action),
         on_update=_referential_action(constraint.fk_upd_action),
+        referenced_schema=getattr(constraint.pktable, "schemaname", None),
     )
 
 

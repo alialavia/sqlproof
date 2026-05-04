@@ -1,17 +1,17 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any, cast
 
 from hypothesis import HealthCheck, given, settings
 
-from sqlproof.generators.graph import dataset_strategy
+from sqlproof.generators.graph import SizeSpec, dataset_strategy
 
 
 def rls(
     proof: Any,
     *,
-    sizes: dict[str, int],
+    sizes: Mapping[str, SizeSpec],
     roles: list[str],
     mode: str = "postgrest",
     **kwargs: object,

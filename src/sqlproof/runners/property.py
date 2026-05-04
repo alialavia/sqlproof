@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import Callable, Generator
+from collections.abc import Callable, Generator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, ParamSpec, TypeVar
@@ -9,7 +9,7 @@ from typing import Any, ParamSpec, TypeVar
 from hypothesis import HealthCheck, given, settings
 
 from sqlproof.exceptions import SqlProofPropertyFailure
-from sqlproof.generators.graph import dataset_strategy
+from sqlproof.generators.graph import SizeSpec, dataset_strategy
 from sqlproof.reporter.json_io import write_counterexample
 
 P = ParamSpec("P")
@@ -37,7 +37,7 @@ class Check:
 def sqlproof(
     proof: Any,
     *,
-    sizes: dict[str, int],
+    sizes: Mapping[str, SizeSpec],
     runs: int = 100,
     seed: int | None = None,
     timeout_ms: int = 5000,
@@ -67,11 +67,14 @@ def run_property(
     proof: Any,
     function: Callable[..., None],
     *,
-    sizes: dict[str, int],
+    sizes: Mapping[str, SizeSpec],
     runs: int,
     failure_dir: Path,
 ) -> None:
-    strategy = dataset_strategy(proof.schema_info, sizes=sizes)
+    if hasattr(proof, "dataset_strategy"):
+        strategy = proof.dataset_strategy(sizes=sizes)
+    else:
+        strategy = dataset_strategy(proof.schema_info, sizes=sizes)
     signature = inspect.signature(function)
     wants_check = "check" in signature.parameters
     run_count = 0
