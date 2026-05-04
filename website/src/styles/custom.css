@@ -96,6 +96,11 @@ starlight-theme-select {
   font-family: monospace;
   margin-bottom: 24px;
 }
+.sp-badge.sp-badge-alpha {
+  background: #f59e0b18;
+  border-color: #f59e0b66;
+  color: #fcd34d;
+}
 .sp-hero h1 {
   font-size: 52px;
   font-weight: 800;

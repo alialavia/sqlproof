@@ -16,6 +16,7 @@ export default defineConfig({
           label: 'API Reference',
           items: [
             { label: 'SqlProof Class', slug: 'api/sqlproof-class' },
+            { label: 'Stateful Testing', slug: 'api/state-machine' },
             { label: 'CheckOptions', slug: 'api/check-options' },
             { label: 'TableCustomization', slug: 'api/table-customization' },
           ],
@@ -25,6 +26,7 @@ export default defineConfig({
           items: [
             { label: 'FK Distribution Strategies', slug: 'guides/fk-distributions' },
             { label: 'Custom Generators', slug: 'guides/custom-generators' },
+            { label: 'Testing Supabase Apps', slug: 'guides/supabase' },
             { label: 'CI/CD Integration', slug: 'guides/ci-cd' },
             { label: 'Security & Credentials', slug: 'guides/security' },
             { label: 'Local Development', slug: 'guides/local-dev' },

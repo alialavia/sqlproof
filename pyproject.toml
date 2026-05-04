@@ -4,18 +4,51 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sqlproof"
-version = "0.1.0"
-description = "Property-based testing for PostgreSQL schemas and SQL behavior."
+version = "0.1.0a1"
+description = "Property-based testing for PostgreSQL schemas and SQL behavior. Early-stage alpha — APIs may change."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "SqlProof contributors" }]
+keywords = [
+  "postgres",
+  "postgresql",
+  "property-based-testing",
+  "hypothesis",
+  "sql",
+  "rls",
+  "testing",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Framework :: Hypothesis",
+  "Framework :: Pytest",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Database",
+  "Topic :: Database :: Database Engines/Servers",
+  "Topic :: Software Development :: Quality Assurance",
+  "Topic :: Software Development :: Testing",
+  "Typing :: Typed",
+]
 dependencies = [
   "hypothesis>=6.100",
   "psycopg[binary]>=3.1",
   "pglast>=6.0",
   "rich>=13.0",
 ]
+
+[project.urls]
+Homepage = "https://sqlproof.com"
+Documentation = "https://sqlproof.com"
+Repository = "https://github.com/alialavia/sqlproof"
+Issues = "https://github.com/alialavia/sqlproof/issues"
+Changelog = "https://github.com/alialavia/sqlproof/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 testcontainers = ["testcontainers[postgres]>=4.0"]

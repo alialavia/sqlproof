@@ -79,6 +79,55 @@ proof.invariant(
 )
 ```
 
+## External Tables
+
+When your schema has FKs into a table SqlProof shouldn't generate (e.g.
+Supabase's `auth.users`), register an `ExternalTableSpec` so the generator
+samples FK values from the live external parent:
+
+```python
+from sqlproof import ExternalTableSpec, SqlProof
+from hypothesis import strategies as st
+
+proof = SqlProof.from_connection_string(
+    "postgresql://...",
+    external_tables={
+        "auth.users": ExternalTableSpec(
+            primary_key="id",
+            seed_count=st.integers(min_value=1, max_value=5),
+            sample=lambda db: [r["id"] for r in db.query(
+                "SELECT id FROM auth.users WHERE email LIKE 'sqlproof_%%'"
+            )],
+        )
+    },
+)
+```
+
+See the [Supabase guide](/guides/supabase/) for a full walkthrough.
+
+## Stateful tests
+
+For invariants that only surface across sequences of mutations
+(pagination, windowed aggregates, RLS membership churn), use a state
+machine via `proof.run_state_machine`:
+
+```python
+from sqlproof.testing import SqlProofStateMachine
+from hypothesis.stateful import rule, invariant
+
+class MyMachine(SqlProofStateMachine):
+    @rule()
+    def step(self): ...
+
+    @invariant()
+    def some_invariant(self): ...
+
+def test_x(proof: SqlProof):
+    proof.run_state_machine(MyMachine)
+```
+
+See the [stateful testing API](/api/state-machine/) for details.
+
 ## Cleanup
 
 `SqlProof` is a context manager:

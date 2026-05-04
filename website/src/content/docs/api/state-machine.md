@@ -1,0 +1,153 @@
+---
+title: Stateful Testing
+description: Use Hypothesis state machines to verify SQL invariants across sequences of mutations, not just single shots.
+---
+
+Some bugs only surface after a *sequence* of writes — pagination boundaries
+that drift after deletes, RLS policies that allow unintended access only
+after a role change, aggregate functions that lose precision under
+incremental updates. Hypothesis's `RuleBasedStateMachine` is the right tool
+for these, and `SqlProofStateMachine` wires it into SqlProof so each example
+gets its own isolated Postgres state.
+
+## Quick example
+
+Verify that two RLS helpers (`get_member_project_ids`, `get_editor_project_ids`)
+correctly track the contents of `project_members`, no matter how membership
+churns:
+
+```python
+from hypothesis.stateful import invariant, rule
+from hypothesis import strategies as st
+from sqlproof import SqlProof
+from sqlproof.testing import SqlProofStateMachine
+from sqlproof.contrib.supabase import as_supabase_user
+
+
+class MembershipMachine(SqlProofStateMachine):
+    def on_setup(self) -> None:
+        # self.db is a SqlProofClient, ready and inside an isolated savepoint.
+        self.user_id = insert_user(self.db)
+        self.project_ids = [insert_project(self.db) for _ in range(4)]
+        # `enter` ties the JWT-claim context to the example's lifetime —
+        # released between examples without overriding teardown().
+        self.enter(as_supabase_user(self.db, self.user_id))
+        self.model: dict[str, str] = {}
+
+    @rule(
+        project_index=st.integers(min_value=0, max_value=3),
+        role=st.sampled_from(("viewer", "editor")),
+    )
+    def upsert_member(self, project_index, role):
+        project_id = self.project_ids[project_index]
+        self.db.execute(
+            """
+            INSERT INTO project_members (project_id, user_id, role)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (project_id, user_id) DO UPDATE SET role = EXCLUDED.role
+            """,
+            project_id, self.user_id, role,
+        )
+        self.model[project_id] = role
+
+    @rule(project_index=st.integers(min_value=0, max_value=3))
+    def remove_member(self, project_index):
+        project_id = self.project_ids[project_index]
+        self.db.execute(
+            "DELETE FROM project_members WHERE project_id = %s AND user_id = %s",
+            project_id, self.user_id,
+        )
+        self.model.pop(project_id, None)
+
+    @invariant()
+    def helpers_match_model(self):
+        members = self._fetch("get_member_project_ids")
+        editors = self._fetch("get_editor_project_ids")
+        assert members == set(self.model.keys())
+        assert editors == {pid for pid, role in self.model.items() if role == "editor"}
+        assert editors <= members  # editor is always a subset of member
+
+    def _fetch(self, fn):
+        rows = self.db.query(f"SELECT pid::text AS pid FROM {fn}() AS pid")
+        return {row["pid"] for row in rows}
+
+
+def test_membership(proof: SqlProof):
+    proof.run_state_machine(MembershipMachine)
+```
+
+## API reference
+
+### `SqlProofStateMachine`
+
+Subclass and define rules and invariants. Important attributes:
+
+- **`self.db: SqlProofClient`** — the live client for the current example.
+  Inside a savepoint that's rolled back when the example ends.
+- **`initial_dataset: ClassVar[dict] = {}`** — class attribute. If you set a
+  non-empty dict, every example starts with that data already inserted.
+
+Override `on_setup(self) -> None` to seed example-specific fixtures (auth
+users, projects, JWT claims). Don't override `__init__` or `teardown` —
+SqlProof manages those.
+
+#### `self.enter(cm)`
+
+Adopts a context manager for the duration of the current example. Closes
+in reverse-entry order during teardown. Use it for resources that must
+live across rules but not across examples:
+
+```python
+def on_setup(self) -> None:
+    self.enter(as_supabase_user(self.db, self.user_id))
+    self.enter(self.db.savepoint())  # roll back inside example boundaries
+```
+
+### `SqlProof.run_state_machine(machine_class, *, settings=None)`
+
+Binds the proof to a transient subclass of your machine and dispatches to
+`hypothesis.stateful.run_state_machine_as_test`. The transient subclass is
+internal — your class definition stays clean and runnable from any
+fixture-equipped test:
+
+```python
+def test_x(proof):
+    proof.run_state_machine(
+        MembershipMachine,
+        settings=settings(
+            max_examples=20,
+            stateful_step_count=12,
+            deadline=None,
+            suppress_health_check=[HealthCheck.function_scoped_fixture],
+        ),
+    )
+```
+
+Direct instantiation (`MembershipMachine()`) without `run_state_machine`
+raises `SqlProofUsageError` — this is intentional, so the failure mode is
+self-explanatory.
+
+## When to reach for a state machine
+
+Use a state machine when:
+
+- The function under test is a *fold* over accumulated state (windowed
+  aggregates, running totals, paginated views).
+- The bug class is "works the first time, fails after N operations" —
+  off-by-ones in pagination, stale caches, RLS policies that don't
+  re-evaluate.
+- You can describe the correct behavior as an in-Python model that mirrors
+  the DB state.
+
+Stick with single-shot property tests (`@given(...)`) when the function
+under test is purely a function of its input — `extract_domain(url)`,
+`is_competitor_mentioned(name, comps)`. State machines have higher
+overhead and slower shrinking; don't reach for them when a one-shot
+example would catch the bug.
+
+## See also
+
+- [SqlProof class API](/api/sqlproof-class/) — `client_for_dataset`,
+  `dataset_strategy`, and the rest of the proof surface.
+- [Supabase contrib](/guides/supabase/) — `as_supabase_user` for RLS
+  testing in tandem with state machines.

@@ -2,8 +2,16 @@
 
 [![CI](https://github.com/alialavia/sqlproof/actions/workflows/ci.yml/badge.svg)](https://github.com/alialavia/sqlproof/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/alialavia/sqlproof/branch/main/graph/badge.svg)](https://codecov.io/gh/alialavia/sqlproof)
+[![PyPI](https://img.shields.io/pypi/v/sqlproof?include_prereleases)](https://pypi.org/project/sqlproof/)
 
 **→ Full docs: [sqlproof.com](https://sqlproof.com)**
+
+> ⚠️ **Early-stage alpha (`0.1.0a1`).** APIs are unstable and may change without
+> deprecation warnings until 0.x stabilizes. Postgres edge cases and Hypothesis
+> shrink behavior are still being discovered, and coverage of the schema surface
+> area is incomplete. **Do not rely on this for production test suites yet.**
+> Bug reports and reproductions welcome —
+> [open an issue](https://github.com/alialavia/sqlproof/issues).
 
 Property-based testing for PostgreSQL schemas and SQL behavior. Define properties about
 your database code; SqlProof generates valid datasets with Hypothesis, executes your
@@ -11,8 +19,12 @@ queries through `psycopg`, and saves the smallest counterexample it finds.
 
 ## Install
 
+Alpha releases are gated behind a pre-release flag so you don't get one by accident:
+
 ```bash
-pip install sqlproof
+pip install --pre sqlproof
+# or:
+uv add --prerelease=allow sqlproof
 ```
 
 Requires Python 3.11+ and PostgreSQL 13+.
