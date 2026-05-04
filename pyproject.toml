@@ -105,12 +105,10 @@ omit = [
   "src/sqlproof/cli.py",
   "src/sqlproof/pytest_plugin.py",
   "src/sqlproof/coverage/plpgsql.py",
-  "src/sqlproof/generators/columns.py",
-  "src/sqlproof/generators/constraints.py",
-  "src/sqlproof/generators/well_known.py",
+  # Files below need a live Postgres to exercise; covered by integration
+  # tests (gated by SQLPROOF_TEST_DATABASE_URL), not unit tests.
   "src/sqlproof/runners/db.py",
   "src/sqlproof/schema/introspect.py",
-  "src/sqlproof/schema/parse_sql.py",
   "src/sqlproof/client.py",
   "src/sqlproof/core.py",
   "src/sqlproof/reporter/console.py",
