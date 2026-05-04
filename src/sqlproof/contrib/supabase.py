@@ -114,6 +114,7 @@ def seed_test_users_directly(
             email,
         )
 
+    escaped_prefix = email_prefix.replace("_", r"\_")
     rows = db.query(
         r"""
         SELECT id::text AS id
@@ -121,7 +122,7 @@ def seed_test_users_directly(
         WHERE email LIKE %s ESCAPE '\'
         ORDER BY email
         """,
-        f"{email_prefix.replace('_', r'\_')}%@{email_domain}",
+        f"{escaped_prefix}%@{email_domain}",
     )
     return [row["id"] for row in rows]
 

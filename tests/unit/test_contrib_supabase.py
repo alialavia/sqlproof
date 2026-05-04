@@ -71,9 +71,8 @@ def test_as_supabase_user_nested_blocks_stack_and_unwind() -> None:
 
 def test_as_supabase_user_restores_guc_after_exception() -> None:
     db = FakeClaimsClient(initial='{"sub":"prior","role":"authenticated"}')
-    with pytest.raises(RuntimeError):
-        with as_supabase_user(db, "user-1"):
-            raise RuntimeError("boom")
+    with pytest.raises(RuntimeError), as_supabase_user(db, "user-1"):
+        raise RuntimeError("boom")
     assert db.guc == '{"sub":"prior","role":"authenticated"}'
 
 
@@ -117,9 +116,11 @@ class FakeAuthUsersClient:
 
     def query(self, sql: str, *params: Any) -> list[dict[str, Any]]:
         if "FROM auth.users" in sql and "LIKE" in sql:
-            pattern = params[0]
-            prefix = pattern.replace(r"\_", "_").rstrip("%@test.invalid").rstrip("%")
-            matched = [u for u in self.users if u["email"].startswith(prefix)]
+            import re
+
+            sql_pattern = params[0].replace(r"\_", "_")
+            regex = "^" + re.escape(sql_pattern).replace("%", ".*") + "$"
+            matched = [u for u in self.users if re.match(regex, u["email"])]
             matched.sort(key=lambda u: u["email"])
             return [{"id": u["id"]} for u in matched]
         return []
