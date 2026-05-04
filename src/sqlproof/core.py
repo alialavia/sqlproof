@@ -86,7 +86,7 @@ class SqlProof:
 
     def run_state_machine(
         self,
-        machine_class: type,
+        machine_class: type[Any],
         *,
         settings: Any = None,
     ) -> None:
@@ -97,13 +97,13 @@ class SqlProof:
         an isolated dataset client; writes from one example are rolled back
         before the next begins.
         """
-        from hypothesis.stateful import run_state_machine_as_test
+        from hypothesis.stateful import (
+            run_state_machine_as_test,  # pyright: ignore[reportUnknownVariableType]
+        )
 
         from sqlproof.testing import SqlProofStateMachine
 
-        if not isinstance(machine_class, type) or not issubclass(
-            machine_class, SqlProofStateMachine
-        ):
+        if not issubclass(machine_class, SqlProofStateMachine):
             msg = "machine_class must be a subclass of SqlProofStateMachine."
             raise SqlProofUsageError(msg)
 
@@ -112,7 +112,8 @@ class SqlProof:
             (machine_class,),
             {"_sqlproof_proof": self},
         )
-        run_state_machine_as_test(bound_class, settings=settings)
+        runner = cast("Callable[..., None]", run_state_machine_as_test)
+        runner(bound_class, settings=settings)
 
     @contextmanager
     def client_for_dataset(
