@@ -11,6 +11,8 @@ from sqlproof.schema.model import SchemaInfo
 
 from .rows import ColumnOverrides, table_rows_strategy
 
+__all__ = ["ColumnOverrides", "Dataset", "SizeSpec", "dataset_strategy"]
+
 Dataset = dict[str, list[dict[str, Any]]]
 SizeSpec = int | SearchStrategy[int]
 

@@ -1,16 +1,18 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 
 from hypothesis import strategies as st
 from hypothesis.strategies import SearchStrategy
 
 from sqlproof.schema.model import Column, PgType
 
+_POSTGRES_BLACKLIST_CATEGORIES: tuple[Literal["Cs"], ...] = ("Cs",)
+
 POSTGRES_TEXT_ALPHABET = st.characters(
     blacklist_characters="\x00",
-    blacklist_categories=("Cs",),
+    blacklist_categories=_POSTGRES_BLACKLIST_CATEGORIES,
 )
 
 

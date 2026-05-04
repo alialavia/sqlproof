@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any, cast
+from typing import Any
 from uuid import UUID
 
 from hypothesis import strategies as st
@@ -109,7 +109,12 @@ def _column_override(
 
 def _draw_override(draw: st.DrawFn, override: Any, context: ColumnContext) -> Any:
     if isinstance(override, SearchStrategy):
-        return draw(cast(SearchStrategy[Any], override))
+        # `isinstance` narrows to bare `SearchStrategy` (parameter unknown) in
+        # pyright; mypy infers `SearchStrategy[Any]` and rejects an explicit
+        # cast as redundant. Suppressing the pyright-side complaint is the
+        # least-bad option since `override` enters as `Any` and the runtime
+        # call works with whatever element type the user supplied.
+        return draw(override)  # pyright: ignore[reportUnknownArgumentType, reportUnknownVariableType]
     if callable(override):
         return override(context)
     return override
