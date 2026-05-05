@@ -12,6 +12,15 @@
 > area is incomplete. **Do not rely on this for production test suites yet.**
 > Bug reports and reproductions welcome —
 > [open an issue](https://github.com/alialavia/sqlproof/issues).
+>
+> Known gaps tracked openly in the [issue list](https://github.com/alialavia/sqlproof/issues):
+> - [#1 CI: real Postgres service container](https://github.com/alialavia/sqlproof/issues/1) — currently the integration suite skips in CI
+> - [#2 Coverage: integration-heavy modules](https://github.com/alialavia/sqlproof/issues/2) — `core.py`, `client.py`, `runners/db.py`, `schema/introspect.py` excluded from the coverage gate
+> - [#3 Schema: exclusion constraints, partial unique indexes, generated columns](https://github.com/alialavia/sqlproof/issues/3)
+> - [#4 Generators: range types, composite types, custom domains](https://github.com/alialavia/sqlproof/issues/4)
+> - [#5 Pytest plugin: CLI flags and reporter wiring still stabilizing](https://github.com/alialavia/sqlproof/issues/5)
+> - [#6 Deprecation policy for 0.x](https://github.com/alialavia/sqlproof/issues/6)
+> - [#7 Coverage: CLI and reporter modules](https://github.com/alialavia/sqlproof/issues/7)
 
 Property-based testing for PostgreSQL schemas and SQL behavior. Define properties about
 your database code; SqlProof generates valid datasets with Hypothesis, executes your
