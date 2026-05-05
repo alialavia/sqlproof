@@ -85,7 +85,17 @@ SqlProof will:
 4. Run your property with Hypothesis-managed execution and shrinking
 5. Save the shrunk counterexample as JSON when a property fails
 
-## Why property-based?
+## What you can do with SqlProof
+
+### Generate datasets that respect your schema
+
+The generation engine reads your schema and produces multi-table datasets where every FK references a real parent, every CHECK constraint is honored at generation time (no rejection sampling), every UNIQUE constraint is enforced, and types are realistic — `NUMERIC(10,2)` gets scale-2 decimals, `varchar(50)` gets bounded strings, enums sample from declared values.
+
+Useful far beyond tests: seed local dev databases, generate fixtures, replay schema-respecting data through migrations, sample child-row FKs from external parent tables (e.g. Supabase `auth.users`).
+
+→ Walkthrough with column overrides, derived values, shrinkable cardinalities, and external parent tables: [Realistic Data Generation](https://sqlproof.com/examples/data-generation/).
+
+### Property-based testing
 
 A pgTAP test asserts a specific value against a fixed fixture. A SqlProof property describes an *invariant* and lets Hypothesis throw hundreds of valid datasets at it — including edge cases (NULLs, decimal precision, empty groups, tied window values) you wouldn't think to type. When a property fails, Hypothesis shrinks the dataset to the smallest reproducer and saves it.
 
