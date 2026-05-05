@@ -28,7 +28,11 @@ jobs:
         with:
           files: ./coverage.xml
           fail_ci_if_error: false
-          # Public repos use tokenless OIDC; no secret needed.
+          # Codecov v4 requires a token on protected branches even for
+          # public repos. Get the token from
+          # https://app.codecov.io/gh/alialavia/sqlproof/config/general
+          # and add as repo secret CODECOV_TOKEN.
+          token: ${{ secrets.CODECOV_TOKEN }}
 
   website:
     runs-on: ubuntu-latest
