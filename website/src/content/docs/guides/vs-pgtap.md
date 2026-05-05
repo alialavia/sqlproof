@@ -124,13 +124,22 @@ SELECT fk_ok('orders', 'customer_id', 'customers', 'id');
 SqlProof can express each of these as a query against
 `information_schema`, but pgTAP has decade-aged ergonomics.
 
-### 3. Native plpgsql function testing
+### 3. Native plpgsql introspection
 
-pgTAP can test plpgsql function bodies, EXCEPTION blocks, and
-SQL-context-specific behavior with no marshalling. SqlProof drives
-function tests through `db.scalar(...)` from Python — adequate, but
-literally a layer further from the function. (See the
-[contrib/supabase guide](/guides/supabase/) for an end-to-end example.)
+pgTAP can directly assert that a function `RAISE EXCEPTION`s with a
+specific message, that a particular `NOTICE` was emitted, or that the
+function's stored attributes (volatility, `SECURITY DEFINER` flag,
+owner) match expected values. SqlProof can verify the *behavior* of
+the function from outside, but not its plpgsql-internal control flow
+with the same fidelity.
+
+**However**, for the far more common case of testing *what a function
+returns for given inputs* — which is what most function tests actually
+do — SqlProof's property-based approach is dramatically better. See
+the focused walkthrough:
+[Testing SQL Functions — pgTAP vs SqlProof](/examples/testing-sql-functions/).
+That page works through a realistic pricing function and shows the
+combinatorial gap clearly.
 
 ### 4. Tight feedback loop in psql
 

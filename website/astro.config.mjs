@@ -36,6 +36,7 @@ export default defineConfig({
         {
           label: 'Examples',
           items: [
+            { label: 'Testing SQL Functions (vs pgTAP)', slug: 'examples/testing-sql-functions' },
             { label: 'Five Property Patterns', slug: 'examples/property-patterns' },
             { label: 'E-Commerce Orders', slug: 'examples/orders' },
           ],

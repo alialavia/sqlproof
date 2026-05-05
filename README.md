@@ -99,6 +99,8 @@ Common shapes that property tests cover much better than examples:
 
 → Walkthroughs of all five: [Five Property Patterns](https://sqlproof.com/examples/property-patterns/).
 
+→ The strongest case: testing **SQL functions** with stacked discounts, country-specific tax, and rounding edge cases — pgTAP version side-by-side with the SqlProof version, showing four realistic regressions where pgTAP silently passes and SqlProof catches: [Testing SQL Functions — pgTAP vs SqlProof](https://sqlproof.com/examples/testing-sql-functions/).
+
 → Honest comparison with pgTAP (where SqlProof wins, where pgTAP wins, where you should ship both): [SqlProof vs pgTAP](https://sqlproof.com/guides/vs-pgtap/).
 
 ## API
