@@ -26,6 +26,16 @@ Property-based testing for PostgreSQL schemas and SQL behavior. Define propertie
 your database code; SqlProof generates valid datasets with Hypothesis, executes your
 queries through `psycopg`, and saves the smallest counterexample it finds.
 
+## Built for Supabase founders who don't write tests by hand
+
+If you're a solo founder building on Supabase and your testing strategy
+is "ask Claude / Cursor to write the tests" — SqlProof was made for you.
+This repo ships with [`AGENTS.md`](./AGENTS.md), a rules file that
+primes your AI coding agent on the exact patterns to use for RLS
+policies, RPC functions, and stateful tests on a Supabase schema.
+
+**60-second path:** [Test your Supabase project in 60 seconds](https://sqlproof.com/supabase-quickstart/).
+
 ## Install
 
 Alpha releases are gated behind a pre-release flag so you don't get one by accident:
@@ -38,7 +48,7 @@ uv add --prerelease=allow sqlproof
 
 Requires Python 3.11+ and PostgreSQL 13+.
 
-## Quick Start
+## Quick Start (general)
 
 Given a schema file:
 
