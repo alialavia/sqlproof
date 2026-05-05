@@ -1,0 +1,234 @@
+---
+title: Five Property Patterns
+description: A tour of the five SQL invariant shapes that property-based testing handles much better than example-based testing.
+---
+
+If you've written database tests before, you've probably noticed that
+*most* SQL bugs follow a few recurring shapes: an aggregate that drifts
+on weird inputs, an RLS policy that allows the wrong row, a migration
+that produces a different answer than the query it replaced. Each of
+those shapes has a property-based formulation that's much shorter than
+the example-based equivalent and catches more bugs.
+
+Here are five patterns, ordered roughly by how often they pay off.
+
+## 1. Aggregation invariants
+
+**The shape:** "The aggregate produced by the database equals what
+Python computes from the same input rows."
+
+This is property-based testing's most immediate win, because almost
+every reporting query is an aggregation, and aggregations have edge
+cases (NULLs, empty groups, floating-point precision, decimal scale,
+window-frame boundaries) that hand-typed fixtures don't cover.
+
+```python
+from collections import defaultdict
+from decimal import Decimal
+from sqlproof import SqlProof, sqlproof
+
+proof = SqlProof.from_schema_file("./schema.sql")
+
+@sqlproof(proof, sizes={"customers": 5, "orders": 50}, runs=100)
+def test_customer_revenue_view_matches_python_aggregate(db):
+    rows = db.query("SELECT customer_id, total FROM orders")
+
+    expected = defaultdict(Decimal)
+    for row in rows:
+        expected[row["customer_id"]] += row["total"]
+
+    materialized = {
+        r["customer_id"]: r["revenue"]
+        for r in db.query("SELECT * FROM customer_revenue")
+    }
+
+    assert dict(expected) == materialized
+```
+
+If `customer_revenue` rounds differently than Python (e.g. silently
+truncating instead of rounding half-to-even), this test will fail on
+the smallest input set Hypothesis can shrink to — typically two rows
+with adjacent values that straddle the rounding boundary.
+
+## 2. RLS policy regressions
+
+**The shape:** "User A cannot see any row that doesn't belong to user
+A — for any combination of memberships, roles, and shared resources."
+
+RLS is notorious for bugs that pass simple unit tests but fail under
+specific role/sharing combinations. A property test makes that
+combinatorial space tractable.
+
+```python
+from sqlproof import SqlProof
+from sqlproof.testing import SqlProofStateMachine
+from sqlproof.contrib.supabase import as_supabase_user
+from hypothesis.stateful import rule, invariant
+from hypothesis import strategies as st
+
+class RLSMachine(SqlProofStateMachine):
+    def on_setup(self):
+        self.user_a = insert_user(self.db)
+        self.user_b = insert_user(self.db)
+        self.projects = [insert_project(self.db, owner=self.user_a)
+                         for _ in range(3)]
+        self.shares: set[str] = set()
+
+    @rule(idx=st.integers(0, 2))
+    def share_project_with_b(self, idx):
+        project = self.projects[idx]
+        self.db.execute(
+            "INSERT INTO project_members(project_id, user_id, role) "
+            "VALUES (%s, %s, 'viewer') ON CONFLICT DO NOTHING",
+            project, self.user_b,
+        )
+        self.shares.add(project)
+
+    @rule(idx=st.integers(0, 2))
+    def revoke(self, idx):
+        project = self.projects[idx]
+        self.db.execute(
+            "DELETE FROM project_members WHERE project_id=%s AND user_id=%s",
+            project, self.user_b,
+        )
+        self.shares.discard(project)
+
+    @invariant()
+    def user_b_only_sees_shared_projects(self):
+        with as_supabase_user(self.db, self.user_b):
+            visible = {r["id"] for r in self.db.query("SELECT id FROM projects")}
+        assert visible == self.shares
+
+def test_rls(proof):
+    proof.run_state_machine(RLSMachine)
+```
+
+If a future migration introduces a `WITH CHECK` clause that's slightly
+wrong, a `policy USING (...)` that misses the share-link case, or a
+`SECURITY DEFINER` function that bypasses RLS unintentionally — this
+test will surface a minimal counterexample showing the exact rule
+sequence that exposed the leak.
+
+## 3. Migration safety: old-vs-new behavioral parity
+
+**The shape:** "The new query / function / view returns the same
+answer as the old one, for every valid input dataset."
+
+This is the single most useful pattern when refactoring SQL —
+extracting a CTE, switching from `LEFT JOIN ... IS NULL` to `NOT
+EXISTS`, replacing a window function with a self-join. The property
+holds before *and* after the refactor; the test you write while
+designing the refactor lives forever as a regression net.
+
+```python
+@sqlproof(proof, sizes={"orders": 100}, runs=200)
+def test_top_customers_query_refactor_preserves_answer(db):
+    old_answer = db.query("""
+        -- old query: window function
+        WITH ranked AS (
+            SELECT customer_id,
+                   SUM(total) AS rev,
+                   ROW_NUMBER() OVER (ORDER BY SUM(total) DESC) AS rn
+            FROM orders GROUP BY customer_id
+        )
+        SELECT customer_id, rev FROM ranked WHERE rn <= 5
+    """)
+    new_answer = db.query("""
+        -- new query: ORDER BY + LIMIT (claimed equivalent)
+        SELECT customer_id, SUM(total) AS rev
+        FROM orders GROUP BY customer_id
+        ORDER BY rev DESC LIMIT 5
+    """)
+    assert sorted(old_answer, key=str) == sorted(new_answer, key=str)
+```
+
+This test fails the moment you discover that `ORDER BY rev DESC LIMIT
+5` *isn't* equivalent when ties exist — the window-function variant is
+deterministic in tie-breaking, the LIMIT variant isn't. Hypothesis
+finds the dataset with three customers tied for fifth place faster
+than you'd hand-craft it.
+
+## 4. Idempotency / commutativity
+
+**The shape:** "Applying this UPSERT twice produces the same state as
+applying it once. The order of two non-conflicting INSERTs doesn't
+change the final state."
+
+Property tests are unusually good at idempotency because the assertion
+is structurally identical to the property: run the operation N times
+and compare states.
+
+```python
+@sqlproof(proof, sizes={"customers": 5}, runs=50)
+def test_upsert_is_idempotent_under_repeat_application(db):
+    payload = {"id": 1, "email": "user@example.com", "tier": "pro"}
+
+    db.execute(
+        "INSERT INTO customers (id, email, tier) VALUES (%s, %s, %s) "
+        "ON CONFLICT (id) DO UPDATE SET email=EXCLUDED.email, tier=EXCLUDED.tier",
+        payload["id"], payload["email"], payload["tier"],
+    )
+    after_first = db.query("SELECT * FROM customers WHERE id = 1")[0]
+
+    # Apply identical payload again.
+    db.execute(
+        "INSERT INTO customers (id, email, tier) VALUES (%s, %s, %s) "
+        "ON CONFLICT (id) DO UPDATE SET email=EXCLUDED.email, tier=EXCLUDED.tier",
+        payload["id"], payload["email"], payload["tier"],
+    )
+    after_second = db.query("SELECT * FROM customers WHERE id = 1")[0]
+
+    assert after_first == after_second  # only differs in updated_at trigger,
+                                         # which is the bug we want to catch
+```
+
+A surprising number of "idempotent" UPSERTs aren't, because the
+`updated_at` trigger fires on every UPDATE even when nothing changed.
+This test catches it.
+
+## 5. Round-trip serialization
+
+**The shape:** "Serializing a row to JSONB and reading it back yields
+the same row."
+
+Useful when you have JSONB columns, custom types, or a serialization
+function — bugs hide in subtle precision differences (floats, decimals
+with trailing zeros, timezone-aware vs -naive datetimes).
+
+```python
+@sqlproof(proof, sizes={"events": 30}, runs=100)
+def test_event_payload_round_trips_through_jsonb(db):
+    rows = db.query("SELECT id, payload FROM events")
+    for row in rows:
+        normalized = db.scalar(
+            "SELECT %s::jsonb::text::jsonb",  # parse + serialize + parse
+            row["payload"],
+        )
+        assert normalized == row["payload"], (
+            f"payload {row['payload']!r} did not round-trip"
+        )
+```
+
+Use this whenever you write a new JSONB-using migration. The first
+property failure usually points to a number that lost precision or a
+timestamp that lost timezone information.
+
+## When example-based tests are still better
+
+Some assertions don't gain much from generation:
+
+- **Schema shape:** "this column exists, with this type." pgTAP and
+  one-off `information_schema` checks are the right tool. (Though
+  SqlProof's introspection results expose this too — you can iterate
+  `proof.schema_info.tables`.)
+- **Wire format snapshots:** "the JSON output of this RPC matches this
+  exact frozen string." Use `syrupy` or pytest snapshots. The shape is
+  fixed; you don't need 100 random datasets.
+- **Specific known bug regressions:** "issue #437 was about user 42
+  with empty cart on sale day; assert it doesn't recur." Hypothesis
+  *might* find that exact case, but a targeted example is faster and
+  more readable.
+
+A healthy test suite has both. Property tests catch the bugs you
+didn't anticipate; example tests document the bugs you've already
+seen and don't want back.

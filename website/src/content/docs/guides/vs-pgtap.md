@@ -1,0 +1,178 @@
+---
+title: SqlProof vs pgTAP
+description: Honest comparison of property-based generation (SqlProof) and example-based assertion (pgTAP) for testing PostgreSQL behavior.
+---
+
+[pgTAP](https://pgtap.org/) is a mature, all-SQL testing framework
+that's been around since 2008 — if you write SQL tests today, there's a
+fair chance they're pgTAP. SqlProof and pgTAP solve overlapping
+problems with very different tools. This page is the honest comparison.
+
+## The fundamental difference
+
+**pgTAP is example-based.** You write each assertion against a known
+fixture and check an exact value:
+
+```sql
+-- pgTAP
+SELECT plan(2);
+INSERT INTO orders (id, customer_id, total)
+  VALUES (1, 100, '50.00'), (2, 100, '25.00');
+SELECT is(
+  (SELECT SUM(total) FROM orders WHERE customer_id = 100),
+  75.00::numeric,
+  'customer total sums correctly'
+);
+SELECT * FROM finish();
+```
+
+**SqlProof is property-based.** You describe the *invariant* and let
+Hypothesis generate hundreds of valid datasets to try to falsify it:
+
+```python
+# SqlProof
+@sqlproof(proof, sizes={"customers": 5, "orders": 50}, runs=100)
+def test_customer_total_equals_sum_of_orders(db):
+    db_total = db.query("""
+        SELECT customer_id, SUM(total)::numeric AS s
+        FROM orders GROUP BY customer_id
+    """)
+    rows = db.query("SELECT customer_id, total FROM orders")
+    expected = defaultdict(Decimal)
+    for row in rows:
+        expected[row["customer_id"]] += row["total"]
+    assert {r["customer_id"]: r["s"] for r in db_total} == expected
+```
+
+The pgTAP test passes for `(50, 25)` and proves nothing about `(0.01,
+99999.99)`, negative-zero edge cases, NULL aggregation, or empty
+groups. The SqlProof test was given the same intent and runs it against
+100 random valid datasets, including ones that hit those edges.
+
+## Where SqlProof has the advantage
+
+### 1. Coverage you can't write by hand
+
+Hypothesis generates valid Postgres values across the *entire domain* of
+each column type — `NUMERIC(10, 2)` includes `0`, `-99999999.99`,
+`99999999.99`, and many tricky values in between. pgTAP tests cover
+exactly the rows you typed.
+
+### 2. Shrinking on failure
+
+When a SqlProof property fails, Hypothesis shrinks the failing dataset
+to the *minimal* example that still reproduces the bug. The
+counterexample is saved with a reproducible seed:
+
+```
+Falsifying example: dataset(orders=[
+  {"id": 1, "customer_id": 1, "total": Decimal("0.01")},
+  {"id": 2, "customer_id": 1, "total": Decimal("0.01")},
+])
+Reproduce: pytest --sqlproof-seed=1708891234
+```
+
+pgTAP gives you the assertion that failed against your fixture — to
+narrow further, you edit the fixture and re-run.
+
+### 3. Stateful testing for sequence bugs
+
+Some bugs only surface after a sequence of operations — pagination
+that drifts after deletes, RLS that allows access only after a role
+change, aggregates that accumulate float error. SqlProof's
+`SqlProofStateMachine` lets you describe rules (insert, delete,
+role-change) and invariants (the helper agrees with the model) and
+Hypothesis explores valid sequences of those rules. pgTAP can test the
+same scenarios but only by hand-rolling sequence fixtures one bug at a
+time.
+
+### 4. Reusability of property logic
+
+A pgTAP test is a literal sequence of assertions. A SqlProof property
+is a Python function — you can parameterize it across schemas, share
+helpers, build factories, run it under `pytest` with the rest of your
+suite, and compose properties from smaller properties.
+
+### 5. Postgres edge-case discovery as a side effect
+
+Because Hypothesis generates broadly, SqlProof tests routinely surface
+Postgres-specific quirks the developer hadn't considered: that
+`numeric` and `float8` round differently, that empty arrays and NULL
+arrays are distinct, that `LIKE '%_%'` doesn't mean what you think.
+pgTAP only finds what you remembered to assert.
+
+## Where pgTAP has the advantage
+
+### 1. All-SQL workflow
+
+pgTAP runs *inside* Postgres. If your team's expertise is SQL and you
+don't want a Python toolchain, pgTAP is the right choice. SqlProof
+requires Python 3.11+, `psycopg`, `Hypothesis`, and (usually) pytest.
+
+### 2. Schema introspection helpers
+
+pgTAP has a deep library of schema-shape assertions:
+
+```sql
+SELECT has_table('public', 'orders');
+SELECT has_column('orders', 'customer_id');
+SELECT col_type_is('orders', 'total', 'numeric(10,2)');
+SELECT col_not_null('orders', 'customer_id');
+SELECT fk_ok('orders', 'customer_id', 'customers', 'id');
+```
+
+SqlProof can express each of these as a query against
+`information_schema`, but pgTAP has decade-aged ergonomics.
+
+### 3. Native plpgsql function testing
+
+pgTAP can test plpgsql function bodies, EXCEPTION blocks, and
+SQL-context-specific behavior with no marshalling. SqlProof drives
+function tests through `db.scalar(...)` from Python — adequate, but
+literally a layer further from the function. (See the
+[contrib/supabase guide](/guides/supabase/) for an end-to-end example.)
+
+### 4. Tight feedback loop in psql
+
+Every Postgres developer can run `psql -f tests/foo.test.sql` and read
+the TAP output. SqlProof needs `pytest` (or its API) and a Python
+environment. For a small SQL-only project, that ergonomic gap matters.
+
+## Recommended stance
+
+These tools are **complementary, not substitutes**.
+
+Use **pgTAP** for:
+- Schema-shape assertions ("does this column exist with this type")
+- Tight-loop SQL function testing where you want to inspect plpgsql
+  control flow and EXCEPTION behavior
+- Migration smoke tests in SQL-only projects
+
+Use **SqlProof** for:
+- Behavioral invariants that must hold across the whole input domain
+  (aggregates, joins, window functions, materialized-view freshness)
+- RLS policy verification where you want to explore role/data
+  combinations
+- Stateful regression tests that catch sequence-of-mutations bugs
+- Migration safety: "the new query produces the same answer as the
+  old, on every dataset"
+
+Many real projects ship both: pgTAP files for shape-and-function unit
+tests in `supabase/tests/`, SqlProof properties for behavioral and
+invariant testing in `tests/`. The repo's
+[Ripenn example](https://github.com/alialavia/sqlproof/tree/main/examples/ripenn_supabase)
+takes exactly this approach — pgTAP files are kept outside SqlProof's
+scope (`test_pgtap_tests_are_kept_outside_sqlproof_parser_scope`),
+and the two suites coexist.
+
+## The honest summary
+
+If you've already invested in pgTAP and your tests catch bugs, keep
+them. SqlProof shines on the bugs pgTAP can't easily reach: the ones
+that hide in input domains you can't enumerate, in sequences of
+mutations you didn't think to write, and in aggregate calculations
+that go subtly wrong on data you didn't have when you wrote the test.
+
+If you're starting fresh on a Postgres-heavy project that has Python
+in the loop anyway — backend service, data pipeline, anything calling
+`psycopg` — SqlProof tends to find more bugs per line of test code.

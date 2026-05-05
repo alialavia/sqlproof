@@ -85,6 +85,22 @@ SqlProof will:
 4. Run your property with Hypothesis-managed execution and shrinking
 5. Save the shrunk counterexample as JSON when a property fails
 
+## Why property-based?
+
+A pgTAP test asserts a specific value against a fixed fixture. A SqlProof property describes an *invariant* and lets Hypothesis throw hundreds of valid datasets at it — including edge cases (NULLs, decimal precision, empty groups, tied window values) you wouldn't think to type. When a property fails, Hypothesis shrinks the dataset to the smallest reproducer and saves it.
+
+Common shapes that property tests cover much better than examples:
+
+- **Aggregation invariants** — DB-side aggregate matches a Python recomputation across any input.
+- **RLS policy regressions** — every role/membership/sharing combination yields the right visible rows.
+- **Migration safety** — old query and new query produce the same answer for every dataset.
+- **Idempotency** — operation applied twice = applied once.
+- **Round-trip serialization** — JSONB / custom types survive serialize→parse intact.
+
+→ Walkthroughs of all five: [Five Property Patterns](https://sqlproof.com/examples/property-patterns/).
+
+→ Honest comparison with pgTAP (where SqlProof wins, where pgTAP wins, where you should ship both): [SqlProof vs pgTAP](https://sqlproof.com/guides/vs-pgtap/).
+
 ## API
 
 See the full API reference at [sqlproof.com](https://sqlproof.com).

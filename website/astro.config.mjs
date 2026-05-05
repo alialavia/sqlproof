@@ -27,6 +27,7 @@ export default defineConfig({
             { label: 'FK Distribution Strategies', slug: 'guides/fk-distributions' },
             { label: 'Custom Generators', slug: 'guides/custom-generators' },
             { label: 'Testing Supabase Apps', slug: 'guides/supabase' },
+            { label: 'SqlProof vs pgTAP', slug: 'guides/vs-pgtap' },
             { label: 'CI/CD Integration', slug: 'guides/ci-cd' },
             { label: 'Security & Credentials', slug: 'guides/security' },
             { label: 'Local Development', slug: 'guides/local-dev' },
@@ -34,7 +35,10 @@ export default defineConfig({
         },
         {
           label: 'Examples',
-          items: [{ label: 'E-Commerce Orders', slug: 'examples/orders' }],
+          items: [
+            { label: 'Five Property Patterns', slug: 'examples/property-patterns' },
+            { label: 'E-Commerce Orders', slug: 'examples/orders' },
+          ],
         },
       ],
     }),
