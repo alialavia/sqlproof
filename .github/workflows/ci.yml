@@ -21,7 +21,14 @@ jobs:
       - run: uv run ruff check src/ tests/
       - run: uv run pyright
       - run: uv run mypy src/sqlproof/
-      - run: uv run pytest --cov=sqlproof --cov-fail-under=95
+      - run: uv run pytest --cov=sqlproof --cov-fail-under=95 --cov-report=xml
+      - name: Upload coverage to Codecov
+        if: matrix.python-version == '3.11'
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./coverage.xml
+          fail_ci_if_error: false
+          # Public repos use tokenless OIDC; no secret needed.
 
   website:
     runs-on: ubuntu-latest
