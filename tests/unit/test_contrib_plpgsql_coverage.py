@@ -45,6 +45,7 @@ class StubClient:
     ) -> None:
         self.calls: list[tuple[str, tuple[Any, ...]]] = []
         self._responses: list[tuple[re.Pattern[str], list[dict[str, Any]]]] = []
+        self._failures: list[tuple[re.Pattern[str], Exception]] = []
         if extension_installed:
             self.add_response(
                 r"FROM pg_extension WHERE extname = 'plpgsql_check'",
@@ -63,12 +64,20 @@ class StubClient:
     def add_response(self, pattern: str, rows: list[dict[str, Any]]) -> None:
         self._responses.append((re.compile(pattern), rows))
 
+    def fail_on(self, pattern: str, exc: Exception) -> None:
+        """Make `query` raise `exc` when the SQL matches `pattern`. Used to
+        exercise the contrib's defensive `except Exception` branches."""
+        self._failures.append((re.compile(pattern), exc))
+
     def execute(self, sql: str, *params: Any) -> int:
         self.calls.append((sql, params))
         return 0
 
     def query(self, sql: str, *params: Any) -> list[dict[str, Any]]:
         self.calls.append((sql, params))
+        for pattern, exc in self._failures:
+            if pattern.search(sql):
+                raise exc
         # pg_proc + plpgsql language match: respect the candidates filter
         # (when present) so we exercise the same code path real callers do.
         if "FROM pg_proc" in sql and "lanname = 'plpgsql'" in sql:
@@ -372,6 +381,84 @@ def test_collect_coverage_filters_explicit_functions_to_plpgsql_only() -> None:
 # ---------------------------------------------------------------------------
 # PlpgsqlCoverageReport.format
 # ---------------------------------------------------------------------------
+
+
+def test_report_branch_coverage_returns_recorded_ratio() -> None:
+    report = PlpgsqlCoverageReport(
+        functions={
+            "fn_a": FunctionCoverage(
+                name="fn_a", statement_ratio=0.8, branch_ratio=0.6
+            ),
+        }
+    )
+    assert report.branch_coverage("fn_a") == 0.6
+
+
+def test_report_branch_coverage_returns_zero_for_unknown_function() -> None:
+    report = PlpgsqlCoverageReport()
+    assert report.branch_coverage("ghost") == 0.0
+
+
+# ---------------------------------------------------------------------------
+# _collect_function_coverage — defensive paths when profiler queries fail
+# ---------------------------------------------------------------------------
+
+
+def test_collect_coverage_skips_function_when_profiler_function_tb_errors() -> None:
+    """`plpgsql_profiler_function_tb` can fail for functions the profiler
+    has no data on (e.g. function dropped between reset and read). The
+    contrib catches and drops the function rather than corrupting the
+    rest of the report."""
+    db = StubClient(extension_installed=True, plpgsql_functions={"flaky_fn"})
+    db.fail_on(r"plpgsql_profiler_function_tb", RuntimeError("profiler tb exploded"))
+
+    with collect_coverage(db, functions=["flaky_fn"]) as report:
+        pass
+
+    # Function dropped from the report — no ghost zero-coverage entry.
+    assert "flaky_fn" not in report.functions
+
+
+def test_collect_coverage_falls_back_to_zero_when_statements_query_errors() -> None:
+    """`plpgsql_coverage_statements` can fail (e.g. extension version
+    mismatch on the helper); the function should still appear in the
+    report with stmt_ratio=0 rather than crashing the whole collection."""
+    db = StubClient(extension_installed=True, plpgsql_functions={"fn_a"})
+    db.add_response(
+        r"plpgsql_profiler_function_tb",
+        [{"lineno": 1, "exec_stmts": 1, "source": "BEGIN"}],
+    )
+    db.fail_on(
+        r"plpgsql_coverage_statements", RuntimeError("statements helper exploded")
+    )
+    db.add_response(r"plpgsql_coverage_branches", [{"ratio": 0.5}])
+
+    with collect_coverage(db, functions=["fn_a"]) as report:
+        pass
+
+    fc = report.functions["fn_a"]
+    assert fc.statement_ratio == 0.0
+    assert fc.branch_ratio == 0.5  # branch query still ran
+
+
+def test_collect_coverage_falls_back_to_zero_when_branches_query_errors() -> None:
+    """Symmetric defense for the branches helper."""
+    db = StubClient(extension_installed=True, plpgsql_functions={"fn_a"})
+    db.add_response(
+        r"plpgsql_profiler_function_tb",
+        [{"lineno": 1, "exec_stmts": 1, "source": "BEGIN"}],
+    )
+    db.add_response(r"plpgsql_coverage_statements", [{"ratio": 0.7}])
+    db.fail_on(
+        r"plpgsql_coverage_branches", RuntimeError("branches helper exploded")
+    )
+
+    with collect_coverage(db, functions=["fn_a"]) as report:
+        pass
+
+    fc = report.functions["fn_a"]
+    assert fc.statement_ratio == 0.7
+    assert fc.branch_ratio == 0.0
 
 
 def test_report_format_returns_placeholder_when_empty() -> None:
