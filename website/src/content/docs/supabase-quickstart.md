@@ -9,10 +9,10 @@ sleep better at night if you knew they were correct. You don't write
 tests by hand — you ask Claude / Cursor / your agent of choice to do
 that. SqlProof is built for this.
 
-This page is the 60-second path: install, drop in two files, ask your
+This page is the 60-second path: install, point at your DB, ask your
 agent to write tests.
 
-## 1. Install (one command)
+## 1. Install
 
 Make sure your project has Python 3.11+ and `pytest`. Then:
 
@@ -24,50 +24,29 @@ The `--pre` flag is required because SqlProof is currently in alpha
 (0.1.0a1). Until 1.0, every install needs `--pre` (or `--prerelease=allow`
 if you're using `uv`).
 
-## 2. Drop in `tests/conftest.py`
+## 2. Point SqlProof at your database
 
-This connects SqlProof to your local Supabase. The user / password / port
-match `supabase start` defaults — adjust if you've changed them.
+`pytest start` for Supabase brings up Postgres on
+`127.0.0.1:54322`. Tell SqlProof about it:
 
-```python
-"""SqlProof test setup for a Supabase project."""
-
-from __future__ import annotations
-
-import os
-import pytest
-
-from sqlproof import SqlProof
-from sqlproof.contrib.supabase import seed_test_users_directly
-
-DATABASE_URL = os.environ.get(
-    "SUPABASE_DB_URL",
-    "postgresql://postgres:postgres@127.0.0.1:54322/postgres",
-)
-
-
-@pytest.fixture(scope="session")
-def proof():
-    proof = SqlProof.from_connection_string(DATABASE_URL)
-    try:
-        from psycopg import connect
-        from psycopg.rows import dict_row
-        from sqlproof.client import PsycopgSqlProofClient
-
-        with connect(DATABASE_URL, autocommit=True, row_factory=dict_row) as conn:
-            seed_test_users_directly(PsycopgSqlProofClient(conn), count=5)
-
-        yield proof
-    finally:
-        proof.disconnect()
-
-
-@pytest.fixture
-def db(proof):
-    """Per-test database client. All inserts roll back on test exit."""
-    with proof.client_for_dataset({}) as client:
-        yield client
+```bash
+export SUPABASE_DB_URL='postgresql://postgres:postgres@127.0.0.1:54322/postgres'
 ```
+
+That's it. **No `conftest.py` boilerplate.** SqlProof's pytest plugin
+ships the fixtures you'd otherwise have to define:
+
+- `proof` (session-scoped) — `SqlProof` bound to your DB.
+- `db` (per-test) — a `SqlProofClient` with savepoint isolation.
+- `supabase_proof` / `supabase_db` — same, but with the deterministic
+  `auth.users` test pool seeded and registered as an external table for
+  FK draws. Use these in any project where your RLS policies / RPCs key
+  off `auth.uid()`.
+
+Override either `proof` or `supabase_proof` in your own
+`tests/conftest.py` only if you need custom external tables, a non-default
+schema, or a connection that doesn't read from `SUPABASE_DB_URL`. Most
+projects never need that.
 
 ## 3. Drop in `AGENTS.md` at the project root
 
@@ -81,7 +60,8 @@ exact patterns SqlProof expects. It contains:
 - The three test patterns you'll actually use (RLS policy, RPC
   function, stateful sequence).
 - Anti-patterns the agent commonly gets wrong (manually setting JWT
-  claims, forgetting `::cast` in raw SQL, etc.).
+  claims, hand-rolled INSERT helpers instead of `dataset_strategy`,
+  forgetting `::cast` in raw SQL).
 - File and naming conventions so test names read like sentences.
 
 When you ask the agent "write a test that the project owner can read
@@ -104,46 +84,68 @@ Then in your editor / agent of choice:
 A good agent (with `AGENTS.md` loaded) writes something like:
 
 ```python
-"""Tests for the get_dashboard_summary RPC."""
+"""Property tests for get_dashboard_summary."""
 
-from uuid import uuid4
+from hypothesis import given
+from hypothesis import strategies as st
+
+from sqlproof import SqlProof
 from sqlproof.contrib.supabase import as_supabase_user
-from sqlproof.client import SqlProofClient
 
 
-def test_owner_sees_event_count_for_their_project(db: SqlProofClient) -> None:
-    owner_id = _insert_user(db)
-    project_id = _insert_project(db, owner_id)
-    _insert_events(db, project_id, count=3)
+@given(data=st.data(), event_count=st.integers(min_value=1, max_value=20))
+def test_owner_sees_event_count_for_their_project(
+    supabase_proof: SqlProof, data, event_count: int
+) -> None:
+    dataset = data.draw(supabase_proof.dataset_strategy(
+        sizes={"projects": 1, "events": event_count},
+    ))
+    with supabase_proof.client_for_dataset(dataset) as db:
+        project = dataset["projects"][0]
+        with as_supabase_user(db, project["user_id"]):
+            payload = db.scalar(
+                "SELECT get_dashboard_summary(%s::uuid)", project["id"]
+            )
+    assert payload["event_count"] == event_count
 
-    with as_supabase_user(db, owner_id):
-        payload = db.scalar(
-            "SELECT get_dashboard_summary(%s::uuid)", project_id
+
+@given(data=st.data(), event_count=st.integers(min_value=1, max_value=20))
+def test_non_member_sees_zero_event_count(
+    supabase_proof: SqlProof, data, event_count: int
+) -> None:
+    dataset = data.draw(supabase_proof.dataset_strategy(
+        sizes={"projects": 1, "events": event_count, "auth.users": 2},
+    ))
+    with supabase_proof.client_for_dataset(dataset) as db:
+        project = dataset["projects"][0]
+        # The seeded test-user pool gives us a second user_id that's
+        # not the project owner — exactly what we need for the
+        # non-member case.
+        non_member = next(
+            u for u in dataset["auth.users"] if u["id"] != project["user_id"]
         )
-
-    assert payload["event_count"] == 3
-
-
-def test_non_member_sees_zero_event_count(db: SqlProofClient) -> None:
-    owner_id = _insert_user(db)
-    other_id = _insert_user(db)
-    project_id = _insert_project(db, owner_id)
-    _insert_events(db, project_id, count=3)
-
-    with as_supabase_user(db, other_id):
-        payload = db.scalar(
-            "SELECT get_dashboard_summary(%s::uuid)", project_id
-        )
-
+        with as_supabase_user(db, non_member["id"]):
+            payload = db.scalar(
+                "SELECT get_dashboard_summary(%s::uuid)", project["id"]
+            )
     assert payload["event_count"] == 0
-
-
-# helpers omitted — agent writes them too
 ```
+
+Run it:
 
 ```bash
 pytest tests/ -v
 ```
+
+Each test runs **20 generated examples** by default, each with a
+freshly-generated dataset that respects every FK, CHECK, UNIQUE, and
+NOT NULL in your schema. If any one fails, Hypothesis shrinks to the
+smallest reproducer and reports it.
+
+**No hand-rolled `_insert_user`, `_insert_project`, `_insert_events`
+helpers.** That's the wrong pattern for property-based testing — you'd
+be testing whatever shape *you* hand-built, not whatever shape your
+schema permits. Let `dataset_strategy` generate.
 
 ## 5. Run before every `supabase db push`
 

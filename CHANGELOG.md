@@ -9,6 +9,21 @@ remains in `0.x`, minor versions may include breaking changes.
 
 ### Added
 
+- **Pytest plugin fixtures.** `sqlproof.pytest_plugin` now provides
+  `proof` (session) and `db` (per-test) fixtures out of the box, plus
+  Supabase-flavored `supabase_proof` / `supabase_db` variants that seed
+  the deterministic test-user pool and register `auth.users` as an
+  external table for FK draws. Database URL resolves from
+  `--sqlproof-database-url` → `$SQLPROOF_DATABASE_URL` →
+  `$SUPABASE_DB_URL`. Tests on developer machines without a database
+  configured skip cleanly. Users can still override any fixture in
+  their own `conftest.py` for custom external tables, schemas, or
+  connections.
+
+  This deletes the ~30-line `tests/conftest.py` boilerplate the docs
+  used to ask Supabase users to copy. The new setup is one
+  `export SUPABASE_DB_URL=...`.
+
 - **PL/pgSQL coverage contrib** in `sqlproof.contrib.plpgsql_coverage`. Wraps
   the `plpgsql_check` extension to produce per-line and per-function coverage
   reports for PL/pgSQL function bodies exercised by your tests.

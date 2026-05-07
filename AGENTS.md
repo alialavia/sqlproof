@@ -23,7 +23,7 @@ Do **not** use SqlProof for:
 - Schema-shape assertions ("does this column exist") — write a one-line `information_schema` query in pgTAP or skip entirely.
 - Snapshot tests of literal output — use `syrupy` or `pytest`'s built-in snapshot.
 
-## Project setup (do this exactly once)
+## Project setup
 
 The user runs Supabase locally via `supabase start`. The local DB is at
 `postgresql://postgres:postgres@127.0.0.1:54322/postgres`. Tests run from
@@ -48,51 +48,26 @@ dev = [
 Install with `pip install --pre -e ".[dev]"` (sqlproof is alpha; the `--pre`
 flag is required until the first stable release).
 
-### `tests/conftest.py`
+### Tell SqlProof where the database is
 
-Create this file once. Do not regenerate it on subsequent test additions.
-
-```python
-"""SqlProof test setup for a Supabase project."""
-
-from __future__ import annotations
-
-import os
-import pytest
-
-from sqlproof import SqlProof
-from sqlproof.contrib.supabase import seed_test_users_directly
-
-DATABASE_URL = os.environ.get(
-    "SUPABASE_DB_URL",
-    "postgresql://postgres:postgres@127.0.0.1:54322/postgres",
-)
-
-
-@pytest.fixture(scope="session")
-def proof():
-    """SqlProof instance bound to the local Supabase database."""
-    proof = SqlProof.from_connection_string(DATABASE_URL)
-    try:
-        # Seed a deterministic pool of test users for FK sampling on auth.users.
-        from psycopg import connect
-        from psycopg.rows import dict_row
-        from sqlproof.client import PsycopgSqlProofClient
-
-        with connect(DATABASE_URL, autocommit=True, row_factory=dict_row) as conn:
-            seed_test_users_directly(PsycopgSqlProofClient(conn), count=5)
-
-        yield proof
-    finally:
-        proof.disconnect()
-
-
-@pytest.fixture
-def db(proof):
-    """Per-test database client. Inserts roll back automatically."""
-    with proof.client_for_dataset({}) as client:
-        yield client
+```bash
+export SUPABASE_DB_URL='postgresql://postgres:postgres@127.0.0.1:54322/postgres'
 ```
+
+**There is no `tests/conftest.py` to write.** SqlProof's pytest plugin
+ships these fixtures out of the box:
+
+- `proof` (session) — a `SqlProof` connected to `SUPABASE_DB_URL`.
+- `db` (per-test) — a `SqlProofClient` with savepoint isolation.
+- `supabase_proof` (session) — like `proof`, but with the deterministic
+  `auth.users` test pool seeded and registered as an external table for
+  FK draws. **Use this for any test that touches RLS, `auth.uid()`,
+  or RPCs that key off auth users.**
+- `supabase_db` (per-test) — `SqlProofClient` backed by `supabase_proof`.
+
+If a test doesn't touch auth, take `db`. If it does, take `supabase_db`.
+Don't define `proof` / `db` yourself unless you need a custom external
+table beyond the auth-users pool.
 
 ### Running tests
 
@@ -105,6 +80,51 @@ Tests cannot leak data into the local Supabase.
 
 ---
 
+## Property tests over hand-rolled fixtures (the core idiom)
+
+The whole reason to use SqlProof over pgTAP is that it generates *many
+valid datasets* for a single test, so edge cases surface that you'd
+never think to type. Concretely, this means:
+
+**Don't write `_insert_user`, `_insert_project`, `_insert_event` helpers
+in your tests.** Hand-rolled INSERTs test only the shape *you*
+remembered, not the shape your schema actually permits. They're the
+pgTAP-shaped pattern; they miss the entire point of SqlProof.
+
+**Do use `dataset_strategy` to generate, then assert.** The pattern:
+
+```python
+from hypothesis import given
+from hypothesis import strategies as st
+
+
+@given(data=st.data())
+def test_my_invariant(supabase_proof, data):
+    dataset = data.draw(supabase_proof.dataset_strategy(
+        sizes={"projects": 1, "events": 5},
+        # auth.users come from the seeded test-user pool via FK
+    ))
+    with supabase_proof.client_for_dataset(dataset) as db:
+        # ... assertion against the generated dataset
+```
+
+Each example generates a fresh dataset that respects every FK, CHECK,
+UNIQUE, and NOT NULL in your schema. If you write a hand-rolled INSERT
+helper instead, you're regressing to pgTAP behavior and getting none of
+SqlProof's benefit.
+
+There are exactly two cases where hand-rolled INSERTs are acceptable:
+
+1. **A test that needs a *specific*, fixed shape** — e.g. asserting an
+   empty-state contract returns a structurally complete zero-payload
+   for an unknown ID. Use a single literal `00000000-...-000000000000`
+   UUID and don't generate.
+2. **A small helper inside a stateful test machine** that mutates rows
+   between rules. Even there, prefer `proof.client_for_dataset(...)`
+   to seed the initial state.
+
+---
+
 ## Pattern 1: RLS policy test
 
 **When to write:** any time the user adds or modifies a `CREATE POLICY` statement.
@@ -114,55 +134,54 @@ Tests cannot leak data into the local Supabase.
 ```python
 """Test that RLS policies on `<table>` correctly gate access."""
 
-from uuid import uuid4
+from hypothesis import given
+from hypothesis import strategies as st
+
+from sqlproof import SqlProof
 from sqlproof.contrib.supabase import as_supabase_user
-from sqlproof.client import SqlProofClient
 
 
-def test_owner_can_read_their_own_<resource>(db: SqlProofClient) -> None:
-    owner_id = _insert_user(db)
-    other_id = _insert_user(db)
-    resource_id = _insert_<resource>(db, owner_id=owner_id)
-
-    with as_supabase_user(db, owner_id):
-        rows = db.query("SELECT id FROM <table> WHERE id = %s", resource_id)
-
-    assert len(rows) == 1, "owner should see their own resource"
-
-
-def test_other_users_cannot_read_<resource>_they_dont_own(db: SqlProofClient) -> None:
-    owner_id = _insert_user(db)
-    other_id = _insert_user(db)
-    resource_id = _insert_<resource>(db, owner_id=owner_id)
-
-    with as_supabase_user(db, other_id):
-        rows = db.query("SELECT id FROM <table> WHERE id = %s", resource_id)
-
-    assert rows == [], "non-owner should see no rows"
+@given(data=st.data())
+def test_owner_can_read_their_own_<resource>(
+    supabase_proof: SqlProof, data,
+) -> None:
+    dataset = data.draw(supabase_proof.dataset_strategy(
+        sizes={"<resource_table>": 1},
+    ))
+    with supabase_proof.client_for_dataset(dataset) as db:
+        resource = dataset["<resource_table>"][0]
+        with as_supabase_user(db, resource["user_id"]):
+            rows = db.query(
+                "SELECT id FROM <resource_table> WHERE id = %s",
+                resource["id"],
+            )
+        assert len(rows) == 1, "owner should see their own resource"
 
 
-def _insert_user(db: SqlProofClient) -> str:
-    user_id = str(uuid4())
-    db.execute(
-        "INSERT INTO auth.users (id, aud, role, email) "
-        "VALUES (%s, 'authenticated', 'authenticated', %s)",
-        user_id, f"{user_id}@test.invalid",
-    )
-    return user_id
-
-
-def _insert_<resource>(db: SqlProofClient, owner_id: str) -> str:
-    resource_id = str(uuid4())
-    db.execute(
-        "INSERT INTO <table> (id, user_id, ...) VALUES (%s, %s, ...)",
-        resource_id, owner_id,
-    )
-    return resource_id
+@given(data=st.data())
+def test_other_users_cannot_read_<resource>_they_dont_own(
+    supabase_proof: SqlProof, data,
+) -> None:
+    dataset = data.draw(supabase_proof.dataset_strategy(
+        sizes={"<resource_table>": 1, "auth.users": 2},
+    ))
+    with supabase_proof.client_for_dataset(dataset) as db:
+        resource = dataset["<resource_table>"][0]
+        non_owner = next(
+            u for u in dataset["auth.users"] if u["id"] != resource["user_id"]
+        )
+        with as_supabase_user(db, non_owner["id"]):
+            rows = db.query(
+                "SELECT id FROM <resource_table> WHERE id = %s",
+                resource["id"],
+            )
+        assert rows == [], "non-owner should see no rows"
 ```
 
 **Important rules:**
 - **Always use `as_supabase_user(db, user_id)`** to set RLS context. Do not raw-set `request.jwt.claims`.
 - **Always test both directions:** owner can access, non-owner cannot. A policy that returns *too much* data is the actual bug class.
+- **Take `supabase_proof`/`supabase_db`**, not `proof`/`db`. RLS tests need the seeded auth.users pool.
 - **Test names should be sentences a non-engineer would understand.** `test_owner_can_read_their_own_project` not `test_rls_22`.
 
 ## Pattern 2: SQL function / RPC test
@@ -177,6 +196,7 @@ def _insert_<resource>(db: SqlProofClient, owner_id: str) -> str:
 from decimal import Decimal
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
+
 from sqlproof.client import SqlProofClient
 
 PROOF_KW = settings(
@@ -209,10 +229,30 @@ def test_higher_tier_never_costs_more_than_lower_tier(db: SqlProofClient, subtot
     assert platinum <= standard, f"platinum ({platinum}) costs more than standard ({standard})"
 ```
 
-**For empty-state behavior**, use a single example test:
+**For functions that aggregate over a generated dataset**, generate the
+dataset and reconcile against a Python recomputation:
 
 ```python
-def test_dashboard_summary_returns_zero_shape_for_unknown_project(db: SqlProofClient):
+@given(data=st.data(), event_count=st.integers(min_value=0, max_value=20))
+def test_dashboard_summary_event_count_matches_inserted_count(
+    supabase_proof, data, event_count,
+):
+    dataset = data.draw(supabase_proof.dataset_strategy(
+        sizes={"projects": 1, "events": event_count},
+    ))
+    with supabase_proof.client_for_dataset(dataset) as db:
+        project_id = dataset["projects"][0]["id"]
+        payload = db.scalar(
+            "SELECT get_dashboard_summary(%s::uuid)", project_id
+        )
+    assert payload["event_count"] == event_count
+```
+
+**For empty-state behavior**, use a single example test with a literal
+unknown UUID:
+
+```python
+def test_dashboard_summary_returns_zero_shape_for_unknown_project(db):
     payload = db.scalar(
         "SELECT get_dashboard_summary(%s::uuid)",
         "00000000-0000-0000-0000-000000000000",
@@ -226,6 +266,7 @@ def test_dashboard_summary_returns_zero_shape_for_unknown_project(db: SqlProofCl
 - **Use `db.scalar(...)` for functions returning a single value**; `db.query(...)` for `RETURNS TABLE`.
 - **Cast inputs explicitly:** `%s::uuid`, `%s::numeric`, `%s::text[]`. Postgres's parameter-binding is strict.
 - **Do not invent properties.** If you can't articulate the invariant in one sentence, write an example test instead.
+- **Don't hand-roll the dataset.** Use `dataset_strategy` even when you "just need one row" — that one row should still respect every constraint.
 
 ## Pattern 3: Stateful test (RLS membership churn, pagination, accumulation)
 
@@ -246,8 +287,17 @@ from sqlproof.testing import SqlProofStateMachine
 
 class MembershipMachine(SqlProofStateMachine):
     def on_setup(self) -> None:
-        self.user_id = self._insert_user()
-        self.projects = [self._insert_project() for _ in range(3)]
+        # Pull a real user from the seeded auth.users pool.
+        rows = self.db.query(
+            r"SELECT id::text FROM auth.users WHERE email LIKE %s ESCAPE '\\' LIMIT 4",
+            r"sqlproof\\_%@test.invalid",
+        )
+        self.user_id = rows[0]["id"]
+        # Generate three projects belonging to the other test users so
+        # we can exercise membership transitions between them.
+        # ... (`proof.dataset_strategy(...)` per machine if you need
+        # generated state; otherwise insert a literal handful here)
+        self.projects: list[str] = [str(uuid4()) for _ in range(3)]
         self.enter(as_supabase_user(self.db, self.user_id))
         self.member_of: set[str] = set()
 
@@ -277,37 +327,55 @@ class MembershipMachine(SqlProofStateMachine):
             f"visible {visible} != expected {self.member_of}"
         )
 
-    def _insert_user(self) -> str:
-        user_id = str(uuid4())
-        self.db.execute(
-            "INSERT INTO auth.users (id, aud, role, email) "
-            "VALUES (%s, 'authenticated', 'authenticated', %s)",
-            user_id, f"{user_id}@test.invalid",
-        )
-        return user_id
 
-    def _insert_project(self) -> str:
-        project_id = str(uuid4())
-        self.db.execute(
-            "INSERT INTO projects (id, owner_id, name) VALUES (%s, %s, %s)",
-            project_id, str(uuid4()), "Test",
-        )
-        return project_id
-
-
-def test_membership_visibility_invariant(proof: SqlProof) -> None:
-    proof.run_state_machine(MembershipMachine)
+def test_membership_visibility_invariant(supabase_proof: SqlProof) -> None:
+    supabase_proof.run_state_machine(MembershipMachine)
 ```
 
 **Important rules:**
 - **Override `on_setup`, not `__init__`.** SqlProof manages `__init__`.
 - **Use `self.enter(cm)` for context managers** that should live across rules (JWT claims, savepoints).
-- **Run with `proof.run_state_machine(MachineClass)`**, not `run_state_machine_as_test` directly.
+- **Run with `supabase_proof.run_state_machine(MachineClass)`**, not `run_state_machine_as_test` directly.
 - **State machines are slower than property tests.** Use them only when the bug requires a sequence.
 
 ---
 
 ## Anti-patterns: things agents commonly get wrong
+
+### ❌ Don't write hand-rolled `_insert_user` / `_insert_project` helpers
+
+```python
+# Wrong — defeats the entire point of property-based testing:
+def test_x(db):
+    owner_id = _insert_user(db)
+    project_id = _insert_project(db, owner_id)
+    _insert_events(db, project_id, count=3)
+    ...
+```
+
+```python
+# Right — let SqlProof generate, including respecting all constraints:
+@given(data=st.data())
+def test_x(supabase_proof, data):
+    dataset = data.draw(supabase_proof.dataset_strategy(
+        sizes={"projects": 1, "events": 3},
+    ))
+    with supabase_proof.client_for_dataset(dataset) as db:
+        ...
+```
+
+The hand-rolled helpers test only the shape *you* hand-built. The
+generated approach tests every shape your schema permits.
+
+### ❌ Don't write a `tests/conftest.py` with `proof` / `db` fixtures
+
+The plugin ships them. If you find yourself copying ~30 lines of fixture
+boilerplate into a project, you have an out-of-date docs page. The
+correct setup is one `export SUPABASE_DB_URL=...` line.
+
+The only reason to define `proof` (or `supabase_proof`) yourself is if
+your schema needs an *additional* external table beyond `auth.users` —
+and that override is ~10 lines, not 30.
 
 ### ❌ Don't manually set JWT claims
 
@@ -327,34 +395,7 @@ with as_supabase_user(db, user_id):
 
 ### ❌ Don't insert into `auth.users` if the test connection lacks permission
 
-If `seed_test_users_directly` fails, the connection is using a non-postgres role. Use the deterministic pool seeded once in `conftest.py` rather than inserting fresh users per test.
-
-### ❌ Don't use `pytest.fixture` for per-test data setup when generation can do it
-
-```python
-# Wrong — hand-rolled fixture, doesn't scale, doesn't shrink:
-@pytest.fixture
-def project_with_three_orders(db):
-    project_id = db.execute("INSERT INTO projects ...")
-    for _ in range(3):
-        db.execute("INSERT INTO orders ...")
-    return project_id
-```
-
-```python
-# Right — let SqlProof generate the dataset, including FK respect:
-def test_project_revenue_calculation(db, proof):
-    dataset = proof.dataset_strategy(
-        sizes={"projects": 1, "orders": 3},
-        columns={"projects.name": "Test"},
-    ).example()
-    with proof.client_for_dataset(dataset) as scoped:
-        # ... assertions against scoped
-```
-
-### ❌ Don't write tests that depend on existing data in the local Supabase
-
-Tests should set up everything they need. The `db` fixture is empty per-test (rolled back). Don't query for "the user named X" expecting them to exist.
+If `seed_test_users_directly` fails, the connection is using a non-postgres role. Use `supabase_proof` (which seeds once per session) and sample from the pool via the `auth.users` external table the fixture registers — don't re-seed per test.
 
 ### ❌ Don't skip the `:: cast` in raw SQL
 
@@ -380,7 +421,6 @@ A state machine has setup overhead per example. If your assertion doesn't depend
 ```
 project_root/
 ├── tests/
-│   ├── conftest.py                    # the one from above
 │   ├── test_rls_<table>.py            # one file per table with RLS policies
 │   ├── test_rpc_<function_name>.py    # one file per public function
 │   ├── test_trigger_<trigger_name>.py # one file per trigger
@@ -390,6 +430,9 @@ project_root/
     ├── schemas/...
     └── tests/...                      # pgTAP files (separate suite, leave alone)
 ```
+
+A `tests/conftest.py` is **optional** — only needed if you're
+overriding `proof` or `supabase_proof` for a custom external table.
 
 **Test name shape:** `test_<subject>_<expected_behavior>_<conditions>`
 
