@@ -32,12 +32,20 @@ from __future__ import annotations
 
 import os
 from collections.abc import Generator
-from typing import Any, cast
+from typing import TYPE_CHECKING
 
 import pytest
 
-from sqlproof import SqlProof
-from sqlproof.client import SqlProofClient
+# Important: don't import sqlproof at module load time. The pytest plugin
+# is registered via the `pytest11` entry point and loads BEFORE pytest-cov
+# starts measuring. Importing sqlproof here would cause every
+# import-time line in the package (class definitions, decorator
+# applications, etc.) to be counted as unexecuted by the coverage tool.
+# Lazy-import inside each fixture instead.
+
+if TYPE_CHECKING:  # pragma: no cover
+    from sqlproof import SqlProof
+    from sqlproof.client import SqlProofClient
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -177,6 +185,8 @@ def proof(sqlproof_database_url: str) -> Generator[SqlProof]:
     `supabase_proof` fixture handles seeding + external-table
     registration; use that instead.
     """
+    from sqlproof import SqlProof  # local import — see top-of-file note
+
     instance = SqlProof.from_connection_string(sqlproof_database_url)
     try:
         yield instance
@@ -239,7 +249,7 @@ def supabase_proof(sqlproof_database_url: str) -> Generator[SqlProof]:
     with psycopg.connect(
         sqlproof_database_url,
         autocommit=True,
-        row_factory=cast(Any, dict_row),
+        row_factory=dict_row,  # pyright: ignore[reportArgumentType]
     ) as conn:
         seed_client = PsycopgSqlProofClient(conn)
         seed_test_users_directly(seed_client, count=seed_count)
