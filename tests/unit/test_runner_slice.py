@@ -40,6 +40,63 @@ def test_sqlproof_decorator_injects_client_with_generated_data(tmp_path) -> None
     assert observed_sizes == [3, 3]
 
 
+def test_sqlproof_decorator_injects_dataset_when_signature_requests_it(
+    tmp_path,
+) -> None:
+    """A property fn that declares `dataset` should receive the generated
+    dataset alongside `db`, so it can assert against what was generated
+    without re-querying it back."""
+    schema_file = tmp_path / "schema.sql"
+    schema_file.write_text(
+        "CREATE TABLE orders (id SERIAL PRIMARY KEY, total INTEGER NOT NULL);",
+        encoding="utf-8",
+    )
+    proof = SqlProof.from_schema_file(schema_file)
+    seen: list[tuple[int, int]] = []
+
+    @sqlproof(proof, sizes={"orders": 4}, runs=2)
+    def property_with_dataset(db, dataset) -> None:
+        rows = db.query("SELECT id, total FROM orders ORDER BY id")
+        seen.append((len(rows), len(dataset["orders"])))
+        # dataset must match what's actually in the DB.
+        assert {r["total"] for r in rows} == {
+            row["total"] for row in dataset["orders"]
+        }
+
+    property_with_dataset()
+
+    assert seen == [(4, 4), (4, 4)]
+
+
+def test_sqlproof_decorator_forwards_columns_overrides(tmp_path) -> None:
+    """The `columns` argument should pin specific values via
+    dataset_strategy, so generated rows reflect the override."""
+    schema_file = tmp_path / "schema.sql"
+    schema_file.write_text(
+        """
+        CREATE TABLE products (
+          id SERIAL PRIMARY KEY,
+          name TEXT NOT NULL,
+          tier TEXT NOT NULL
+        );
+        """,
+        encoding="utf-8",
+    )
+    proof = SqlProof.from_schema_file(schema_file)
+
+    @sqlproof(
+        proof,
+        sizes={"products": 3},
+        columns={"products.tier": "platinum"},
+        runs=3,
+    )
+    def all_products_are_platinum(db) -> None:
+        tiers = {row["tier"] for row in db.query("SELECT tier FROM products")}
+        assert tiers == {"platinum"}, f"expected only 'platinum', got {tiers}"
+
+    all_products_are_platinum()
+
+
 def test_sqlproof_exposes_dataset_strategy_with_shrinkable_sizes(tmp_path) -> None:
     schema_file = tmp_path / "schema.sql"
     schema_file.write_text(

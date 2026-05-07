@@ -9,7 +9,7 @@ from typing import Any, ParamSpec, TypeVar
 from hypothesis import HealthCheck, given, settings
 
 from sqlproof.exceptions import SqlProofPropertyFailure
-from sqlproof.generators.graph import SizeSpec, dataset_strategy
+from sqlproof.generators.graph import ColumnOverrides, SizeSpec, dataset_strategy
 from sqlproof.reporter.json_io import write_counterexample
 
 P = ParamSpec("P")
@@ -38,12 +38,31 @@ def sqlproof(
     proof: Any,
     *,
     sizes: Mapping[str, SizeSpec],
+    columns: ColumnOverrides | None = None,
     runs: int = 100,
     seed: int | None = None,
     timeout_ms: int = 5000,
     commit: bool = False,
     failure_dir: str | Path = ".sqlproof/failures",
 ) -> Callable[[Callable[..., None]], Callable[..., None]]:
+    """Run `function` as a property test against generated datasets.
+
+    `columns` forwards to ``dataset_strategy``'s per-column override
+    map — pin specific values, narrow ranges, or substitute a strategy.
+
+    The decorated property function may declare any of these
+    parameters, in any order:
+
+      * ``db`` (always present) — the ``SqlProofClient`` with the
+        generated dataset loaded.
+      * ``dataset`` — the generated dataset dict (table name → rows).
+        Use when assertions need to know what was generated, e.g. to
+        compare a SQL aggregate against a Python recomputation.
+      * ``check`` — the per-run ``Check`` helper for adding row context
+        to counterexamples.
+
+    Parameters not declared in the signature are not passed.
+    """
     del seed, timeout_ms, commit
 
     def decorate(function: Callable[..., None]) -> Callable[..., None]:
@@ -52,6 +71,7 @@ def sqlproof(
                 proof,
                 function,
                 sizes=sizes,
+                columns=columns,
                 runs=runs,
                 failure_dir=Path(failure_dir),
             )
@@ -68,15 +88,17 @@ def run_property(
     function: Callable[..., None],
     *,
     sizes: Mapping[str, SizeSpec],
+    columns: ColumnOverrides | None = None,
     runs: int,
     failure_dir: Path,
 ) -> None:
     if hasattr(proof, "dataset_strategy"):
-        strategy = proof.dataset_strategy(sizes=sizes)
+        strategy = proof.dataset_strategy(sizes=sizes, columns=columns)
     else:
-        strategy = dataset_strategy(proof.schema_info, sizes=sizes)
+        strategy = dataset_strategy(proof.schema_info, sizes=sizes, columns=columns)
     signature = inspect.signature(function)
     wants_check = "check" in signature.parameters
+    wants_dataset = "dataset" in signature.parameters
     run_count = 0
 
     @given(strategy)
@@ -91,10 +113,12 @@ def run_property(
         check = Check()
         try:
             with proof.client_for_dataset(dataset) as client:
+                kwargs: dict[str, Any] = {}
+                if wants_dataset:
+                    kwargs["dataset"] = dataset
                 if wants_check:
-                    function(client, check)
-                else:
-                    function(client)
+                    kwargs["check"] = check
+                function(client, **kwargs)
         except Exception as exc:
             payload: dict[str, Any] = {
                 "$schema": "https://sqlproof.dev/schemas/counterexample-v1.json",
