@@ -97,6 +97,52 @@ def test_sqlproof_decorator_forwards_columns_overrides(tmp_path) -> None:
     all_products_are_platinum()
 
 
+def test_sqlproof_decorator_falls_back_to_module_dataset_strategy(tmp_path) -> None:
+    """`run_property` accepts duck-typed proof objects: anything that
+    exposes `schema_info`, `client_for_dataset`, and `schema_fingerprint`
+    is supported, even if it doesn't bind a `dataset_strategy` method.
+    Wrap a real SqlProof to strip that one attribute so the fallback
+    path (module-level `dataset_strategy(proof.schema_info, ...)`) is
+    actually exercised — including the new `columns=` forwarding."""
+    schema_file = tmp_path / "schema.sql"
+    schema_file.write_text(
+        """
+        CREATE TABLE products (
+          id SERIAL PRIMARY KEY,
+          tier TEXT NOT NULL
+        );
+        """,
+        encoding="utf-8",
+    )
+    real_proof = SqlProof.from_schema_file(schema_file)
+
+    class StrategyLessProof:
+        """Minimal proof shim — has schema_info but no dataset_strategy."""
+
+        def __init__(self, inner: SqlProof) -> None:
+            self.schema_info = inner.schema_info
+            self.schema_fingerprint = inner.schema_fingerprint
+            self._inner = inner
+
+        def client_for_dataset(self, dataset):
+            return self._inner.client_for_dataset(dataset)
+
+    proof = StrategyLessProof(real_proof)
+    assert not hasattr(proof, "dataset_strategy")
+
+    @sqlproof(
+        proof,
+        sizes={"products": 2},
+        columns={"products.tier": "platinum"},
+        runs=2,
+    )
+    def all_rows_are_platinum(db) -> None:
+        tiers = {row["tier"] for row in db.query("SELECT tier FROM products")}
+        assert tiers == {"platinum"}
+
+    all_rows_are_platinum()
+
+
 def test_sqlproof_exposes_dataset_strategy_with_shrinkable_sizes(tmp_path) -> None:
     schema_file = tmp_path / "schema.sql"
     schema_file.write_text(
