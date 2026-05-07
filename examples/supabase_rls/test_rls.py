@@ -23,8 +23,6 @@ Run:
 from __future__ import annotations
 
 import os
-from collections.abc import Generator
-from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -35,7 +33,7 @@ from hypothesis import strategies as st
 from psycopg import errors as pg_errors
 
 from sqlproof import ExternalTableSpec, SqlProof, sqlproof
-from sqlproof.contrib.supabase import as_supabase_user
+from sqlproof.contrib.supabase import as_rls_user, supabase_test_user_ids
 
 DSN = os.environ.get("SQLPROOF_TEST_DATABASE_URL")
 
@@ -46,7 +44,8 @@ if DSN is None:
     )
 
 SCHEMA = (Path(__file__).with_name("schema.sql")).read_text(encoding="utf-8")
-SEED_USER_EMAILS = [f"sqlproof_rls_demo_{i}@test.invalid" for i in range(5)]
+EMAIL_PREFIX = "sqlproof_rls_demo_"
+SEED_USER_EMAILS = [f"{EMAIL_PREFIX}{i}@test.invalid" for i in range(5)]
 
 
 def _setup_schema_and_users(dsn: str) -> None:
@@ -80,12 +79,7 @@ def _setup_schema_and_users(dsn: str) -> None:
 
 
 def _sample_seeded_users(db: Any) -> list[str]:
-    rows = db.query(
-        "SELECT id::text AS id FROM auth.users "
-        "WHERE email LIKE 'sqlproof_rls_demo_%%@test.invalid' "
-        "ORDER BY email"
-    )
-    return [r["id"] for r in rows]
+    return supabase_test_user_ids(db, email_prefix=EMAIL_PREFIX)
 
 
 _setup_schema_and_users(DSN)
@@ -100,26 +94,6 @@ proof = SqlProof.from_connection_string(
         ),
     },
 )
-
-
-@contextmanager
-def as_user(db: Any, user_id: str) -> Generator[None]:
-    """Run a block as Supabase user `user_id` with RLS actually enforced.
-
-    Combines two pieces:
-
-      * ``as_supabase_user`` from the contrib — sets
-        ``request.jwt.claims`` so ``auth.uid()`` resolves to ``user_id``.
-      * ``SET LOCAL ROLE authenticated`` — without this, the
-        connection's superuser role bypasses RLS entirely (BYPASSRLS).
-        ``RESET ROLE`` restores on exit.
-    """
-    with as_supabase_user(db, user_id):
-        db.execute("SET LOCAL ROLE authenticated")
-        try:
-            yield
-        finally:
-            db.execute("RESET ROLE")
 
 
 def visible_to(post: dict[str, Any], role_in_org: str | None) -> bool:
@@ -159,7 +133,7 @@ def test_post_visibility_matches_policy(db: Any, dataset: dict[str, Any]) -> Non
             )
             expected = visible_to(post, role)
 
-            with as_user(db, user_id):
+            with as_rls_user(db, user_id):
                 rows = db.query(
                     "SELECT id FROM posts WHERE id = %s", [post["id"]]
                 )
@@ -195,7 +169,7 @@ def test_free_plan_post_limit_at_every_boundary(
     max_posts: int = org["max_posts"]
 
     inserted = 0
-    with as_user(db, member["user_id"]):
+    with as_rls_user(db, member["user_id"]):
         for _ in range(max_posts + 2):  # try to overshoot
             with db.savepoint():
                 try:
@@ -236,7 +210,7 @@ def test_member_management_requires_owner_or_admin(
         u for u in _sample_seeded_users(db) if u != actor["user_id"]
     )
 
-    with as_user(db, actor["user_id"]), db.savepoint():
+    with as_rls_user(db, actor["user_id"]), db.savepoint():
         try:
             db.execute(
                 "INSERT INTO org_members (org_id, user_id, role) "

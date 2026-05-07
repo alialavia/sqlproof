@@ -8,9 +8,11 @@ from typing import Any
 import pytest
 
 from sqlproof.contrib.supabase import (
+    as_rls_user,
     as_supabase_user,
     seed_supabase_test_users,
     seed_test_users_directly,
+    supabase_test_user_ids,
 )
 
 
@@ -92,6 +94,118 @@ def test_as_supabase_user_extra_claims_can_override_role() -> None:
     with as_supabase_user(db, "user-1", extra_claims={"role": "service_role"}):
         claims = json.loads(db.guc)
         assert claims["role"] == "service_role"
+
+
+class FakeRoleClient(FakeClaimsClient):
+    """Extends `FakeClaimsClient` to also track `SET LOCAL ROLE` /
+    `RESET ROLE` invocations, since `as_rls_user` issues those
+    alongside the JWT-claims dance."""
+
+    def __init__(self, initial: str | None = None) -> None:
+        super().__init__(initial=initial)
+        self.role_stack: list[str] = []
+        self.executed_sql: list[str] = []
+
+    def execute(self, sql: str, *params: Any) -> int:
+        self.executed_sql.append(sql)
+        if sql.startswith("SET LOCAL ROLE "):
+            self.role_stack.append(sql.removeprefix("SET LOCAL ROLE "))
+            return 0
+        if sql == "RESET ROLE":
+            if self.role_stack:
+                self.role_stack.pop()
+            return 0
+        return super().execute(sql, *params)
+
+    @property
+    def current_role(self) -> str | None:
+        return self.role_stack[-1] if self.role_stack else None
+
+
+def test_as_rls_user_sets_role_and_claims_inside_block() -> None:
+    db = FakeRoleClient()
+    with as_rls_user(db, "user-1"):
+        assert db.current_role == "authenticated"
+        claims = json.loads(db.guc)
+        assert claims == {"sub": "user-1", "role": "authenticated"}
+
+
+def test_as_rls_user_resets_role_on_normal_exit() -> None:
+    db = FakeRoleClient()
+    with as_rls_user(db, "user-1"):
+        pass
+    assert db.current_role is None
+    # The actual SQL trail must end with the RESET so a leaked role
+    # can never bleed into the next test example.
+    assert "RESET ROLE" in db.executed_sql
+    assert db.executed_sql.index("RESET ROLE") > db.executed_sql.index(
+        "SET LOCAL ROLE authenticated"
+    )
+
+
+def test_as_rls_user_resets_role_after_exception() -> None:
+    db = FakeRoleClient()
+    with pytest.raises(RuntimeError), as_rls_user(db, "user-1"):
+        raise RuntimeError("boom")
+    assert db.current_role is None
+    assert "RESET ROLE" in db.executed_sql
+
+
+def test_as_rls_user_honours_custom_role() -> None:
+    db = FakeRoleClient()
+    with as_rls_user(db, "user-1", role="anon"):
+        assert db.current_role == "anon"
+        assert json.loads(db.guc)["role"] == "anon"
+
+
+def test_as_rls_user_rejects_invalid_role() -> None:
+    db = FakeRoleClient()
+    with (
+        pytest.raises(ValueError, match="valid Postgres identifier"),
+        as_rls_user(db, "user-1", role="authenticated; DROP TABLE foo--"),
+    ):
+        pass
+    # Must short-circuit before the as_supabase_user side-effect lands.
+    assert db.guc is None
+    assert db.executed_sql == []
+
+
+def test_as_rls_user_passes_extra_claims_through() -> None:
+    db = FakeRoleClient()
+    with as_rls_user(db, "user-1", extra_claims={"app_metadata": {"plan": "pro"}}):
+        claims = json.loads(db.guc)
+        assert claims["app_metadata"] == {"plan": "pro"}
+
+
+def test_supabase_test_user_ids_returns_users_matching_default_prefix() -> None:
+    db = FakeAuthUsersClient(
+        prepopulated=[
+            {"id": "u-0", "email": "sqlproof_0@test.invalid"},
+            {"id": "u-1", "email": "sqlproof_1@test.invalid"},
+            {"id": "u-other", "email": "person@example.com"},
+        ]
+    )
+    ids = supabase_test_user_ids(db)
+    assert ids == ["u-0", "u-1"]
+
+
+def test_supabase_test_user_ids_uses_custom_prefix_and_domain() -> None:
+    db = FakeAuthUsersClient(
+        prepopulated=[
+            {"id": "u-0", "email": "probe_0@example.test"},
+            {"id": "u-1", "email": "probe_1@example.test"},
+            {"id": "u-skip", "email": "sqlproof_0@test.invalid"},
+        ]
+    )
+    ids = supabase_test_user_ids(
+        db, email_prefix="probe_", email_domain="example.test"
+    )
+    assert ids == ["u-0", "u-1"]
+
+
+def test_supabase_test_user_ids_returns_empty_when_no_match() -> None:
+    db = FakeAuthUsersClient()
+    assert supabase_test_user_ids(db) == []
 
 
 class FakeAuthUsersClient:
