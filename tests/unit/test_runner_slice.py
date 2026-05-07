@@ -40,6 +40,109 @@ def test_sqlproof_decorator_injects_client_with_generated_data(tmp_path) -> None
     assert observed_sizes == [3, 3]
 
 
+def test_sqlproof_decorator_injects_dataset_when_signature_requests_it(
+    tmp_path,
+) -> None:
+    """A property fn that declares `dataset` should receive the generated
+    dataset alongside `db`, so it can assert against what was generated
+    without re-querying it back."""
+    schema_file = tmp_path / "schema.sql"
+    schema_file.write_text(
+        "CREATE TABLE orders (id SERIAL PRIMARY KEY, total INTEGER NOT NULL);",
+        encoding="utf-8",
+    )
+    proof = SqlProof.from_schema_file(schema_file)
+    seen: list[tuple[int, int]] = []
+
+    @sqlproof(proof, sizes={"orders": 4}, runs=2)
+    def property_with_dataset(db, dataset) -> None:
+        rows = db.query("SELECT id, total FROM orders ORDER BY id")
+        seen.append((len(rows), len(dataset["orders"])))
+        # dataset must match what's actually in the DB.
+        assert {r["total"] for r in rows} == {
+            row["total"] for row in dataset["orders"]
+        }
+
+    property_with_dataset()
+
+    assert seen == [(4, 4), (4, 4)]
+
+
+def test_sqlproof_decorator_forwards_columns_overrides(tmp_path) -> None:
+    """The `columns` argument should pin specific values via
+    dataset_strategy, so generated rows reflect the override."""
+    schema_file = tmp_path / "schema.sql"
+    schema_file.write_text(
+        """
+        CREATE TABLE products (
+          id SERIAL PRIMARY KEY,
+          name TEXT NOT NULL,
+          tier TEXT NOT NULL
+        );
+        """,
+        encoding="utf-8",
+    )
+    proof = SqlProof.from_schema_file(schema_file)
+
+    @sqlproof(
+        proof,
+        sizes={"products": 3},
+        columns={"products.tier": "platinum"},
+        runs=3,
+    )
+    def all_products_are_platinum(db) -> None:
+        tiers = {row["tier"] for row in db.query("SELECT tier FROM products")}
+        assert tiers == {"platinum"}, f"expected only 'platinum', got {tiers}"
+
+    all_products_are_platinum()
+
+
+def test_sqlproof_decorator_falls_back_to_module_dataset_strategy(tmp_path) -> None:
+    """`run_property` accepts duck-typed proof objects: anything that
+    exposes `schema_info`, `client_for_dataset`, and `schema_fingerprint`
+    is supported, even if it doesn't bind a `dataset_strategy` method.
+    Wrap a real SqlProof to strip that one attribute so the fallback
+    path (module-level `dataset_strategy(proof.schema_info, ...)`) is
+    actually exercised — including the new `columns=` forwarding."""
+    schema_file = tmp_path / "schema.sql"
+    schema_file.write_text(
+        """
+        CREATE TABLE products (
+          id SERIAL PRIMARY KEY,
+          tier TEXT NOT NULL
+        );
+        """,
+        encoding="utf-8",
+    )
+    real_proof = SqlProof.from_schema_file(schema_file)
+
+    class StrategyLessProof:
+        """Minimal proof shim — has schema_info but no dataset_strategy."""
+
+        def __init__(self, inner: SqlProof) -> None:
+            self.schema_info = inner.schema_info
+            self.schema_fingerprint = inner.schema_fingerprint
+            self._inner = inner
+
+        def client_for_dataset(self, dataset):
+            return self._inner.client_for_dataset(dataset)
+
+    proof = StrategyLessProof(real_proof)
+    assert not hasattr(proof, "dataset_strategy")
+
+    @sqlproof(
+        proof,
+        sizes={"products": 2},
+        columns={"products.tier": "platinum"},
+        runs=2,
+    )
+    def all_rows_are_platinum(db) -> None:
+        tiers = {row["tier"] for row in db.query("SELECT tier FROM products")}
+        assert tiers == {"platinum"}
+
+    all_rows_are_platinum()
+
+
 def test_sqlproof_exposes_dataset_strategy_with_shrinkable_sizes(tmp_path) -> None:
     schema_file = tmp_path / "schema.sql"
     schema_file.write_text(
