@@ -29,6 +29,7 @@ from uuid import uuid4
 
 import psycopg
 import pytest
+from hypothesis import assume
 from hypothesis import strategies as st
 from psycopg import errors as pg_errors
 
@@ -225,4 +226,52 @@ def test_member_management_requires_owner_or_admin(
     assert inserted == expected, (
         f"actor_role={actor['role']!r}: insert allowed={inserted}, "
         f"expected {expected}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Property 4: cross-org isolation — outsiders cannot read another org's drafts
+# ---------------------------------------------------------------------------
+#
+# Property 1 already exercises this implicitly via its visibility model,
+# but a dedicated cross-org test is the conventional shape for multi-
+# tenant RLS work and worth showing on its own. Drafts are the cleanest
+# slice for the demo: they're visible only to org members regardless of
+# `is_premium`, so an outsider observing zero rows is unambiguous evidence
+# that RLS isolated them.
+
+
+@sqlproof(
+    proof,
+    sizes={"organizations": 1, "org_members": 1, "posts": 1},
+    columns={
+        "org_members.role": "editor",
+        "posts.status": "draft",
+    },
+    runs=20,
+)
+def test_outsider_cannot_read_drafts_in_another_org(
+    db: Any, dataset: dict[str, Any]
+) -> None:
+    """User who is NOT a member of the post's org must not see the draft.
+
+    Pattern: pin the dataset to one victim org with one draft, then attack
+    as any seeded auth.users row that isn't the org's member. The seed
+    pool has up to 5 users (see `external_tables` above), so we discard
+    examples where the victim org happens to claim the only seeded user.
+    """
+    member = dataset["org_members"][0]
+    post = dataset["posts"][0]
+
+    outsiders = [u for u in _sample_seeded_users(db) if u != member["user_id"]]
+    assume(outsiders)
+    attacker_id = outsiders[0]
+
+    with as_rls_user(db, attacker_id):
+        rows = db.query("SELECT id FROM posts WHERE id = %s", [post["id"]])
+
+    assert rows == [], (
+        f"cross-org RLS leak: outsider {attacker_id!r} saw draft post "
+        f"{post['id']!r} in org {post['org_id']!r} "
+        f"(member is {member['user_id']!r} as {member['role']!r})"
     )
