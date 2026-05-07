@@ -47,6 +47,43 @@ sees 3 posts in premium-org" — a single point on the policy. The
 property-based version asserts "for any (user, post) the live policy's
 result equals the Python model's" — the whole policy.
 
+## Property 4 side-by-side
+
+For a concrete sense of where the size difference goes,
+[`test_rls.pgtap.sql`](./test_rls.pgtap.sql) ports a single property —
+`test_outsider_cannot_read_drafts_in_another_org` (Property 4 in
+[`test_rls.py`](./test_rls.py)) — into idiomatic pgTAP. Same property,
+two implementations:
+
+|                                       | pgTAP                  | sqlproof                       |
+| ------------------------------------- | ---------------------- | ------------------------------ |
+| Lines                                 | 177                    | ~50                            |
+| Test cases per run                    | 12 (hand-written)      | 20 (randomized)                |
+| `(member_role × is_premium)` coverage | hand-written 3 × 2     | implicit via Hypothesis        |
+| UUIDs                                 | hardcoded              | generated                      |
+| Auth context per transition           | 4 lines × 4 sites      | one `with as_rls_user(...)`    |
+| Sanity assertions                     | required               | not needed (Property 1 covers) |
+
+What drives the verbosity:
+
+1. **No data generation.** Every UUID and column literal is in the
+   file. With sqlproof, `sizes` and `columns` describe the dataset
+   shape and the generator fills it in.
+2. **Property coverage by enumeration.** The property holds for any
+   `(member_role, is_premium)` pair, so all six cells of the matrix
+   are written out. sqlproof's randomized runs cover the matrix for
+   free.
+3. **Auth-context dance is inline at every transition.**
+   `set_config` + `SET LOCAL ROLE` + `RESET ROLE` repeats four times
+   in the pgTAP file. `as_rls_user` collapses each occurrence to one
+   line.
+4. **Sanity assertions are mandatory.** pgTAP doesn't compare against
+   a model, so you have to explicitly assert "the legitimate member
+   CAN see the draft" — otherwise an over-restrictive RLS policy that
+   hides everything would pass the negative checks for the wrong
+   reason. Property 1 already covers the positive case via the
+   visibility model, so Property 4 doesn't repeat it.
+
 ## How it stays this short
 
 Three small libraries doing the work for you:
@@ -60,10 +97,11 @@ Three small libraries doing the work for you:
    generate users, sample from the existing seeded pool." The example
    seeds 5 users at module import; tests pull from that pool for FK
    targets.
-3. **`as_user(db, user_id)` context manager.** Switches the connection
-   to the `authenticated` role *and* sets the JWT-claim GUC so
-   `auth.uid()` returns the right value. Setting one without the other
-   silently bypasses RLS — the helper makes the right thing easy.
+3. **`as_rls_user(db, user_id)`** from `sqlproof.contrib.supabase` —
+   context manager that switches the connection to the `authenticated`
+   role *and* sets the JWT-claim GUC so `auth.uid()` returns the right
+   value. Setting one without the other silently bypasses RLS, so the
+   helper makes the right thing easy.
 
 ## What this example doesn't show
 
