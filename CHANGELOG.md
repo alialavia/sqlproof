@@ -7,6 +7,38 @@ remains in `0.x`, minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- **PL/pgSQL coverage contrib** in `sqlproof.contrib.plpgsql_coverage`. Wraps
+  the `plpgsql_check` extension to produce per-line and per-function coverage
+  reports for PL/pgSQL function bodies exercised by your tests.
+  - `coverage_session(db, candidates, *, cluster, ...)` — high-level context
+    manager. Filters candidates to installed PL/pgSQL functions, logs drift
+    for missing/non-PL/pgSQL names, skips the test cleanly if `plpgsql_check`
+    isn't installed or no candidates are profilable, yields
+    `(report, installed)`. Recommended entry point.
+  - `drive_in_order(installed, drivers, *, cluster)` — sorted iteration over
+    a cluster's drivers dict with diagnostic logging on failure.
+  - `assert_nonzero_coverage(report, installed, *, cluster, threshold=0.0)` —
+    the standard "every named function got > threshold statement coverage"
+    assertion.
+  - `installed_plpgsql_functions(db, candidates=None, *, schema)` — public
+    helper that intersects a candidate list with installed PL/pgSQL
+    functions in `schema`. SQL-language and missing names are dropped.
+  - `collect_coverage(db, functions=None, *, schema)` — low-level primitive,
+    unchanged behavior except for the bug fixes below.
+
+### Fixed
+
+- **`collect_coverage` now enables the `plpgsql_check.profiler` GUC** before
+  resetting profiler counters. Without this, `plpgsql_profiler_function_tb`
+  returns rows where every `exec_stmts` is NULL — making functions look
+  uncovered even after they ran successfully (#8).
+- **`collect_coverage` now filters non-PL/pgSQL candidates** out of the
+  `functions=` list before reading profiler data. Previously, including a
+  `LANGUAGE sql` (or other-language) name caused alphabetically-later
+  PL/pgSQL functions in the same call to silently drop from the report (#9).
+
 ## [0.1.0a1] - 2026-05-04
 
 First public release. Early-stage alpha — APIs are unstable.

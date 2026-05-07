@@ -751,17 +751,62 @@ PBT coverage is fundamentally about whether your generators explore the input sp
 
 ### 1. PL/pgSQL Coverage via `plpgsql_check`
 
-When `--sqlproof-coverage` is enabled, the runner installs `plpgsql_check` (if available), starts the profiler at suite begin, and dumps a per-function statement coverage report at suite end. Output goes to `.sqlproof/coverage/plpgsql.json` with a console summary.
+`sqlproof.contrib.plpgsql_coverage` exposes two entry points that wrap the
+`plpgsql_check` profiler. Both target PL/pgSQL function bodies only —
+`LANGUAGE sql` and other-language functions cannot be profiled by
+`plpgsql_check` and are silently filtered out of any candidate list.
 
-If `plpgsql_check` is unavailable, the runner emits a warning and skips the report rather than failing.
+**`coverage_session(db, candidates, *, cluster, ...)`** — recommended for
+"drive a known cluster of public functions and check each got
+non-zero coverage." Handles GUC enablement, language filtering, drift
+logging, and skip-on-missing-extension. Yields `(report, installed)`.
+
+```python
+from sqlproof.contrib.plpgsql_coverage import (
+    assert_nonzero_coverage, coverage_session, drive_in_order,
+)
+
+BRAND_RPCS = ["get_brand_visibility_stats", "get_brand_check_history", ...]
+
+def test_brand_rpcs_have_baseline_coverage(proof):
+    with proof.client_for_dataset({}) as db:
+        with coverage_session(db, BRAND_RPCS, cluster="brand") as (report, installed):
+            drive_in_order(installed, drivers, cluster="brand")
+    print(report.format())
+    assert_nonzero_coverage(report, installed, cluster="brand")
+```
+
+**`collect_coverage(db, functions=None, *, schema)`** — low-level
+primitive for state-machine-driven scenarios that don't fit the
+"iterate a drivers dict" shape:
+
+```python
+from sqlproof.contrib.plpgsql_coverage import collect_coverage
+
+with collect_coverage(db, functions=["my_func"]) as report:
+    proof.run_state_machine(MyMachine, ...)
+print(report.format())
+```
+
+The console report:
 
 ```
-PL/pgSQL coverage:
-  get_user_usage_total: 6/8 lines (75%)
-    line 5 (IF total < 0 THEN) — never executed
-    line 6 (RAISE EXCEPTION ...) — never executed
-  get_geo_performance: 42/42 lines (100%)
+PL/pgSQL coverage: 1/2 functions fully covered
+
+get_user_usage_total  stmt 75%  branch 50%  (6/8 executable lines)
+  ------------------------------------------------------------
+  >    1    1  BEGIN
+  >    2    1    SELECT ...
+       5         IF total < 0 THEN
+       6           RAISE EXCEPTION '...'
+
+get_geo_performance  stmt 100%  branch 100%  (42/42 executable lines)
 ```
+
+The extension must be installed in the target database
+(`CREATE EXTENSION IF NOT EXISTS plpgsql_check`). `coverage_session`
+calls `pytest.skip` when it isn't; `collect_coverage` raises
+`PlpgsqlCheckNotAvailable` directly.
 
 ### 2. Schema-Shape Coverage
 
