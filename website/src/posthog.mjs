@@ -19,7 +19,12 @@ const DEFAULT_POSTHOG_HOST = 'https://us.i.posthog.com';
  */
 export function posthogScriptContent({ key, host }) {
   if (!key) return null;
-  const apiHost = host ?? DEFAULT_POSTHOG_HOST;
+  // Use `||` (not `??`) so empty strings fall back to the default. The
+  // workflow's env block sets PUBLIC_POSTHOG_HOST="" whenever the secret
+  // is unset (GitHub Actions resolves ${{ secrets.UNSET }} to "", not
+  // undefined), so without this fallback the snippet would call
+  // posthog.init with api_host: "" and silently fail to deliver events.
+  const apiHost = host || DEFAULT_POSTHOG_HOST;
   return `${POSTHOG_BOOTSTRAP}
 posthog.init(${JSON.stringify(key)}, { api_host: ${JSON.stringify(apiHost)}, defaults: '2025-05-24' });`;
 }
