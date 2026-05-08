@@ -33,6 +33,12 @@ jobs:
       - name: Build
         run: npm run build
         working-directory: website
+        env:
+          # Optional. Set under Settings → Secrets and variables → Actions
+          # to enable PostHog tracking on the deployed site. When unset
+          # the snippet is omitted from the build (see website/src/posthog.mjs).
+          PUBLIC_POSTHOG_KEY: ${{ secrets.PUBLIC_POSTHOG_KEY }}
+          PUBLIC_POSTHOG_HOST: ${{ secrets.PUBLIC_POSTHOG_HOST }}
 
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
