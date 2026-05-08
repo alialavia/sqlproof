@@ -1,11 +1,21 @@
 ---
 import '../styles/custom.css';
+import { posthogScriptContent } from '../posthog.mjs';
+
 const rawBase = import.meta.env.BASE_URL;
 const base = ('/' + rawBase + '/').replace(/\/+/g, '/');
 const docsBase = `${base}getting-started/`;
 const apiBase = `${base}api/sqlproof-class/`;
 const examplesBase = `${base}examples/orders/`;
 const githubUrl = 'https://github.com/alialavia/sqlproof';
+
+// PostHog is configured in astro.config.mjs for Starlight pages; this
+// custom landing page builds its own <head>, so emit the same snippet
+// here directly. The shared helper guarantees the two paths stay in sync.
+const posthogScript = posthogScriptContent({
+  key: import.meta.env.PUBLIC_POSTHOG_KEY,
+  host: import.meta.env.PUBLIC_POSTHOG_HOST,
+});
 ---
 
 <!doctype html>
@@ -16,6 +26,7 @@ const githubUrl = 'https://github.com/alialavia/sqlproof';
     <title>SqlProof — Property-based testing for PostgreSQL</title>
     <meta name="description" content="Automatically generate valid test data that respects your schema constraints, then find the minimal counterexample when your queries break." />
     <link rel="icon" type="image/svg+xml" href={`${base}favicon.svg`} />
+    {posthogScript && <script set:html={posthogScript} />}
     <style>
       *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
       html { scroll-behavior: smooth; }
