@@ -1,6 +1,22 @@
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 
+import { posthogHeadEntries } from './src/posthog.mjs';
+
+// PostHog snippet is injected into <head> only when PUBLIC_POSTHOG_KEY is set
+// at build time. Lives in its own PostHog project (separate from any other
+// brand we run) — set the key in `.env` locally or in the deploy provider's
+// environment for production. PostHog public/project keys are designed to
+// live in client-side code; the snippet otherwise sends events to nowhere.
+//
+// The same helpers are imported by src/pages/index.astro so the custom
+// landing page emits an identical bootstrap (Starlight's `head` config
+// only reaches Starlight-rendered pages).
+const posthogHead = posthogHeadEntries({
+  key: process.env.PUBLIC_POSTHOG_KEY,
+  host: process.env.PUBLIC_POSTHOG_HOST,
+});
+
 export default defineConfig({
   site: 'https://sqlproof.com',
   integrations: [
@@ -10,6 +26,7 @@ export default defineConfig({
         github: 'https://github.com/alialavia/sqlproof',
       },
       customCss: ['./src/styles/custom.css'],
+      head: posthogHead,
       sidebar: [
         { label: 'Test your Supabase project in 60s', slug: 'supabase-quickstart' },
         { label: 'Getting Started (general)', slug: 'getting-started' },
