@@ -12,7 +12,7 @@ from sqlproof import ExternalTableSpec, SqlProof, sqlproof
 from sqlproof.core import _external_parent_rows, _insert_dataset
 from sqlproof.exceptions import SqlProofPropertyFailure
 from sqlproof.runners import property as property_module
-from sqlproof.schema.model import Column, PgType, SchemaInfo, Table
+from sqlproof.schema.model import Column, ForeignKey, PgType, SchemaInfo, Table
 
 
 def test_sqlproof_decorator_injects_client_with_generated_data(tmp_path) -> None:
@@ -355,6 +355,66 @@ def test_insert_dataset_adapts_jsonb_values() -> None:
 
     assert isinstance(captured_params[1], Jsonb)
     assert captured_params[1].obj == {"organic": 1}
+
+
+def test_insert_dataset_skips_topo_sort_for_empty_dataset_on_cyclic_schema() -> None:
+    id_column = Column(
+        name="id",
+        type=PgType(kind="scalar", name="uuid"),
+        nullable=False,
+        default=None,
+        is_generated=False,
+    )
+    ref_column = Column(
+        name="ref_id",
+        type=PgType(kind="scalar", name="uuid"),
+        nullable=True,
+        default=None,
+        is_generated=False,
+    )
+    content = Table(
+        schema="public",
+        name="content",
+        columns=(id_column, ref_column),
+        primary_key=("id",),
+        foreign_keys=(
+            ForeignKey(
+                columns=("ref_id",),
+                referenced_table="content_import_snapshots",
+                referenced_columns=("id",),
+                on_delete="NO ACTION",
+                on_update="NO ACTION",
+            ),
+        ),
+        unique_constraints=(),
+        check_constraints=(),
+    )
+    snapshots = Table(
+        schema="public",
+        name="content_import_snapshots",
+        columns=(id_column, ref_column),
+        primary_key=("id",),
+        foreign_keys=(
+            ForeignKey(
+                columns=("ref_id",),
+                referenced_table="content",
+                referenced_columns=("id",),
+                on_delete="NO ACTION",
+                on_update="NO ACTION",
+            ),
+        ),
+        unique_constraints=(),
+        check_constraints=(),
+    )
+    schema_info = SchemaInfo(tables=(content, snapshots))
+
+    class FakeClient:
+        def execute(self, sql: str, *params: object) -> int:
+            del sql, params
+            raise AssertionError("execute should not be called for empty dataset")
+
+    _insert_dataset(cast(Any, FakeClient()), schema_info, {})
+    _insert_dataset(cast(Any, FakeClient()), schema_info, {"content": []})
 
 
 def test_check_row_context_is_written_to_counterexample(tmp_path) -> None:

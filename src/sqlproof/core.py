@@ -247,6 +247,8 @@ def _insert_dataset(
     schema_info: SchemaInfo,
     dataset: dict[str, list[dict[str, Any]]],
 ) -> None:
+    if not any(rows for rows in dataset.values()):
+        return
     for table in insertion_order(schema_info.tables):
         rows = dataset.get(table.name, [])
         for row in rows:
