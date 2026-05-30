@@ -41,7 +41,7 @@ jobs:
           # as input. For push events, default behavior checks out the
           # tag-ref that triggered the workflow (no override needed).
           ref: ${{ inputs.tag || github.ref }}
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
       - uses: astral-sh/setup-uv@v5
