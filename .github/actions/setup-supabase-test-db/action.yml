@@ -1,0 +1,42 @@
+name: 'Set up Supabase-shaped test database'
+description: |
+  Apply SqlProof's Supabase test-init SQL to a running Postgres so a bare
+  `supabase/postgres` image matches managed Supabase semantics (plpgsql_check
+  extension, JSON-aware auth.uid/role/email/jwt). Call this AFTER your
+  service container's healthcheck passes and BEFORE running your tests.
+
+inputs:
+  database-url:
+    description: |
+      PostgreSQL DSN to apply the migration against. Use the same value you
+      pass to your tests as SQLPROOF_DATABASE_URL.
+    required: true
+  verbose:
+    description: |
+      If "true", print the resulting extension list and auth surface to the
+      job log so you can see what's installed. Default "false".
+    required: false
+    default: 'false'
+
+runs:
+  using: composite
+  steps:
+    - name: Apply Supabase test-init SQL
+      shell: bash
+      env:
+        DSN: ${{ inputs.database-url }}
+      run: |
+        # Resolve this action's own checkout path so the SQL file is found
+        # regardless of where the caller mounted things.
+        psql -v ON_ERROR_STOP=1 "$DSN" -f "${GITHUB_ACTION_PATH}/sql/supabase-test-init.sql"
+
+    - name: Print resulting Postgres surface
+      if: inputs.verbose == 'true'
+      shell: bash
+      env:
+        DSN: ${{ inputs.database-url }}
+      run: |
+        echo "=== installed extensions ==="
+        psql "$DSN" -c "SELECT extname, extversion FROM pg_extension ORDER BY extname;"
+        echo "=== auth schema functions ==="
+        psql "$DSN" -c "SELECT n.nspname || '.' || p.proname AS function FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'auth' ORDER BY proname;"
