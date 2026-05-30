@@ -17,12 +17,11 @@ agent to write tests.
 Make sure your project has Python 3.11+ and `pytest`. Then:
 
 ```bash
-pip install --pre sqlproof
+pip install sqlproof
 ```
 
-The `--pre` flag is required because SqlProof is currently in alpha
-(0.1.0a1). Until 1.0, every install needs `--pre` (or `--prerelease=allow`
-if you're using `uv`).
+SqlProof is pre-1.0 (`0.x`); APIs may change between minor versions per
+the project's working deprecation policy.
 
 ## 2. Point SqlProof at your database
 

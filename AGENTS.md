@@ -45,8 +45,7 @@ dev = [
 ]
 ```
 
-Install with `pip install --pre -e ".[dev]"` (sqlproof is alpha; the `--pre`
-flag is required until the first stable release).
+Install with `pip install -e ".[dev]"`.
 
 ### Tell SqlProof where the database is
 
