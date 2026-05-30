@@ -4,15 +4,30 @@ on:
   push:
     branches: [main]
 
-permissions:
-  contents: write       # to tag and create GitHub Releases
-  pull-requests: write  # to open/update the release PR
+# No top-level permissions: release-please acts via the GitHub App token
+# below, not the default GITHUB_TOKEN. The App's installation token
+# carries its own permissions (contents:write, pull_requests:write,
+# metadata:read) configured when the App was created.
 
 jobs:
   release-please:
     runs-on: ubuntu-latest
     steps:
+      # Mint a short-lived installation token from the `sqlproof-releases`
+      # GitHub App. Tags + commits pushed with this token DO trigger
+      # downstream workflows (unlike the default GITHUB_TOKEN, which
+      # GitHub Actions explicitly blocks from triggering recursive runs).
+      # That's what lets release.yml fire when release-please creates a
+      # v*.*.* tag.
+      - name: Mint release-please token from sqlproof-releases App
+        uses: actions/create-github-app-token@v1
+        id: app-token
+        with:
+          app-id: ${{ secrets.RELEASE_PLEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_PLEASE_PRIVATE_KEY }}
+
       - uses: googleapis/release-please-action@v5
         with:
+          token: ${{ steps.app-token.outputs.token }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json

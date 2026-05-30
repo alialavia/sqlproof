@@ -147,6 +147,36 @@ between merging a feature PR and the next release going live, except for
 clicking "Squash and merge" twice (once on the feature, once on the
 release).
 
+### How release-please pushes tags that trigger downstream workflows
+
+Tags pushed by the default `GITHUB_TOKEN` **do not trigger other
+workflows** — GitHub explicitly blocks this to prevent recursive runs. So
+release-please uses a token minted from a GitHub App (`sqlproof-releases`)
+installed on this repo. Tags pushed with that token DO trigger
+downstream workflows, which is what lets `release.yml` fire when
+release-please tags `vX.Y.Z`.
+
+To reproduce this setup in a fork:
+
+1. **Create a GitHub App** in your account settings → Developer settings →
+   GitHub Apps → New. Permissions: `contents: write`,
+   `pull_requests: write`, `metadata: read`. No callback URL needed.
+2. **Generate a private key** for the App (one click in the App's settings).
+3. **Install the App** on your fork.
+4. **Add two repo secrets**: `RELEASE_PLEASE_APP_ID` (the numeric ID) and
+   `RELEASE_PLEASE_PRIVATE_KEY` (paste the `.pem` contents).
+
+The `release-please.yml` workflow then mints a short-lived token from the
+App on each run via `actions/create-github-app-token@v1`.
+
+### Manually triggering a release publish
+
+If `release.yml` ever fails to fire on a tag (e.g. the GitHub App secrets
+expire or a tag was pushed manually), trigger it from the Actions tab:
+**Release → Run workflow → Tag to build and publish: `vX.Y.Z`**. The
+workflow's `workflow_dispatch` input checks out the tag you specify and
+runs the same build + publish pipeline.
+
 ### Pre-1.0 versioning
 
 sqlproof is in `0.x` and will remain so until the public API surface is
