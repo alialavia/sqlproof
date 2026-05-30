@@ -1,0 +1,28 @@
+name: Question
+description: Ask about how to do something with sqlproof.
+title: "question: <one-line summary>"
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Questions are welcome. Before filing, please skim the [README](https://github.com/alialavia/sqlproof#readme)
+        and the [examples directory](https://github.com/alialavia/sqlproof/tree/main/examples) — the answer
+        might already be there.
+
+  - type: textarea
+    id: question
+    attributes:
+      label: Your question
+      description: What are you trying to do? What have you tried so far?
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Code snippets, schema, your environment — whatever helps frame the question.
+      render: python
+    validations:
+      required: false

@@ -1,0 +1,45 @@
+version: 2
+updates:
+  # Python runtime + dev dependencies declared in pyproject.toml.
+  # Dependabot bumps declared versions; uv-lock-refresh.yml regenerates
+  # uv.lock on each dependabot PR.
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - python
+    commit-message:
+      prefix: chore
+      include: scope
+
+  # GitHub Actions versions (actions/checkout@vN, etc.)
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - ci
+    commit-message:
+      prefix: chore
+      include: scope
+
+  # supabase/postgres image pin in workflows
+  - package-ecosystem: docker
+    directory: ".github/workflows"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    labels:
+      - dependencies
+      - ci
+    commit-message:
+      prefix: chore
+      include: scope

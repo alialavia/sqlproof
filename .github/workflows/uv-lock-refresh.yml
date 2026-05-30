@@ -1,0 +1,45 @@
+name: uv-lock-refresh
+
+# Dependabot's `pip` ecosystem bumps declared deps in pyproject.toml but
+# doesn't know how to regenerate uv.lock. This workflow runs `uv lock` on
+# every dependabot PR and pushes the updated lockfile back to the PR
+# branch so the merge is internally consistent.
+
+on:
+  pull_request:
+    paths:
+      - pyproject.toml
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    # Only run on PRs opened by Dependabot. Other PRs that touch
+    # pyproject.toml should update uv.lock manually (and reviewers can
+    # catch drift).
+    if: github.actor == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          # GH Actions can't push back to a PR branch by default; use a
+          # PAT-less approach via `actions/checkout` with the default
+          # token, which works because we're pushing to the same repo
+          # the workflow runs in.
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: astral-sh/setup-uv@v5
+      - name: Refresh uv.lock
+        run: uv lock
+      - name: Commit and push if lockfile changed
+        run: |
+          if git diff --quiet uv.lock; then
+            echo "uv.lock unchanged; nothing to do."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add uv.lock
+          git commit -m "chore(deps): refresh uv.lock"
+          git push
