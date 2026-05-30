@@ -11,6 +11,25 @@ jobs:
     strategy:
       matrix:
         python-version: ["3.11", "3.12", "3.13"]
+    services:
+      postgres:
+        # Supabase's Postgres image bundles plpgsql_check, pgvector,
+        # pgsodium, pgjwt, etc., and creates the `auth` schema with
+        # `auth.uid()` / `auth.jwt()` helpers on first boot. This lets
+        # the plpgsql_coverage and (future) RLS-helper integration tests
+        # run against a realistic Supabase-shaped database.
+        image: supabase/postgres:15.8.1.040
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 15
+    env:
+      SQLPROOF_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -18,6 +37,14 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - uses: astral-sh/setup-uv@v5
       - run: uv sync --extra dev
+      - name: Enable plpgsql_check and inspect Postgres surface
+        run: |
+          # plpgsql_check is shipped with the image but not pre-installed
+          # in the default database. The plpgsql_coverage integration
+          # tests skip unless it's in pg_extension, so create it once.
+          psql "$SQLPROOF_TEST_DATABASE_URL" -c "CREATE EXTENSION IF NOT EXISTS plpgsql_check;"
+          psql "$SQLPROOF_TEST_DATABASE_URL" -c "SELECT extname, extversion FROM pg_extension ORDER BY extname;"
+          psql "$SQLPROOF_TEST_DATABASE_URL" -c "SELECT n.nspname, p.proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'auth' ORDER BY proname;"
       - run: uv run ruff check src/ tests/
       - run: uv run pyright
       - run: uv run mypy src/sqlproof/

@@ -241,7 +241,7 @@ def supabase_proof(sqlproof_database_url: str) -> Generator[SqlProof]:
     from hypothesis import strategies as st
     from psycopg.rows import dict_row
 
-    from sqlproof import ExternalTableSpec
+    from sqlproof import ExternalTableSpec, SqlProof
     from sqlproof.client import PsycopgSqlProofClient
     from sqlproof.contrib.supabase import seed_test_users_directly
 
