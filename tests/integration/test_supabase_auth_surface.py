@@ -3,13 +3,16 @@
 These tests don't exercise SqlProof itself; they assert that the
 underlying database has the pieces a Supabase project relies on:
 
-  * the `auth` schema with `auth.uid()` / `auth.role()` SQL helpers,
-  * the `request.jwt.claims` GUC pattern that RLS policies use to
-    identify the "logged-in" user during a test.
+  * the `auth` schema with `auth.uid()` / `auth.role()` / `auth.email()`
+    / `auth.jwt()` SQL helpers,
+  * the JSON-aware `auth.uid()` that managed Supabase gets via GoTrue's
+    `20220224000811_update_auth_functions` migration — applied to our
+    CI Postgres by the workflow setup step.
 
 If these pass in CI we know the new `supabase/postgres` service
-container is actually reachable and shaped the way the project's
-Supabase contrib (and the `examples/supabase_rls/` example) expect.
+container is reachable and shaped the way managed Supabase looks, so
+downstream RLS tests (`src/sqlproof/contrib/supabase.as_rls_user`, the
+`examples/supabase_rls/` example) behave the same as in production.
 
 Gated on `SQLPROOF_TEST_DATABASE_URL` like the rest of
 `tests/integration/`. Skips locally when no DSN is set.
@@ -17,6 +20,7 @@ Gated on `SQLPROOF_TEST_DATABASE_URL` like the rest of
 
 from __future__ import annotations
 
+import json
 import os
 from uuid import uuid4
 
@@ -31,7 +35,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def test_auth_schema_exposes_uid_and_role_helpers() -> None:
+def test_auth_schema_exposes_uid_role_email_jwt_helpers() -> None:
     dsn = os.environ[DSN_ENV]
     with psycopg.connect(dsn) as conn, conn.cursor() as cur:
         cur.execute(
@@ -39,34 +43,54 @@ def test_auth_schema_exposes_uid_and_role_helpers() -> None:
             SELECT proname
             FROM pg_proc
             WHERE pronamespace = 'auth'::regnamespace
-              AND proname IN ('uid', 'role', 'email')
+              AND proname IN ('uid', 'role', 'email', 'jwt')
             ORDER BY proname
             """
         )
         helpers = {row[0] for row in cur.fetchall()}
-    assert helpers == {"email", "role", "uid"}, (
-        f"expected auth.uid/role/email on a Supabase Postgres; got {helpers}"
+    assert helpers == {"email", "jwt", "role", "uid"}, (
+        "expected auth.uid/role/email/jwt after CI migration step; "
+        f"got {helpers}. The workflow's 'Bring Postgres surface into "
+        "lockstep with managed Supabase' step may have failed."
     )
 
 
-def test_auth_uid_returns_configured_jwt_sub_claim() -> None:
-    """The standard RLS test pattern: set the JWT sub claim via the
-    `request.jwt.claim.sub` GUC, then `auth.uid()` should return it.
-
-    This image's `auth.uid()` is defined as
-    `nullif(current_setting('request.jwt.claim.sub', true), '')::uuid`
-    — so we set the singular `request.jwt.claim.sub` directly. Real
-    Supabase RLS sets this from a verified JWT; in tests we stamp it
-    ourselves.
+def test_auth_uid_reads_singular_request_jwt_claim_sub() -> None:
+    """Legacy singular GUC path — what the bare image's original
+    `auth.uid()` supported and what `coalesce(...)` still falls back to.
+    Important to keep working so anything writing the singular GUC
+    (older PostgREST, direct SET LOCAL in tests) still resolves.
     """
     dsn = os.environ[DSN_ENV]
     user_id = str(uuid4())
 
     with psycopg.connect(dsn) as conn, conn.cursor() as cur:
         cur.execute("BEGIN")
-        # `SET LOCAL` doesn't accept bind parameters; `set_config(name,
-        # value, is_local=true)` is the parameterized equivalent.
-        cur.execute("SELECT set_config('request.jwt.claim.sub', %s, true)", (user_id,))
+        cur.execute(
+            "SELECT set_config('request.jwt.claim.sub', %s, true)", (user_id,)
+        )
+        cur.execute("SELECT auth.uid()::text")
+        seen = cur.fetchone()
+        cur.execute("ROLLBACK")
+
+    assert seen is not None
+    assert seen[0] == user_id
+
+
+def test_auth_uid_reads_json_request_jwt_claims() -> None:
+    """JSON GUC path — what PostgREST 8+ sets and what
+    `sqlproof.contrib.supabase.as_rls_user` writes. The CI workflow's
+    migration step is what enables this on the bare image; without it,
+    `auth.uid()` would return NULL here and every RLS-using test in
+    `examples/supabase_rls/` would silently fail authentication.
+    """
+    dsn = os.environ[DSN_ENV]
+    user_id = str(uuid4())
+    claims = json.dumps({"sub": user_id, "role": "authenticated"})
+
+    with psycopg.connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute("BEGIN")
+        cur.execute("SELECT set_config('request.jwt.claims', %s, true)", (claims,))
         cur.execute("SELECT auth.uid()::text")
         seen = cur.fetchone()
         cur.execute("ROLLBACK")
