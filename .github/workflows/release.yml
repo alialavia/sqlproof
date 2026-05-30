@@ -31,8 +31,45 @@ jobs:
           python-version: "3.11"
       - uses: astral-sh/setup-uv@v5
       - run: uv sync --extra dev
-      - name: Enable plpgsql_check
-        run: psql "$SQLPROOF_TEST_DATABASE_URL" -c "CREATE EXTENSION IF NOT EXISTS plpgsql_check;"
+      - name: Bring Postgres surface into lockstep with managed Supabase
+        run: |
+          # Mirror the setup ci.yml does so pre-publish testing exercises
+          # the same auth/extension surface that PR CI does.
+          # See ci.yml for the full rationale and migration source link.
+          psql "$SQLPROOF_TEST_DATABASE_URL" -c "CREATE EXTENSION IF NOT EXISTS plpgsql_check;"
+          psql -v ON_ERROR_STOP=1 "$SQLPROOF_TEST_DATABASE_URL" <<'SQL'
+          CREATE OR REPLACE FUNCTION auth.uid()
+          RETURNS uuid LANGUAGE sql STABLE AS $$
+            SELECT COALESCE(
+              NULLIF(current_setting('request.jwt.claim.sub', true), ''),
+              (NULLIF(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub')
+            )::uuid
+          $$;
+
+          CREATE OR REPLACE FUNCTION auth.role()
+          RETURNS text LANGUAGE sql STABLE AS $$
+            SELECT COALESCE(
+              NULLIF(current_setting('request.jwt.claim.role', true), ''),
+              (NULLIF(current_setting('request.jwt.claims', true), '')::jsonb ->> 'role')
+            )::text
+          $$;
+
+          CREATE OR REPLACE FUNCTION auth.email()
+          RETURNS text LANGUAGE sql STABLE AS $$
+            SELECT COALESCE(
+              NULLIF(current_setting('request.jwt.claim.email', true), ''),
+              (NULLIF(current_setting('request.jwt.claims', true), '')::jsonb ->> 'email')
+            )::text
+          $$;
+
+          CREATE OR REPLACE FUNCTION auth.jwt()
+          RETURNS jsonb LANGUAGE sql STABLE AS $$
+            SELECT COALESCE(
+              NULLIF(current_setting('request.jwt.claim', true), ''),
+              NULLIF(current_setting('request.jwt.claims', true), '')
+            )::jsonb
+          $$;
+          SQL
       - run: uv run pytest -m "not nocover"
       - run: uv build
       - uses: actions/upload-artifact@v4

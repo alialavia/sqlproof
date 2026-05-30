@@ -117,6 +117,11 @@ def visible_to(post: dict[str, Any], role_in_org: str | None) -> bool:
     columns={
         "org_members.role": st.sampled_from(["owner", "admin", "editor", "viewer"]),
         "posts.status": st.sampled_from(["draft", "published", "archived"]),
+        # `posts.is_premium` has a DB default (`DEFAULT false`) so the
+        # generator would otherwise omit it from the dataset. The
+        # visibility model below reads `post["is_premium"]`, so we have
+        # to ask for it explicitly.
+        "posts.is_premium": st.booleans(),
     },
     runs=30,
 )
@@ -136,7 +141,7 @@ def test_post_visibility_matches_policy(db: Any, dataset: dict[str, Any]) -> Non
 
             with as_rls_user(db, user_id):
                 rows = db.query(
-                    "SELECT id FROM posts WHERE id = %s", [post["id"]]
+                    "SELECT id FROM posts WHERE id = %s", post["id"]
                 )
             actual = len(rows) == 1
 
@@ -177,7 +182,8 @@ def test_free_plan_post_limit_at_every_boundary(
                     db.execute(
                         "INSERT INTO posts (org_id, author_id, status) "
                         "VALUES (%s, %s, 'draft')",
-                        [org["id"], member["user_id"]],
+                        org["id"],
+                        member["user_id"],
                     )
                     inserted += 1
                 except pg_errors.InsufficientPrivilege:
@@ -216,7 +222,8 @@ def test_member_management_requires_owner_or_admin(
             db.execute(
                 "INSERT INTO org_members (org_id, user_id, role) "
                 "VALUES (%s, %s, 'viewer')",
-                [org["id"], target_user],
+                org["id"],
+                target_user,
             )
             inserted = True
         except pg_errors.InsufficientPrivilege:
@@ -268,7 +275,7 @@ def test_outsider_cannot_read_drafts_in_another_org(
     attacker_id = outsiders[0]
 
     with as_rls_user(db, attacker_id):
-        rows = db.query("SELECT id FROM posts WHERE id = %s", [post["id"]])
+        rows = db.query("SELECT id FROM posts WHERE id = %s", post["id"])
 
     assert rows == [], (
         f"cross-org RLS leak: outsider {attacker_id!r} saw draft post "
