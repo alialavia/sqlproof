@@ -48,6 +48,10 @@ uv add --prerelease=allow sqlproof
 
 Requires Python 3.11+ and PostgreSQL 13+.
 
+**Running in CI?** See [the CI/CD guide](https://sqlproof.com/guides/ci-cd/)
+for copy-paste GitHub Actions workflows covering vanilla Postgres and the
+extra setup Supabase-shaped projects need (auth migration, plpgsql_check).
+
 ## Quick Start (general)
 
 Given a schema file:
