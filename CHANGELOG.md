@@ -5,6 +5,13 @@ All notable changes to SqlProof will be documented here. The format is based on
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While SqlProof
 remains in `0.x`, minor versions may include breaking changes.
 
+## [0.2.2](https://github.com/alialavia/sqlproof/compare/v0.2.1...v0.2.2) (2026-05-30)
+
+
+### Documentation
+
+* **website:** drop alpha framing from landing page ([#40](https://github.com/alialavia/sqlproof/issues/40)) ([9845743](https://github.com/alialavia/sqlproof/commit/9845743917d4bdf1dbda311e63545feabd902371))
+
 ## [0.2.1] - 2026-05-30
 
 First PyPI-published stable release. Equivalent in code to `v0.2.0`
