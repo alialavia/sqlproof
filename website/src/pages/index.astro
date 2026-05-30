@@ -54,7 +54,7 @@ const posthogScript = posthogScriptContent({
 
     <!-- Hero -->
     <div class="sp-hero">
-      <div class="sp-badge sp-badge-alpha">⚠ v0.1.0a1 alpha · Python 3.11+ · APIs unstable</div>
+      <div class="sp-badge sp-badge-alpha">Pre-1.0 (0.x) · Python 3.11+</div>
       <h1>Find SQL bugs<br />before your <span>users</span> do</h1>
       <p>
         Property-based testing for PostgreSQL. Generates random valid datasets
@@ -62,11 +62,12 @@ const posthogScript = posthogScriptContent({
       </p>
       <div class="sp-install">
         <span class="prompt">$</span>
-        <span>pip install --pre sqlproof</span>
+        <span>pip install sqlproof</span>
       </div>
       <p class="sp-npm-disclaimer">
-        Early-stage alpha. APIs may change without deprecation warnings until 0.x stabilizes.
-        Don't rely on this for production test suites yet.
+        Pre-1.0. APIs may change between minor versions per the working
+        deprecation policy. Evaluate carefully before relying on this for
+        production test suites.
       </p>
       <div class="sp-hero-buttons">
         <a href={docsBase} class="sp-btn-primary">Get Started →</a>
