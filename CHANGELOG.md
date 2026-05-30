@@ -5,6 +5,19 @@ All notable changes to SqlProof will be documented here. The format is based on
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While SqlProof
 remains in `0.x`, minor versions may include breaking changes.
 
+## [0.2.1] - 2026-05-30
+
+First PyPI-published stable release. Equivalent in code to `v0.2.0`
+(which was tagged in git but never reached PyPI because of a
+release-tooling configuration that has since been fixed — see PR #39).
+This release ships the docs cleanup from PR #37 on top of everything
+listed under [0.2.0] below.
+
+### Documentation
+
+- Drop `--pre` install instructions, reframe as pre-1.0
+  ([#37](https://github.com/alialavia/sqlproof/pull/37))
+
 ## [0.2.0] - 2026-05-30
 
 First stable-track release. APIs are still pre-1.0 (breaking changes may bump
