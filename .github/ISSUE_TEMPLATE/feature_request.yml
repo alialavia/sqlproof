@@ -1,0 +1,43 @@
+name: Feature request
+description: Propose a new feature or capability.
+title: "feat: <one-line summary>"
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the suggestion. Helping us understand the *problem* you're
+        solving is more useful than a fully-specified solution — we may have
+        ideas you haven't considered.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to do that sqlproof doesn't currently let you do well? Include a concrete use case.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed
+    attributes:
+      label: Proposed solution
+      description: What you have in mind. Rough is fine — API sketch, behavior description, prior art elsewhere.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What workarounds have you tried? Why aren't they good enough?
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Links, screenshots, references to other libraries that solve this well.
+    validations:
+      required: false

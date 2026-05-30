@@ -5,55 +5,6 @@ All notable changes to SqlProof will be documented here. The format is based on
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While SqlProof
 remains in `0.x`, minor versions may include breaking changes.
 
-## [Unreleased]
-
-### Added
-
-- **Pytest plugin fixtures.** `sqlproof.pytest_plugin` now provides
-  `proof` (session) and `db` (per-test) fixtures out of the box, plus
-  Supabase-flavored `supabase_proof` / `supabase_db` variants that seed
-  the deterministic test-user pool and register `auth.users` as an
-  external table for FK draws. Database URL resolves from
-  `--sqlproof-database-url` → `$SQLPROOF_DATABASE_URL` →
-  `$SUPABASE_DB_URL`. Tests on developer machines without a database
-  configured skip cleanly. Users can still override any fixture in
-  their own `conftest.py` for custom external tables, schemas, or
-  connections.
-
-  This deletes the ~30-line `tests/conftest.py` boilerplate the docs
-  used to ask Supabase users to copy. The new setup is one
-  `export SUPABASE_DB_URL=...`.
-
-- **PL/pgSQL coverage contrib** in `sqlproof.contrib.plpgsql_coverage`. Wraps
-  the `plpgsql_check` extension to produce per-line and per-function coverage
-  reports for PL/pgSQL function bodies exercised by your tests.
-  - `coverage_session(db, candidates, *, cluster, ...)` — high-level context
-    manager. Filters candidates to installed PL/pgSQL functions, logs drift
-    for missing/non-PL/pgSQL names, skips the test cleanly if `plpgsql_check`
-    isn't installed or no candidates are profilable, yields
-    `(report, installed)`. Recommended entry point.
-  - `drive_in_order(installed, drivers, *, cluster)` — sorted iteration over
-    a cluster's drivers dict with diagnostic logging on failure.
-  - `assert_nonzero_coverage(report, installed, *, cluster, threshold=0.0)` —
-    the standard "every named function got > threshold statement coverage"
-    assertion.
-  - `installed_plpgsql_functions(db, candidates=None, *, schema)` — public
-    helper that intersects a candidate list with installed PL/pgSQL
-    functions in `schema`. SQL-language and missing names are dropped.
-  - `collect_coverage(db, functions=None, *, schema)` — low-level primitive,
-    unchanged behavior except for the bug fixes below.
-
-### Fixed
-
-- **`collect_coverage` now enables the `plpgsql_check.profiler` GUC** before
-  resetting profiler counters. Without this, `plpgsql_profiler_function_tb`
-  returns rows where every `exec_stmts` is NULL — making functions look
-  uncovered even after they ran successfully (#8).
-- **`collect_coverage` now filters non-PL/pgSQL candidates** out of the
-  `functions=` list before reading profiler data. Previously, including a
-  `LANGUAGE sql` (or other-language) name caused alphabetically-later
-  PL/pgSQL functions in the same call to silently drop from the report (#9).
-
 ## [0.1.0a1] - 2026-05-04
 
 First public release. Early-stage alpha — APIs are unstable.
@@ -101,5 +52,4 @@ First public release. Early-stage alpha — APIs are unstable.
   are still stabilizing.
 - No deprecation policy yet — breaking changes ship freely in `0.x`.
 
-[Unreleased]: https://github.com/alialavia/sqlproof/compare/v0.1.0a1...HEAD
 [0.1.0a1]: https://github.com/alialavia/sqlproof/releases/tag/v0.1.0a1
