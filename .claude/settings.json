@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "_comment": "Claude Code project settings. Declares the alialavia/pbt-skills plugin so agents working on this codebase auto-load the foundational property-based-testing skills (covers the general patterns this project's AGENTS.md assumes). Copy this file into your own project's .claude/ directory to get the same auto-load when an agent works on your sqlproof-using project.",
+  "plugins": [
+    "alialavia/pbt-skills"
+  ]
+}
