@@ -81,10 +81,9 @@ that. SqlProof is built for this.</p>
 agent to write tests.</p>
 <h2 id="1-install">1. Install</h2>
 <p>Make sure your project has Python 3.11+ and <code dir="auto">pytest</code>. Then:</p>
-<div class="expressive-code"><link rel="stylesheet" href="/_astro/ec.j8ofn.css"><script type="module" src="/_astro/ec.8zarh.js"></script><figure class="frame is-terminal not-content"><figcaption class="header"><span class="title"></span><span class="sr-only">Terminal window</span></figcaption><pre data-language="bash"><code><div class="ec-line"><div class="code"><span style="--0:#82AAFF;--1:#3C63B3">pip</span><span style="--0:#D6DEEB;--1:#403F53"> </span><span style="--0:#ECC48D;--1:#3C63B3">install</span><span style="--0:#D6DEEB;--1:#403F53"> </span><span style="--0:#82AAFF;--1:#3C63B3">--pre</span><span style="--0:#D6DEEB;--1:#403F53"> </span><span style="--0:#ECC48D;--1:#3C63B3">sqlproof</span></div></div></code></pre><div class="copy"><button title="Copy to clipboard" data-copied="Copied!" data-code="pip install --pre sqlproof"><div></div></button></div></figure></div>
-<p>The <code dir="auto">--pre</code> flag is required because SqlProof is currently in alpha
-(0.1.0a1). Until 1.0, every install needs <code dir="auto">--pre</code> (or <code dir="auto">--prerelease=allow</code>
-if you’re using <code dir="auto">uv</code>).</p>
+<div class="expressive-code"><link rel="stylesheet" href="/_astro/ec.j8ofn.css"><script type="module" src="/_astro/ec.8zarh.js"></script><figure class="frame is-terminal not-content"><figcaption class="header"><span class="title"></span><span class="sr-only">Terminal window</span></figcaption><pre data-language="bash"><code><div class="ec-line"><div class="code"><span style="--0:#82AAFF;--1:#3C63B3">pip</span><span style="--0:#D6DEEB;--1:#403F53"> </span><span style="--0:#ECC48D;--1:#3C63B3">install</span><span style="--0:#D6DEEB;--1:#403F53"> </span><span style="--0:#ECC48D;--1:#3C63B3">sqlproof</span></div></div></code></pre><div class="copy"><button title="Copy to clipboard" data-copied="Copied!" data-code="pip install sqlproof"><div></div></button></div></figure></div>
+<p>SqlProof is pre-1.0 (<code dir="auto">0.x</code>); APIs may change between minor versions per
+the project’s working deprecation policy.</p>
 <h2 id="2-point-sqlproof-at-your-database">2. Point SqlProof at your database</h2>
 <p><code dir="auto">pytest start</code> for Supabase brings up Postgres on
 <code dir="auto">127.0.0.1:54322</code>. Tell SqlProof about it:</p>
