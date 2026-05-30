@@ -44,7 +44,7 @@ jobs:
       - uses: alialavia/sqlproof/.github/actions/setup-supabase-test-db@main
         with:
           database-url: ${{ env.SQLPROOF_DATABASE_URL }}
-      - run: pip install --pre sqlproof pytest
+      - run: pip install sqlproof pytest
       - run: pytest
 ```
 
@@ -121,7 +121,7 @@ If your tests only use the in-memory client or the pure data generator
 container and the env var:
 
 ```yaml
-- run: pip install --pre sqlproof pytest
+- run: pip install sqlproof pytest
 - run: pytest
 ```
 
@@ -164,10 +164,6 @@ job's top-level `env:` block, not inside an individual step.
 **`Error: ENOENT: no such file or directory, scandir '...github/actions/setup-supabase-test-db'`** —
 you're referencing the action at a ref where it doesn't exist yet
 (introduced in 0.2.0). Either pin to `@main`, or to `@v0.2.0` or later.
-
-**`pip install sqlproof` says "no matching distribution"** — add
-`--pre`. SqlProof is in alpha and PyPI hides prereleases from default
-installs.
 
 **Service container takes too long to start** — increase
 `--health-retries` in `services.postgres.options`. The Supabase image is
