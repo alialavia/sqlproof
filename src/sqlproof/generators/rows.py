@@ -6,6 +6,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
+from hypothesis import assume
 from hypothesis import strategies as st
 from hypothesis.strategies import SearchStrategy
 
@@ -40,9 +41,22 @@ def table_rows_strategy(
     rows_by_table = rows_by_table or {}
     columns = columns or {}
 
+    # Composite UNIQUEs (>1 column) and composite PRIMARY KEYs both
+    # require the generator to produce distinct tuples across rows.
+    # Single-column uniqueness is handled inline via _unique_value;
+    # composite uniqueness is checked AFTER the row is built. Use
+    # tuples so Hypothesis's shrinking can keep the closure deterministic.
+    composite_unique_keys: tuple[tuple[str, ...], ...] = _composite_unique_keys(table)
+
     @st.composite
     def rows(draw: st.DrawFn) -> list[dict[str, Any]]:
         generated: list[dict[str, Any]] = []
+        # Track seen composite-key tuples per constraint. We only
+        # compare rows where ALL columns of the constraint are
+        # non-NULL (SQL's standard UNIQUE semantics: NULL is distinct).
+        seen_per_key: dict[tuple[str, ...], set[tuple[Any, ...]]] = {
+            key: set() for key in composite_unique_keys
+        }
         for index in range(count):
             row: dict[str, Any] = {}
             for column in table.columns:
@@ -90,10 +104,56 @@ def table_rows_strategy(
                     column, strategy_for_column(column), table.check_constraints
                 )
                 row[column.name] = draw(strategy)
+
+            # Composite uniqueness check. SQL's standard UNIQUE
+            # semantics treat NULL as distinct (no two NULLs collide),
+            # so skip the check for tuples containing a None — that
+            # matches Postgres's default behavior on UNIQUE
+            # constraints. (NULLs NOT DISTINCT is opt-in via NOT NULL
+            # or `NULLS NOT DISTINCT`; we don't track that variant.)
+            for key in composite_unique_keys:
+                if any(col not in row or row[col] is None for col in key):
+                    continue
+                tuple_value = tuple(row[col] for col in key)
+                # If we've seen this tuple before, ask Hypothesis to
+                # invalidate this example and try different draws.
+                # Discarded examples are silently retried; the test
+                # framework only fails if Hypothesis can't find any
+                # valid draw within `max_examples`/health-check
+                # budget — which happens iff the user asked for more
+                # rows than the constraint space allows (e.g.
+                # `sizes={"org_members": 100}` with only 2 orgs x
+                # 2 users in the FK pool).
+                assume(tuple_value not in seen_per_key[key])
+                seen_per_key[key].add(tuple_value)
+
             generated.append(row)
         return generated
 
     return rows()
+
+
+def _composite_unique_keys(table: Table) -> tuple[tuple[str, ...], ...]:
+    """Composite UNIQUE / PRIMARY KEY constraints with more than one
+    column.
+
+    Used by the row generator to enforce that no two rows produce the
+    same tuple on any composite-unique column set. Single-column
+    UNIQUEs are handled by `_unique_value` in the inline generation
+    path (faster, deterministic per-index values); composite cases
+    fall back to assume-based rejection sampling.
+
+    The composite PRIMARY KEY is included because, semantically, a
+    composite PK is a composite UNIQUE + NOT NULL combo. Postgres
+    treats it the same way for INSERT rejection purposes.
+    """
+    keys: list[tuple[str, ...]] = []
+    if len(table.primary_key) > 1:
+        keys.append(table.primary_key)
+    for unique in table.unique_constraints:
+        if len(unique) > 1:
+            keys.append(unique)
+    return tuple(keys)
 
 
 def _column_override(
