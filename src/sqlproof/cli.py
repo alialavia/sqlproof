@@ -106,6 +106,10 @@ def _table_payload(table: Table) -> dict[str, object]:
         "columns": [_column_payload(column) for column in table.columns],
         "primary_key": list(table.primary_key),
         "unique_constraints": [list(columns) for columns in table.unique_constraints],
+        "partial_unique_constraints": [
+            {"columns": list(pu.columns), "predicate": pu.predicate}
+            for pu in table.partial_unique_constraints
+        ],
         "checks": [check.expression for check in table.check_constraints],
         "foreign_keys": [
             {

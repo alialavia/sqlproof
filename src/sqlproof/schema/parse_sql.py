@@ -8,7 +8,15 @@ from pglast.enums import ConstrType
 from pglast.stream import RawStream
 
 from sqlproof.exceptions import SqlProofSchemaError
-from sqlproof.schema.model import CheckConstraint, Column, ForeignKey, PgType, SchemaInfo, Table
+from sqlproof.schema.model import (
+    CheckConstraint,
+    Column,
+    ForeignKey,
+    PartialUniqueConstraint,
+    PgType,
+    SchemaInfo,
+    Table,
+)
 
 
 def parse_schema_sql(sql: str, *, schema: str = "public") -> SchemaInfo:
@@ -39,7 +47,72 @@ def parse_schema_sql(sql: str, *, schema: str = "public") -> SchemaInfo:
     )
     if not tables and "CREATE TABLE" in sql.upper():
         raise SqlProofSchemaError("Could not parse CREATE TABLE statement.")
+
+    # Pick up partial unique indexes from CREATE [UNIQUE] INDEX
+    # statements and graft them onto the corresponding table. Without
+    # this the parser silently drops these — schemas relying on the
+    # soft-delete pattern (UNIQUE WHERE deleted_at IS NULL) would
+    # generate datasets that Postgres rejects at INSERT time.
+    tables = _attach_partial_unique_indexes(tables, statements, schema)
+
     return SchemaInfo(tables=tables, enums=tuple(enums))
+
+
+def _attach_partial_unique_indexes(
+    tables: tuple[Table, ...], statements: tuple[Any, ...], default_schema: str
+) -> tuple[Table, ...]:
+    by_qname: dict[tuple[str, str], list[PartialUniqueConstraint]] = {}
+    for raw_statement in statements:
+        statement: Any = raw_statement.stmt
+        if type(statement).__name__ != "IndexStmt":
+            continue
+        if not getattr(statement, "unique", False):
+            continue
+        if getattr(statement, "whereClause", None) is None:
+            # Unconditional CREATE UNIQUE INDEX — outside scope of this
+            # change. Inline UNIQUE in CREATE TABLE remains the canonical
+            # spelling for unconditional uniques.
+            continue
+        relation = statement.relation
+        table_schema = getattr(relation, "schemaname", None) or default_schema
+        table_name = relation.relname
+        columns = tuple(_index_param_name(param) for param in statement.indexParams or ())
+        predicate = _render(statement.whereClause)
+        by_qname.setdefault((table_schema, table_name), []).append(
+            PartialUniqueConstraint(columns=columns, predicate=predicate)
+        )
+
+    if not by_qname:
+        return tables
+
+    return tuple(
+        Table(
+            schema=t.schema,
+            name=t.name,
+            columns=t.columns,
+            primary_key=t.primary_key,
+            foreign_keys=t.foreign_keys,
+            unique_constraints=t.unique_constraints,
+            check_constraints=t.check_constraints,
+            opaque_constraints=t.opaque_constraints,
+            partial_unique_constraints=tuple(by_qname.get((t.schema, t.name), ())),
+        )
+        for t in tables
+    )
+
+
+def _index_param_name(param: Any) -> str:
+    # IndexElem.name is the simple column-name form. Expression-form
+    # index params (e.g. CREATE UNIQUE INDEX ... ON t (lower(email)))
+    # have name=None and `.expr` set; we don't model those today —
+    # render their text so the user sees something stable.
+    name = getattr(param, "name", None)
+    if name is not None:
+        return str(name)
+    expr = getattr(param, "expr", None)
+    if expr is not None:
+        return _render(expr)
+    return ""
 
 
 def _parse_table_statement(statement: Any, enum_names: dict[str, PgType], schema: str) -> Table:

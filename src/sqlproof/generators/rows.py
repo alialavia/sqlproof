@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+import re
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
@@ -48,6 +49,18 @@ def table_rows_strategy(
     # tuples so Hypothesis's shrinking can keep the closure deterministic.
     composite_unique_keys: tuple[tuple[str, ...], ...] = _composite_unique_keys(table)
 
+    # Partial unique indexes (`CREATE UNIQUE INDEX ... WHERE ...`)
+    # apply uniqueness only to rows where the predicate holds. We
+    # compile each predicate to a callable that returns True / False
+    # / None — None means "the simple evaluator can't read this
+    # predicate" and the generator falls back to skipping enforcement
+    # (Postgres still rejects at INSERT if the generated batch
+    # happens to collide).
+    partial_unique_checks: tuple[tuple[tuple[str, ...], _PredicateFn], ...] = tuple(
+        (pu.columns, _compile_predicate(pu.predicate))
+        for pu in table.partial_unique_constraints
+    )
+
     @st.composite
     def rows(draw: st.DrawFn) -> list[dict[str, Any]]:
         generated: list[dict[str, Any]] = []
@@ -56,6 +69,13 @@ def table_rows_strategy(
         # non-NULL (SQL's standard UNIQUE semantics: NULL is distinct).
         seen_per_key: dict[tuple[str, ...], set[tuple[Any, ...]]] = {
             key: set() for key in composite_unique_keys
+        }
+        # Track seen tuples per partial unique. Keyed by the column
+        # tuple (predicate text isn't part of the key — two partial
+        # uniques over the same column set would collide on this dict
+        # but that's a degenerate schema we don't need to support).
+        seen_per_partial: dict[tuple[str, ...], set[tuple[Any, ...]]] = {
+            cols: set() for cols, _pred in partial_unique_checks
         }
         for index in range(count):
             row: dict[str, Any] = {}
@@ -126,6 +146,24 @@ def table_rows_strategy(
                 # 2 users in the FK pool).
                 assume(tuple_value not in seen_per_key[key])
                 seen_per_key[key].add(tuple_value)
+
+            # Partial-unique-index check. Three states for each row /
+            # predicate:
+            #   - predicate is None      → evaluator couldn't read it;
+            #                              skip enforcement
+            #   - predicate(row) is False → row doesn't compete; skip
+            #   - predicate(row) is True  → row competes; assume() if
+            #                               its column-tuple matches
+            #                               another competing row
+            for cols, predicate_fn in partial_unique_checks:
+                matches = predicate_fn(row)
+                if matches is not True:
+                    continue
+                if any(col not in row or row[col] is None for col in cols):
+                    continue
+                tuple_value = tuple(row[col] for col in cols)
+                assume(tuple_value not in seen_per_partial[cols])
+                seen_per_partial[cols].add(tuple_value)
 
             generated.append(row)
         return generated
@@ -202,6 +240,43 @@ def _parent_rows_key(
 
 def _is_single_column_unique(table: Table, column_name: str) -> bool:
     return any(columns == (column_name,) for columns in table.unique_constraints)
+
+
+# Returns True/False if the predicate evaluates on `row`, or None if
+# the simple evaluator can't read it (caller falls back to skipping
+# uniqueness enforcement for that index).
+_PredicateFn = Callable[[dict[str, Any]], bool | None]
+
+
+# Predicate text may arrive parenthesized (`pg_get_expr` returns
+# `(deleted_at IS NULL)` even when the source SQL was unparenthesized).
+# Make the parens optional so the same compiler works on both
+# parse_sql and introspect_schema outputs.
+_IS_NULL_RE = re.compile(r"^\s*\(?\s*(\w+)\s+IS\s+NULL\s*\)?\s*$", re.IGNORECASE)
+_IS_NOT_NULL_RE = re.compile(
+    r"^\s*\(?\s*(\w+)\s+IS\s+NOT\s+NULL\s*\)?\s*$", re.IGNORECASE
+)
+
+
+def _compile_predicate(predicate: str) -> _PredicateFn:
+    """Compile a partial-unique predicate into a Python callable.
+
+    Supports the simple ``column IS NULL`` / ``column IS NOT NULL``
+    shape (the canonical soft-delete pattern). Anything else returns
+    None for every row, which the caller reads as "I can't evaluate
+    this — skip enforcement." We intentionally don't try to be
+    clever: misreading a predicate is worse than ignoring it
+    (Postgres still rejects bad INSERTs).
+    """
+    null_match = _IS_NULL_RE.match(predicate)
+    if null_match:
+        column = null_match.group(1)
+        return lambda row: row.get(column) is None
+    not_null_match = _IS_NOT_NULL_RE.match(predicate)
+    if not_null_match:
+        column = not_null_match.group(1)
+        return lambda row: row.get(column) is not None
+    return lambda _row: None
 
 
 def _unique_value(column_name: str, type_name: str, index: int) -> Any:

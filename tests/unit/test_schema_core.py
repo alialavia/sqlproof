@@ -206,6 +206,9 @@ class FakeIntrospectionConnection:
             )
         if "pg_proc" in sql:
             return FakeRows([])
+        if "idx.indpred" in sql:
+            # Partial unique indexes — none in this fixture's schema.
+            return FakeRows([])
         if "pg_attribute att" in sql and "column_name" in sql:
             return FakeRows(
                 [

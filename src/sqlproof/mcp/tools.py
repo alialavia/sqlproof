@@ -262,6 +262,10 @@ def _serialize_table(table: Table) -> dict[str, Any]:
         "primary_key": list(table.primary_key),
         "foreign_keys": [_serialize_foreign_key(fk) for fk in table.foreign_keys],
         "unique_constraints": [list(u) for u in table.unique_constraints],
+        "partial_unique_constraints": [
+            {"columns": list(pu.columns), "predicate": pu.predicate}
+            for pu in table.partial_unique_constraints
+        ],
         "check_constraints": [_serialize_check_constraint(c) for c in table.check_constraints],
     }
 
