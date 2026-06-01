@@ -10,24 +10,36 @@ ordinary Python) — this file is just the MCP runtime adapter. The
 split keeps unit tests independent of the ``mcp`` SDK and makes the
 tools reusable from notebooks / CLI in the future.
 
-Run manually for local testing::
-
-    sqlproof-mcp
-
-Or add to a Claude Desktop / Cursor / Cline MCP config::
+End-user install — the canonical recipe uses ``uvx``, which
+downloads and runs ``sqlproof[mcp]`` on demand without a separate
+install step. Add to your MCP client config (Claude Desktop,
+Cursor, Cline, Claude Code, etc.)::
 
     {
       "mcpServers": {
         "sqlproof": {
-          "command": "sqlproof-mcp",
-          "env": {"SQLPROOF_DATABASE_URL": "postgresql://..."}
+          "command": "uvx",
+          "args": ["--from", "sqlproof[mcp]", "sqlproof-mcp"]
         }
       }
     }
 
-The ``SQLPROOF_DATABASE_URL`` env var is optional — the v1 tools
-(inspect_schema, generate_dataset, list_recipes) don't need a live
-DB. v2 (check_property, run_rls_test) will read it.
+Pin the version for reproducibility::
+
+    "args": ["--from", "sqlproof[mcp]==0.2.4", "sqlproof-mcp"]
+
+This works whether or not the user has sqlproof installed in any
+project venv — ``uvx`` runs the server in its own ephemeral
+environment.
+
+Local development from a sqlproof checkout (this repo) uses the
+standard venv pattern::
+
+    uv sync --extra dev
+    uv run sqlproof-mcp
+
+The server runs in the foreground and reads MCP protocol messages
+on stdin / stdout; press Ctrl-C to stop.
 """
 
 from __future__ import annotations

@@ -18,24 +18,32 @@ Tools exposed in v1 (see ``sqlproof.mcp.tools``):
   stateful) the agent can ask for.
 
 The server transport is stdio. Users add it to their MCP client
-config::
+config (Claude Desktop, Cursor, Cline, Claude Code, etc.) via
+``uvx``, which downloads and runs ``sqlproof[mcp]`` on demand —
+no separate install step required::
 
     {
       "mcpServers": {
         "sqlproof": {
-          "command": "sqlproof-mcp",
-          "env": {
-            "SQLPROOF_DATABASE_URL": "postgresql://..."
-          }
+          "command": "uvx",
+          "args": ["--from", "sqlproof[mcp]", "sqlproof-mcp"]
         }
       }
     }
 
-Optional install: ``pip install sqlproof[mcp]``.
+Pin a specific version for reproducibility
+(``--from sqlproof[mcp]==0.2.4``) or omit the version for
+always-latest. First invocation downloads (~10s); subsequent calls
+hit the uv cache.
 
-This module imports lazily inside ``server.main()`` so callers of
-``sqlproof.mcp.tools`` (which don't need the runtime) aren't forced
-to install the ``mcp`` SDK.
+This config works regardless of whether the user has sqlproof in
+any project venv — ``uvx`` runs the server in its own ephemeral
+environment.
+
+For Python-package callers (notebooks, custom CLI scripts) who
+need the tool LOGIC without the MCP runtime, import
+``sqlproof.mcp.tools`` directly — those functions don't depend on
+the ``mcp`` SDK and ship with the base ``sqlproof`` install.
 """
 
 from __future__ import annotations
