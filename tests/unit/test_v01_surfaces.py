@@ -69,9 +69,20 @@ def test_cli_version_and_introspect(tmp_path, capsys) -> None:
     assert "orders" in output
 
 
-def test_pytest_plugin_registers_options(pytester) -> None:
+def test_pytest_plugin_registers_database_url_flag(pytester) -> None:
+    """The sqlproof pytest plugin registers exactly one CLI flag:
+    ``--sqlproof-database-url``. The vestigial flags (--sqlproof-runs,
+    --sqlproof-seed, etc.) were removed in #5 / PR #55 — they were
+    declared but never wired into anything, so claiming them as a
+    public surface was misleading. See pytest_plugin.py's
+    pytest_addoption docstring for the rationale and the migration
+    path for each removed flag.
+
+    Failure case it addresses: silent regressions that re-introduce
+    the noisy declared-but-no-op flags, or that drop the lone stable
+    flag (--sqlproof-database-url) which IS wired and tested."""
     result = pytester.runpytest("--help")
-    result.stdout.fnmatch_lines(["*--sqlproof-runs=SQLPROOF_RUNS*"])
+    result.stdout.fnmatch_lines(["*--sqlproof-database-url=SQLPROOF_DATABASE_URL*"])
 
 
 def test_capability_runner_decorators_execute(tmp_path) -> None:
