@@ -1,7 +1,8 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
-  "_comment": "Claude Code project settings. Declares the alialavia/pbt-skills plugin so agents working on this codebase auto-load the foundational property-based-testing skills (covers the general patterns this project's AGENTS.md assumes). Copy this file into your own project's .claude/ directory to get the same auto-load when an agent works on your sqlproof-using project.",
+  "_comment": "Claude Code project settings. Declares two plugins so agents working on this codebase auto-load the right skills: pbt-skills for the foundational property-based-testing patterns (anti-tautology, oracle naming, generators), and sqlproof-skills for sqlproof-specific patterns (RLS, RPC, stateful, CI setup). Copy this file into your own project's .claude/ directory to get the same auto-load when an agent works on your sqlproof-using project.",
   "plugins": [
-    "alialavia/pbt-skills"
+    "alialavia/pbt-skills",
+    "alialavia/sqlproof-skills"
   ]
 }
