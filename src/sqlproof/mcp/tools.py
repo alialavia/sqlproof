@@ -312,7 +312,11 @@ def _serialize_dataset(
             return str(value)
         if isinstance(value, (datetime, date, time)):
             return value.isoformat()
-        if isinstance(value, bytes):  # pragma: no cover — sqlproof's row generator doesn't emit BYTEA columns yet; this branch reserves the encoding for when it does
+        # `bytes` branch is reserved for when sqlproof's row generator
+        # eventually emits BYTEA columns; the current generator never
+        # produces bytes, so this is unreachable in tests. Pragma keeps
+        # coverage honest without dragging in a synthetic test.
+        if isinstance(value, bytes):  # pragma: no cover
             # base64-encode binary so the JSON round-trips reversibly
             import base64
 
