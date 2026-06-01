@@ -204,12 +204,79 @@ expire or a tag was pushed manually), trigger it from the Actions tab:
 workflow's `workflow_dispatch` input checks out the tag you specify and
 runs the same build + publish pipeline.
 
-### Pre-1.0 versioning
+### Stability and deprecation policy
 
-sqlproof is in `0.x` and will remain so until the public API surface is
-stable enough to commit to backwards compatibility. While in `0.x`,
-**breaking changes bump minor** (0.5.x → 0.6.0), not major. Documented in
-the changelog under "Breaking Changes."
+This is the contract sqlproof commits to. Read it before you depend on
+the library in production-shaped contexts.
+
+#### What's covered by the stability policy
+
+| Surface | Stable? | Notes |
+|---|---|---|
+| Public Python API: `sqlproof.*` re-exports (`SqlProof`, `sqlproof`, `ExternalTableSpec`, `SqlProofClient`, etc.) | ✅ — see [Pre-1.0 specifics](#pre-10-specifics) below for the 0.x caveat | The surface the README and quickstart docs describe |
+| Pytest plugin: fixture names (`proof`, `db`, `supabase_proof`, `supabase_db`) and DSN-resolution order | ✅ | `--sqlproof-database-url` → `$SQLPROOF_DATABASE_URL` → `$SUPABASE_DB_URL` |
+| Pytest plugin CLI flags (`--sqlproof-seed`, `--sqlproof-runs`, etc.) | ⚠ Stabilizing — see [#5](https://github.com/alialavia/sqlproof/issues/5) | Currently in flux; will be locked once #5 closes |
+| Composite GitHub Actions under `.github/actions/**` (inputs, outputs, behavior) | ✅ | External repos `uses:` these — see [Composite actions are user-facing surface](#composite-actions-are-user-facing-surface) above |
+| Failure-counterexample JSON shape in `.sqlproof/failures/*.json` | ✅ | The JSON file is what external tooling reads on a failed property |
+| CLI binary (`sqlproof` entry point in `[project.scripts]`) | ⚠ Stabilizing — see [#5](https://github.com/alialavia/sqlproof/issues/5) | Surface acquires real subcommands or gets removed |
+| Module-private names (`_*`, anything not exported from `sqlproof/__init__.py`) | ❌ Not stable | Internal — may change in any release |
+| Internal SQL parser AST shape (`schema.model.*`) | ❌ Not stable | Internal representation; may change to add features (e.g., [#3](https://github.com/alialavia/sqlproof/issues/3)) |
+
+If you import something not in the table above, you're depending on
+internals. That can break in any release without notice.
+
+#### What counts as a breaking change
+
+A change is breaking if a reasonable consumer of one of the ✅-stable
+surfaces above would have to update their code (or workflow, or pin) to
+keep working. Concretely:
+
+- **Breaking** — renaming or removing a public function/class/fixture;
+  changing the signature (parameter names, types, required vs optional)
+  of a public function; changing the behavior in a way that violates a
+  documented invariant; changing the resolution order of fixtures or
+  env vars; changing inputs/outputs of a composite action; changing the
+  JSON-counterexample shape in a way that breaks readers.
+- **Not breaking** — adding new optional parameters (with sensible
+  defaults); adding new public functions/classes/fixtures; adding new
+  env vars in the resolution chain so existing vars still work;
+  fixing bugs (behavior changes that make the library do what the
+  contract already said it did).
+
+#### Pre-1.0 specifics
+
+While sqlproof is in `0.x`:
+
+- **Breaking changes bump minor** (`0.5.x` → `0.6.0`), not major. The
+  `release-please-config.json` sets `bump-minor-pre-major: true` to
+  enforce this.
+- **Breaking changes are still announced.** A breaking change MUST
+  carry one of:
+  - `!` after the type/scope in the PR title:
+    `feat(client)!: rename db.execute to db.exec`
+  - A `BREAKING CHANGE:` footer in the PR description (and squash
+    commit body)
+- **Breaking changes are documented in the CHANGELOG** under a
+  `Breaking Changes` section that release-please generates from those
+  footers.
+- **Deprecations get one minor of warning where feasible.** If renaming
+  `proof.foo()` → `proof.bar()`, the previous minor ships both names
+  with `foo()` emitting `DeprecationWarning`, the next minor removes
+  `foo()` and marks it as a breaking change. This is "where feasible" —
+  some renames don't admit a shim and ship as straight breaking
+  changes; this is a strong norm, not a hard rule.
+
+The strong-norm bar reflects the project's pre-1.0 state. After 1.0,
+deprecation periods become contractual (see [Path to 1.0](#path-to-10)
+below).
+
+#### Support window
+
+- **Only the latest `0.x` minor is supported** for security and
+  correctness fixes (see [SECURITY.md](./SECURITY.md)).
+- Earlier `0.x` versions are not backported to. Upgrading to the
+  latest minor is the supported remediation path.
+- After 1.0, this section will be updated to declare a backport window.
 
 ### Path to 1.0
 
