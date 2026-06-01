@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sqlproof"
-version = "0.2.5"
+version = "0.3.0"
 description = "Property-based testing for PostgreSQL schemas and SQL behavior. Pre-1.0; APIs may change between minor versions."
 readme = "README.md"
 requires-python = ">=3.11"

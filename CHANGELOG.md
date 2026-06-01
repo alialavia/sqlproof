@@ -5,6 +5,17 @@ All notable changes to SqlProof will be documented here. The format is based on
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While SqlProof
 remains in `0.x`, minor versions may include breaking changes.
 
+## [0.3.0](https://github.com/alialavia/sqlproof/compare/v0.2.5...v0.3.0) (2026-06-01)
+
+
+### ⚠ BREAKING CHANGES
+
+* **plugin:** lock the pytest plugin CLI flag surface to --sqlproof-database-url ([#55](https://github.com/alialavia/sqlproof/issues/55))
+
+### Added
+
+* **plugin:** lock the pytest plugin CLI flag surface to --sqlproof-database-url ([#55](https://github.com/alialavia/sqlproof/issues/55)) ([027d989](https://github.com/alialavia/sqlproof/commit/027d9896464ca3b480d3d2fa4dee74f6a249ab51))
+
 ## [0.2.5](https://github.com/alialavia/sqlproof/compare/v0.2.4...v0.2.5) (2026-06-01)
 
 
