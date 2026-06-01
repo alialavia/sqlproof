@@ -9,35 +9,44 @@
 
 ---
 
-## Before continuing: install the foundational PBT skills
+## Before continuing: install the two plugins this file builds on
 
-This file is **sqlproof-specific**. It assumes you already know the
-foundational property-based-testing patterns — picking real invariants,
-naming oracles, avoiding tautology traps. Those live in a separate
-plugin and you should load them before reading further.
+This file is **sqlproof-specific**. The patterns below assume you
+already have:
+
+1. **Foundational property-based-testing patterns** — picking real
+   invariants, naming oracles, avoiding tautology traps. Lives in
+   the [`alialavia/pbt-skills`](https://github.com/alialavia/pbt-skills)
+   plugin.
+2. **Per-pattern sqlproof guides** — focused, auto-activating skills
+   for RLS testing, RPC testing, stateful testing, and CI setup.
+   Lives in the
+   [`alialavia/sqlproof-skills`](https://github.com/alialavia/sqlproof-skills)
+   plugin. Each skill is ~200 lines and loads only when the task
+   triggers it — versus this 700-line file which loads in full.
 
 **If you're Claude Code:**
 
 ```
 /plugin install alialavia/pbt-skills
+/plugin install alialavia/sqlproof-skills
 ```
 
-(Or, if this project ships a `.claude/settings.json` — it does — Claude
-Code will prompt you to install the declared plugins on your first
-session here. Accept the prompt.)
+(If this project ships a `.claude/settings.json` — it does — Claude
+Code will prompt you to install both declared plugins on your first
+session here. Accept.)
 
 **If you're Codex / Cursor / Aider / any other agent without a plugin
-system:** fetch the two `SKILL.md` files at
-<https://github.com/alialavia/pbt-skills/tree/main/skills> (the
-`property-based-testing` and `pbt-hypothesis` directories) and load
-them into your context before continuing. They're short
-(~250 lines each), language-agnostic for the core skill, and cover the
-patterns this file builds on rather than re-deriving.
+system:** fetch the SKILL.md files at
+<https://github.com/alialavia/pbt-skills/tree/main/skills> and
+<https://github.com/alialavia/sqlproof-skills/tree/main/skills>
+and load them into your context before continuing.
 
 Without `pbt-skills` (or its content in your context), the tests you
 write against the patterns below will tend to be tautological,
-self-oracle, or property-shaped-but-not-property-based. Loading it once
-fixes that for the rest of the session.
+self-oracle, or property-shaped-but-not-property-based. Without
+`sqlproof-skills`, you'll be reading this entire file every session
+when a focused per-pattern skill would be sufficient.
 
 ---
 
@@ -103,7 +112,8 @@ mkdir -p .claude
 cat > .claude/settings.json <<'JSON'
 {
   "plugins": [
-    "alialavia/pbt-skills"
+    "alialavia/pbt-skills",
+    "alialavia/sqlproof-skills"
   ]
 }
 JSON
