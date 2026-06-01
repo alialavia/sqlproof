@@ -6,7 +6,7 @@ from typing import Any
 from hypothesis import strategies as st
 from hypothesis.strategies import SearchStrategy
 
-from sqlproof.schema.dependency_graph import insertion_order
+from sqlproof.schema.dependency_graph import resolve_insertion_plan
 from sqlproof.schema.model import SchemaInfo
 
 from .rows import ColumnOverrides, table_rows_strategy
@@ -24,7 +24,15 @@ def dataset_strategy(
     external_parent_rows: Mapping[str, list[dict[str, Any]]] | None = None,
     columns: ColumnOverrides | None = None,
 ) -> SearchStrategy[Dataset]:
-    ordered_tables = insertion_order(schema.tables)
+    # Use the full plan even though we only consume `ordered_tables`
+    # here. The deferred-edge info is recomputed by the inserter
+    # (`core._insert_dataset`) — it's cheap and avoids threading the
+    # plan through the dataset dict. The generator's job is to produce
+    # row values; the inserter's job is to execute them in FK-safe order.
+    # For deferred FK columns, the row generator naturally sets them
+    # to NULL (the column is nullable and no parent rows exist when
+    # the source table is processed — see rows.py's FK fallback path).
+    ordered_tables = resolve_insertion_plan(schema.tables).ordered_tables
     external_parent_rows = external_parent_rows or {}
 
     @st.composite
