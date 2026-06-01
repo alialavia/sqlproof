@@ -53,6 +53,7 @@ Changelog = "https://github.com/alialavia/sqlproof/blob/main/CHANGELOG.md"
 [project.optional-dependencies]
 testcontainers = ["testcontainers[postgres]>=4.0"]
 pydantic = ["pydantic>=2.0"]
+mcp = ["mcp>=1.27"]
 dev = [
   "pytest>=8.0",
   "pytest-cov",
@@ -64,6 +65,9 @@ dev = [
   "pyright",
   "ruff",
   "uv",
+  # mcp is also pulled in by `dev` so the test suite can import it
+  # without a separate `--extra mcp` flag during local development.
+  "mcp>=1.27",
 ]
 
 [project.entry-points.pytest11]
@@ -71,6 +75,7 @@ sqlproof = "sqlproof.pytest_plugin"
 
 [project.scripts]
 sqlproof = "sqlproof.cli:main"
+sqlproof-mcp = "sqlproof.mcp.server:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/sqlproof"]
