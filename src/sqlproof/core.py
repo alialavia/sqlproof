@@ -17,7 +17,7 @@ from sqlproof.config import ExternalSeed, ExternalTableSpec, SqlProofConfig
 from sqlproof.exceptions import SqlProofPropertyFailure, SqlProofUsageError
 from sqlproof.generators.graph import ColumnOverrides, Dataset, SizeSpec, dataset_strategy
 from sqlproof.generators.sampling import draw_example
-from sqlproof.schema.dependency_graph import insertion_order
+from sqlproof.schema.dependency_graph import resolve_insertion_plan
 from sqlproof.schema.fingerprint import compute
 from sqlproof.schema.introspect import introspect_schema
 from sqlproof.schema.model import Column, SchemaInfo, Table
@@ -247,20 +247,103 @@ def _insert_dataset(
     schema_info: SchemaInfo,
     dataset: dict[str, list[dict[str, Any]]],
 ) -> None:
+    """Insert the generated dataset into the database in FK-safe order.
+
+    Two passes when the schema has cycles resolvable via deferred FKs
+    (see ``sqlproof.schema.dependency_graph`` for the algorithm):
+
+      1. INSERT pass — every row, in topological order of the FK
+         graph WITH deferred edges removed. Deferred FK columns are
+         excluded from the column list and INSERTed as NULL (the
+         column's default, since deferral requires nullable columns).
+
+      2. UPDATE pass — for each deferred edge, populate the deferred
+         FK columns by sampling a referenced row. The dataset
+         generator left these columns NULL on purpose; this pass
+         picks an arbitrary referenced row per source row to satisfy
+         the FK after both rows exist.
+
+    Schemas without cycles produce zero deferred edges; the UPDATE
+    pass is a no-op and behavior is identical to the pre-cycle-
+    handling code path. See #47 for the original repro.
+    """
     if not any(rows for rows in dataset.values()):
         return
-    for table in insertion_order(schema_info.tables):
+
+    plan = resolve_insertion_plan(schema_info.tables)
+
+    # Map source_table -> set of deferred FK column names. Used to
+    # filter columns out of the INSERT statement.
+    deferred_columns_by_table: dict[str, set[str]] = {}
+    for edge in plan.deferred_edges:
+        deferred_columns_by_table.setdefault(edge.source_table, set()).update(edge.fk_columns)
+
+    # --- Pass 1: INSERT all rows in dependency order, skipping deferred FK columns.
+    for table in plan.ordered_tables:
         rows = dataset.get(table.name, [])
+        deferred_cols = deferred_columns_by_table.get(table.name, set())
         for row in rows:
             if not row:
                 continue
-            columns = list(row)
+            columns = [c for c in row if c not in deferred_cols]
+            if not columns:
+                # All columns deferred — let the DB's defaults handle it.
+                # Rare/contrived case; safe to skip.
+                continue
             placeholders = ", ".join(["%s"] * len(columns))
             column_sql = ", ".join(_quote_identifier(column) for column in columns)
             table_sql = f"{_quote_identifier(table.schema)}.{_quote_identifier(table.name)}"
             sql = f"INSERT INTO {table_sql} ({column_sql}) VALUES ({placeholders})"
             values = [_adapt_insert_value(table, column, row[column]) for column in columns]
             client.execute(sql, *values)
+
+    # --- Pass 2: UPDATE deferred FK columns now that both ends exist.
+    if not plan.deferred_edges:
+        return
+
+    by_name = {t.name: t for t in schema_info.tables}
+    for edge in plan.deferred_edges:
+        source_rows = dataset.get(edge.source_table, [])
+        ref_rows = dataset.get(edge.referenced_table, [])
+        if not source_rows or not ref_rows:
+            # No source rows or no targets to point at — UPDATE would
+            # find/touch nothing, so skip.
+            continue
+        source_table = by_name[edge.source_table]
+        ref_table = by_name[edge.referenced_table]
+        table_sql = (
+            f"{_quote_identifier(source_table.schema)}."
+            f"{_quote_identifier(source_table.name)}"
+        )
+        set_clause = ", ".join(
+            f"{_quote_identifier(col)} = %s" for col in edge.fk_columns
+        )
+        # WHERE clause matches the source row by its primary key. We
+        # require the dataset to have included the PK columns in each
+        # row (the generator always does — see rows.py's PK handling).
+        if not source_table.primary_key:
+            continue  # Pathological schema; can't UPDATE without an identity.
+        where_clause = " AND ".join(
+            f"{_quote_identifier(pk)} = %s" for pk in source_table.primary_key
+        )
+        sql = f"UPDATE {table_sql} SET {set_clause} WHERE {where_clause}"
+
+        # Pick a referenced row per source row. Deterministic-ish
+        # (round-robin via modulo) so the same dataset produces the
+        # same UPDATEs across reruns — helpful when shrinking.
+        for i, source_row in enumerate(source_rows):
+            if not source_row:
+                continue
+            ref_row = ref_rows[i % len(ref_rows)]
+            ref_values = [
+                _adapt_insert_value(ref_table, ref_col, ref_row[ref_col])
+                for ref_col in edge.referenced_columns
+            ]
+            pk_values = [
+                _adapt_insert_value(source_table, pk, source_row[pk])
+                for pk in source_table.primary_key
+            ]
+            client.execute(sql, *ref_values, *pk_values)
 
 
 def _quote_identifier(identifier: str) -> str:
