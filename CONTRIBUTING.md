@@ -96,7 +96,7 @@ period.
 | `feat` | minor bump | Added |
 | `fix` | patch bump | Fixed |
 | `perf` | patch bump | Performance |
-| `docs` | no | Documentation |
+| `docs` | no | hidden |
 | `refactor` | no | Changed |
 | `test` | no | hidden |
 | `chore` | no | hidden |
