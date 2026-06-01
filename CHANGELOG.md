@@ -5,6 +5,27 @@ All notable changes to SqlProof will be documented here. The format is based on
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While SqlProof
 remains in `0.x`, minor versions may include breaking changes.
 
+## [0.2.4](https://github.com/alialavia/sqlproof/compare/v0.2.2...v0.2.4) - 2026-06-01
+
+### Fixed
+
+- **`storage.buckets` missing columns on bare `supabase/postgres` images.**
+  The `setup-supabase-test-db` composite action now adds the columns
+  Supabase Storage migrations 0008+ ship: `public`, `avif_autodetection`,
+  `file_size_limit`, `allowed_mime_types`, `owner_id`, `type` (+ the
+  `storage.BucketType` enum). Test code that does
+  `INSERT INTO storage.buckets (id, name, public)` now applies cleanly
+  against the image, matching managed Supabase semantics. Pinned action
+  consumers should update to `@v0.2.4` to pick this up.
+  ([#46](https://github.com/alialavia/sqlproof/pull/46))
+
+### Internal
+
+- Enforce that PRs touching `.github/actions/**` use release-triggering
+  commit types (`feat`/`fix`/`perf`). Prevents the silent-bypass class
+  of bug that #46 itself exposed.
+  ([#48](https://github.com/alialavia/sqlproof/pull/48))
+
 ## [0.2.3](https://github.com/alialavia/sqlproof/compare/v0.2.2...v0.2.3) (2026-06-01)
 
 
