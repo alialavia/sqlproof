@@ -1,0 +1,64 @@
+name: PR rules for composite actions
+
+# Anything in `.github/actions/**` is a user-facing artifact — external
+# repos `uses:` it via `alialavia/sqlproof/.github/actions/<name>@<ref>`.
+# Changes to it need to ship as a tagged release so pinned consumers
+# pick them up. That means the PR's commit type must trigger a
+# release-please run: `feat`, `fix`, `perf`, or any `!` / BREAKING CHANGE
+# variant. Hidden types (`ci`, `chore`, `docs`, etc.) silently land on
+# main and never reach a release tag — which is the bug PR #46 caused.
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  pull-requests: read
+  contents: read
+
+jobs:
+  classify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: dorny/paths-filter@v3
+        id: changes
+        with:
+          filters: |
+            actions:
+              - '.github/actions/**'
+
+      - name: Enforce release-triggering type for composite-action changes
+        if: steps.changes.outputs.actions == 'true'
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          set -euo pipefail
+          echo "PR touches .github/actions/** — checking commit type."
+          echo "PR title: $PR_TITLE"
+
+          # Allowed: feat, fix, perf (with optional scope and optional `!`).
+          # Also allowed: anything where the body carries a BREAKING CHANGE
+          # footer (release-please reads that too).
+          if [[ "$PR_TITLE" =~ ^(feat|fix|perf)(\(.+\))?!?: ]]; then
+            echo "OK — PR uses release-triggering type."
+            exit 0
+          fi
+
+          if [[ "${{ github.event.pull_request.body }}" == *"BREAKING CHANGE:"* ]]; then
+            echo "OK — PR body carries BREAKING CHANGE footer."
+            exit 0
+          fi
+
+          # Disallowed. Tell the contributor exactly what to do.
+          echo
+          echo "::error title=Composite-action change needs a release-triggering type::This PR modifies .github/actions/** but its title does not use feat:, fix:, or perf: — so release-please will not pick it up and pinned consumers (uses: ...@v0.X.Y) won't get the change."
+          echo
+          echo "Rename the PR title to use one of:"
+          echo "  feat(action): <subject>    (minor bump in 0.x; recommended for new behavior)"
+          echo "  fix(action): <subject>     (patch bump; recommended for bug fixes)"
+          echo "  perf(action): <subject>    (patch bump; for performance changes)"
+          echo
+          echo "The (action) scope is conventional but not strictly required — feat:/fix:/perf: alone also work. What matters is the TYPE."
+          echo
+          echo "See CONTRIBUTING.md → 'How releases work' → 'Composite actions are user-facing surface' for the full rationale."
+          exit 1

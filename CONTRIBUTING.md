@@ -147,6 +147,33 @@ between merging a feature PR and the next release going live, except for
 clicking "Squash and merge" twice (once on the feature, once on the
 release).
 
+### Composite actions are user-facing surface
+
+Anything under `.github/actions/**` (e.g.
+`setup-supabase-test-db`) is a user-facing artifact — external repos
+reference it via `uses: alialavia/sqlproof/.github/actions/<name>@<ref>`.
+That ref is usually a tag (`@v0.2.3`), not `@main`, so pinned consumers
+**only see changes that ship as a tagged release**.
+
+So changes to `.github/actions/**` must use a release-triggering commit
+type:
+
+- ✅ `feat(action): <subject>` — minor bump in 0.x
+- ✅ `fix(action): <subject>` — patch bump
+- ✅ `perf(action): <subject>` — patch bump
+- ❌ `ci: <subject>` — hidden in CHANGELOG, no release triggered
+- ❌ `chore: <subject>`, `docs: <subject>`, etc. — same; doesn't ship
+
+The `(action)` scope is conventional but not strictly required — what
+matters is the TYPE. CI enforces this rule via the `pr-action-rules`
+workflow, which fails the build with an actionable error if a PR
+touching `.github/actions/**` uses a hidden type.
+
+**Why this rule exists:** previously, a `ci: bring storage.buckets up
+to migrations 0008+` change landed on main and silently shipped to
+nobody — pinned consumers stayed on the old action. The rule
+prevents a recurrence.
+
 ### How release-please pushes tags that trigger downstream workflows
 
 Tags pushed by the default `GITHUB_TOKEN` **do not trigger other
