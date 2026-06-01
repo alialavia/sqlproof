@@ -5,6 +5,13 @@ All notable changes to SqlProof will be documented here. The format is based on
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While SqlProof
 remains in `0.x`, minor versions may include breaking changes.
 
+## [0.2.3](https://github.com/alialavia/sqlproof/compare/v0.2.2...v0.2.3) (2026-06-01)
+
+
+### Documentation
+
+* **agents:** pbt-skills prereq, CI/CD section, bootstrap, refreshed anti-patterns ([#42](https://github.com/alialavia/sqlproof/issues/42)) ([f7e2372](https://github.com/alialavia/sqlproof/commit/f7e2372f5d07d3812c3a948689018476347b90ac))
+
 ## [0.2.2](https://github.com/alialavia/sqlproof/compare/v0.2.1...v0.2.2) (2026-05-30)
 
 
