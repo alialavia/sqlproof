@@ -5,6 +5,11 @@ All notable changes to SqlProof will be documented here. The format is based on
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While SqlProof
 remains in `0.x`, minor versions may include breaking changes.
 
+## [0.2.4](https://github.com/alialavia/sqlproof/compare/v0.2.3...v0.2.4) (2026-06-01)
+
+
+* enforce that PRs touching .github/actions/** use feat/fix/perf types ([#48](https://github.com/alialavia/sqlproof/issues/48)) ([455191c](https://github.com/alialavia/sqlproof/commit/455191ca8cdd0ccfc3cee315a3da03ea20e8236f))
+
 ## [0.2.3](https://github.com/alialavia/sqlproof/compare/v0.2.2...v0.2.3) (2026-06-01)
 
 
