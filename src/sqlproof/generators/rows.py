@@ -6,7 +6,8 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from hypothesis import assume, strategies as st
+from hypothesis import assume
+from hypothesis import strategies as st
 from hypothesis.strategies import SearchStrategy
 
 from sqlproof.exceptions import SqlProofGenerationError
@@ -121,7 +122,7 @@ def table_rows_strategy(
                 # valid draw within `max_examples`/health-check
                 # budget — which happens iff the user asked for more
                 # rows than the constraint space allows (e.g.
-                # `sizes={"org_members": 100}` with only 2 orgs ×
+                # `sizes={"org_members": 100}` with only 2 orgs x
                 # 2 users in the FK pool).
                 assume(tuple_value not in seen_per_key[key])
                 seen_per_key[key].add(tuple_value)
