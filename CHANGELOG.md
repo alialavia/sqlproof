@@ -5,6 +5,14 @@ All notable changes to SqlProof will be documented here. The format is based on
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While SqlProof
 remains in `0.x`, minor versions may include breaking changes.
 
+## [0.4.0](https://github.com/alialavia/sqlproof/compare/v0.3.0...v0.4.0) (2026-06-01)
+
+
+### Added
+
+* **generator:** enforce composite UNIQUE and composite PRIMARY KEY ([#54](https://github.com/alialavia/sqlproof/issues/54)) ([c87ec67](https://github.com/alialavia/sqlproof/commit/c87ec67f1bbd8fc8e5f6e7ed08b6143a32642ca5))
+* **schema:** resolve legitimate FK cycles via deferred edges ([#53](https://github.com/alialavia/sqlproof/issues/53)) ([2beecd5](https://github.com/alialavia/sqlproof/commit/2beecd5e38674aad0c5d285858bc132c7937178d))
+
 ## [0.3.0](https://github.com/alialavia/sqlproof/compare/v0.2.5...v0.3.0) (2026-06-01)
 
 
