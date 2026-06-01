@@ -42,6 +42,14 @@ The server runs in the foreground and reads MCP protocol messages
 on stdin / stdout; press Ctrl-C to stop.
 """
 
+# The inner tool functions in `_build_server()` are registered with
+# FastMCP via `@mcp.tool()`. The decorator returns the function
+# unchanged (registration is a side effect on the server object), so
+# pyright in strict mode flags them as unused. Disable the check
+# file-wide — every function definition in this module is a tool
+# registration, so a false positive on one is a false positive on all.
+# pyright: reportUnusedFunction=false
+
 from __future__ import annotations
 
 from typing import Any
