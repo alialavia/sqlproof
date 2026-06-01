@@ -6,20 +6,23 @@
 
 **→ Full docs: [sqlproof.com](https://sqlproof.com)**
 
-> ⚠️ **Pre-1.0 (`0.x`).** APIs may change between minor versions per the
-> working deprecation policy. Postgres edge cases and Hypothesis shrink
-> behavior are still being discovered, and coverage of the schema surface
-> area is incomplete. **Evaluate carefully before relying on this for
-> production test suites.** Bug reports and reproductions welcome —
-> [open an issue](https://github.com/alialavia/sqlproof/issues).
+> ⚠️ **Pre-1.0 (`0.x`).** APIs may change between minor versions, but
+> changes follow a documented policy: see
+> [Stability and deprecation policy](./CONTRIBUTING.md#stability-and-deprecation-policy)
+> for what counts as breaking, how deprecations are announced, and
+> what the path to 1.0 looks like. Postgres edge cases and Hypothesis
+> shrink behavior are still being discovered, and coverage of the
+> schema surface area is incomplete. **Evaluate carefully before
+> relying on this for production test suites.** Bug reports and
+> reproductions welcome — [open an issue](https://github.com/alialavia/sqlproof/issues).
 >
 > Known gaps tracked openly in the [issue list](https://github.com/alialavia/sqlproof/issues):
 > - [#3 Schema: exclusion constraints, partial unique indexes, generated columns](https://github.com/alialavia/sqlproof/issues/3)
 > - [#4 Generators: range types, composite types, custom domains](https://github.com/alialavia/sqlproof/issues/4)
 > - [#5 Pytest plugin: CLI flags and reporter wiring still stabilizing](https://github.com/alialavia/sqlproof/issues/5)
-> - [#6 Deprecation policy for 0.x](https://github.com/alialavia/sqlproof/issues/6)
 > - [#7 Coverage: CLI and reporter modules](https://github.com/alialavia/sqlproof/issues/7)
 > - [#26 Generator: composite UNIQUE / PRIMARY KEY support](https://github.com/alialavia/sqlproof/issues/26)
+> - [#47 insertion_order: legitimate FK cycles](https://github.com/alialavia/sqlproof/issues/47)
 
 Property-based testing for PostgreSQL schemas and SQL behavior. Define properties about
 your database code; SqlProof generates valid datasets with Hypothesis, executes your
