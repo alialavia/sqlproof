@@ -49,6 +49,31 @@ if TYPE_CHECKING:  # pragma: no cover
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
+    """Register sqlproof's pytest CLI flags.
+
+    Only one flag is exposed: ``--sqlproof-database-url``. The plugin
+    previously also declared ``--sqlproof-seed``, ``--sqlproof-runs``,
+    ``--sqlproof-show-counterexample``, ``--sqlproof-coverage``,
+    ``--sqlproof-diversity-report``, ``--sqlproof-postgres-image``,
+    and ``--sqlproof-verbose`` as future-work placeholders that
+    were never wired up. They've been removed per #5 / #51's
+    deprecation policy — keeping declared-but-no-op flags as a
+    "public surface" was misleading users into thinking they
+    could control behavior they can't.
+
+    If you actually need any of those behaviors:
+      * ``--sqlproof-coverage`` → use ``coverage_session`` from
+        ``sqlproof.contrib.plpgsql_coverage`` in your test code
+        (the per-session model in plpgsql_check requires the same
+        DB connection as your tests, so a CLI flag can't deliver
+        it usefully anyway).
+      * ``--sqlproof-seed`` / ``--sqlproof-runs`` → configure
+        Hypothesis directly via ``@settings(max_examples=N, ...)``
+        on your property tests; Hypothesis already exposes the
+        seed via ``--hypothesis-seed``.
+      * The rest → file an issue describing the actual workflow
+        the flag would unlock.
+    """
     group = parser.getgroup("sqlproof")
     group.addoption(
         "--sqlproof-database-url",
@@ -58,53 +83,6 @@ def pytest_addoption(parser: pytest.Parser) -> None:
             "$SQLPROOF_DATABASE_URL, then $SUPABASE_DB_URL."
         ),
     )
-    group.addoption("--sqlproof-seed", action="store", type=int, help="Fix the SqlProof seed.")
-    group.addoption(
-        "--sqlproof-runs", action="store", type=int, help="Override SqlProof run count."
-    )
-    group.addoption(
-        "--sqlproof-show-counterexample",
-        action="store_true",
-        help="Print full SqlProof counterexamples.",
-    )
-    group.addoption("--sqlproof-coverage", action="store_true", help="Enable PL/pgSQL coverage.")
-    group.addoption(
-        "--sqlproof-diversity-report",
-        action="store_true",
-        help="Print generator diversity report.",
-    )
-    group.addoption("--sqlproof-postgres-image", action="store", help="Override Postgres image.")
-    group.addoption("--sqlproof-verbose", action="store_true", help="Enable DEBUG logging.")
-
-
-def pytest_unconfigure(config: pytest.Config) -> None:
-    pass
-
-
-def pytest_configure(config: pytest.Config) -> None:
-    # --sqlproof-coverage is intentionally a no-op at the plugin level.
-    #
-    # PL/pgSQL coverage data is per-session in Postgres: `plpgsql_profiler_reset_all`
-    # and `plpgsql_profiler_function_tb` must be called on the *same connection* that
-    # executes the functions under test. The pytest plugin cannot intercept that
-    # connection (it is owned by SqlProof / DBManager), so a session-level hook
-    # cannot collect meaningful data.
-    #
-    # Use `coverage_session` (or the lower-level `collect_coverage`) from your
-    # test code instead, passing the same `db` client the tests use:
-    #
-    #   from sqlproof.contrib.plpgsql_coverage import coverage_session
-    #
-    #   def test_trigger_coverage(proof):
-    #       with proof.client_for_dataset({}) as db:
-    #           with coverage_session(db, ["assert_org_has_owner"], cluster="orgs") as ...:
-    #               ...
-    #
-    if config.getoption("--sqlproof-coverage", default=False):
-        print(
-            "\n[sqlproof] --sqlproof-coverage: use coverage_session(db, ...) "
-            "from test code to report coverage on a specific connection."
-        )
 
 
 # ---------------------------------------------------------------------------

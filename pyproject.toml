@@ -103,8 +103,15 @@ omit = [
   "src/sqlproof/__init__.py",
   "src/sqlproof/_version.py",
   "src/sqlproof/cli.py",
-  "src/sqlproof/pytest_plugin.py",
   "src/sqlproof/coverage/plpgsql.py",
+  # pytest_plugin.py: most of the file's runtime behavior lives inside
+  # fixtures exercised via pytester's subprocess pytest runs, whose
+  # coverage isn't captured by the outer pytest-cov without subprocess
+  # instrumentation (parallel coverage + .coveragerc tweaks). Lifting
+  # this file from omit cleanly is tracked as a follow-up to #5;
+  # the CLI flag surface (the main user-facing concern of #5) is now
+  # stable and tested via pytester directly.
+  "src/sqlproof/pytest_plugin.py",
   "src/sqlproof/reporter/console.py",
   "src/sqlproof/reporter/json_io.py",
   "src/sqlproof/types.py",
