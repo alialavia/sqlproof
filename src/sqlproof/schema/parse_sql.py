@@ -11,6 +11,7 @@ from sqlproof.exceptions import SqlProofSchemaError
 from sqlproof.schema.model import (
     CheckConstraint,
     Column,
+    ExclusionConstraint,
     ForeignKey,
     PartialUniqueConstraint,
     PgType,
@@ -96,6 +97,7 @@ def _attach_partial_unique_indexes(
             check_constraints=t.check_constraints,
             opaque_constraints=t.opaque_constraints,
             partial_unique_constraints=tuple(by_qname.get((t.schema, t.name), ())),
+            exclusion_constraints=t.exclusion_constraints,
         )
         for t in tables
     )
@@ -124,6 +126,7 @@ def _parse_table_statement(statement: Any, enum_names: dict[str, PgType], schema
     foreign_keys: list[ForeignKey] = []
     unique_constraints: list[tuple[str, ...]] = []
     check_constraints: list[CheckConstraint] = []
+    exclusion_constraints: list[ExclusionConstraint] = []
 
     for element in statement.tableElts or ():
         if type(element).__name__ == "ColumnDef":
@@ -147,6 +150,8 @@ def _parse_table_statement(statement: Any, enum_names: dict[str, PgType], schema
             foreign_keys.append(_parse_foreign_key(element))
         elif element.contype == ConstrType.CONSTR_CHECK:
             check_constraints.append(_parse_check(element))
+        elif element.contype == ConstrType.CONSTR_EXCLUSION:
+            exclusion_constraints.append(_parse_exclusion(element))
 
     return Table(
         schema=table_schema,
@@ -156,6 +161,36 @@ def _parse_table_statement(statement: Any, enum_names: dict[str, PgType], schema
         foreign_keys=tuple(foreign_keys),
         unique_constraints=tuple(unique_constraints),
         check_constraints=tuple(check_constraints),
+        exclusion_constraints=tuple(exclusion_constraints),
+    )
+
+
+def _parse_exclusion(constraint: Any) -> ExclusionConstraint:
+    """Parse a table-level EXCLUDE constraint.
+
+    ``constraint.exclusions`` is a tuple of ``(IndexElem, (String,
+    ...))`` pairs. The IndexElem gives the column name; the String
+    nodes carry the operator name (typically a single operator per
+    column). ``constraint.access_method`` is the index AM ("gist",
+    "btree", "btree_gist", …) — defaults to "gist" when the user
+    omits ``USING`` for an EXCLUDE clause.
+    """
+    columns_with_operators: list[tuple[str, str]] = []
+    for index_elem, operator_strings in constraint.exclusions or ():
+        column_name = getattr(index_elem, "name", None)
+        if column_name is None:
+            # Expression-form (`EXCLUDE (lower(name) WITH =)`) — render
+            # the expression text so the model still surfaces something
+            # stable. The generator won't enforce it.
+            column_name = _render(index_elem.expr) if index_elem.expr is not None else ""
+        # Postgres parses each operator into a list of qualified name
+        # parts; the actual operator symbol is the last String.
+        operator = _sval(operator_strings[-1])
+        columns_with_operators.append((column_name, operator))
+    access_method = constraint.access_method or "gist"
+    return ExclusionConstraint(
+        columns_with_operators=tuple(columns_with_operators),
+        access_method=access_method,
     )
 
 

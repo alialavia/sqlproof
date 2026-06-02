@@ -266,6 +266,13 @@ def _serialize_table(table: Table) -> dict[str, Any]:
             {"columns": list(pu.columns), "predicate": pu.predicate}
             for pu in table.partial_unique_constraints
         ],
+        "exclusion_constraints": [
+            {
+                "columns_with_operators": [list(p) for p in exc.columns_with_operators],
+                "access_method": exc.access_method,
+            }
+            for exc in table.exclusion_constraints
+        ],
         "check_constraints": [_serialize_check_constraint(c) for c in table.check_constraints],
     }
 

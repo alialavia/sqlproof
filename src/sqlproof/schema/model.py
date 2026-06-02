@@ -36,6 +36,22 @@ class PartialUniqueConstraint:
 
 
 @dataclass(frozen=True, slots=True)
+class ExclusionConstraint:
+    """Postgres EXCLUDE constraint — one (column, operator) pair
+    per element, plus the access method.
+
+    Generalizes UNIQUE: rejects any pair of rows where ALL
+    operators evaluate true on the (row_a.col, row_b.col) pairs.
+    Canonical example: ``EXCLUDE USING gist (room WITH =, during
+    WITH &&)`` prevents two bookings from overlapping in time on
+    the same room.
+    """
+
+    columns_with_operators: tuple[tuple[str, str], ...]
+    access_method: str
+
+
+@dataclass(frozen=True, slots=True)
 class Column:
     name: str
     type: PgType
@@ -66,6 +82,7 @@ class Table:
     check_constraints: tuple[CheckConstraint, ...]
     opaque_constraints: tuple[str, ...] = ()
     partial_unique_constraints: tuple[PartialUniqueConstraint, ...] = ()
+    exclusion_constraints: tuple[ExclusionConstraint, ...] = ()
 
     @property
     def qualified_name(self) -> str:
