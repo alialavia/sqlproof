@@ -37,6 +37,16 @@ def strategy_for_type(pg_type: PgType) -> SearchStrategy[Any]:
         return strategy_for_type(pg_type.base)
     if pg_type.kind == "range" and pg_type.base is not None:
         return _range_strategy(pg_type)
+    if pg_type.kind == "composite":
+        # Recursive: a composite field's type can itself be another
+        # composite; strategy_for_type calls back into itself for
+        # each field. Returned value is a dict so users can address
+        # fields by name in property tests; matching the wire
+        # format for INSERT is a follow-up that needs psycopg
+        # composite-class registration.
+        return st.fixed_dictionaries(
+            {fname: strategy_for_type(ftype) for fname, ftype in pg_type.composite_fields}
+        )
     if name in {"smallint", "int2"}:
         return st.integers(-32_768, 32_767)
     if name in {"integer", "int", "int4", "serial"}:

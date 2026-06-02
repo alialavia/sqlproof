@@ -20,6 +20,10 @@ class PgType:
     # `VALUE` for the actual column name and feeds the result through
     # the standard CHECK-refinement pipeline.
     check_expressions: tuple[str, ...] = ()
+    # Field name / type pairs for `kind="composite"`. Empty for
+    # non-composite types. Recursive: a field's type can itself be
+    # another PgType(kind="composite", ...).
+    composite_fields: tuple[tuple[str, PgType], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
