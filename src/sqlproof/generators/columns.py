@@ -5,6 +5,7 @@ from typing import Any, Literal
 
 from hypothesis import strategies as st
 from hypothesis.strategies import SearchStrategy
+from psycopg.types.range import Range
 
 from sqlproof.schema.model import Column, PgType
 
@@ -34,6 +35,8 @@ def strategy_for_type(pg_type: PgType) -> SearchStrategy[Any]:
         # pipeline (which knows the actual column name to substitute
         # for the `VALUE` placeholder in the CHECK expressions).
         return strategy_for_type(pg_type.base)
+    if pg_type.kind == "range" and pg_type.base is not None:
+        return _range_strategy(pg_type)
     if name in {"smallint", "int2"}:
         return st.integers(-32_768, 32_767)
     if name in {"integer", "int", "int4", "serial"}:
@@ -100,3 +103,28 @@ def strategy_for_type(pg_type: PgType) -> SearchStrategy[Any]:
 
 def _postgres_text(*, min_size: int = 0, max_size: int | None = None) -> SearchStrategy[str]:
     return st.text(alphabet=POSTGRES_TEXT_ALPHABET, min_size=min_size, max_size=max_size)
+
+
+def _range_strategy(pg_type: PgType) -> SearchStrategy[Range[Any]]:
+    """Build a psycopg Range strategy from the element type.
+
+    Draws two element values, filters out the equal-pair case
+    (which would produce an empty Range with `[)` bounds —
+    technically valid in Postgres but almost never what a test
+    wants), then orders the pair so lower < upper. The ``'[)'``
+    bounds match Postgres's canonical form for discrete range
+    types like int4range and daterange.
+
+    Equal-pair collisions are extraordinarily rare for date and
+    datetime element strategies (Hypothesis's ``st.datetimes`` /
+    ``st.dates`` cover wide spans), and for numeric types the
+    integers / decimals strategies have plenty of headroom. The
+    filter is cheap.
+    """
+    assert pg_type.base is not None
+    element_strategy = strategy_for_type(pg_type.base)
+    return (
+        st.tuples(element_strategy, element_strategy)
+        .filter(lambda pair: pair[0] != pair[1])
+        .map(lambda pair: Range(min(pair), max(pair), "[)"))
+    )
