@@ -8,8 +8,18 @@ if TYPE_CHECKING:
     from sqlproof.config import ExternalTableSpec, SqlProofConfig
     from sqlproof.core import SqlProof
     from sqlproof.runners import sqlproof
+    from sqlproof.surface import DriftReport, SurfaceRegistry, SurfaceRegistryDrift
 
-__all__ = ["ExternalTableSpec", "SqlProof", "SqlProofConfig", "__version__", "sqlproof"]
+__all__ = [
+    "DriftReport",
+    "ExternalTableSpec",
+    "SqlProof",
+    "SqlProofConfig",
+    "SurfaceRegistry",
+    "SurfaceRegistryDrift",
+    "__version__",
+    "sqlproof",
+]
 
 
 def __getattr__(name: str) -> object:
@@ -29,4 +39,8 @@ def __getattr__(name: str) -> object:
         from sqlproof.runners import sqlproof
 
         return sqlproof
+    if name in {"SurfaceRegistry", "SurfaceRegistryDrift", "DriftReport"}:
+        from sqlproof import surface
+
+        return getattr(surface, name)
     raise AttributeError(name)
