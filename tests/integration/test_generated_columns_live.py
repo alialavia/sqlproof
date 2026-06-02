@@ -22,12 +22,16 @@ import pytest
 
 from sqlproof.schema.parse_sql import parse_schema_sql
 
+# Use smallint for qty and a small numeric for unit_price so the
+# product can't overflow numeric — Hypothesis's integer strategy
+# otherwise draws full int32 values and the generated `qty *
+# unit_price` overflows ``numeric(10, 2)`` during INSERT.
 SCHEMA_SQL = """
 CREATE TABLE line_items (
     id serial PRIMARY KEY,
-    qty integer NOT NULL,
-    unit_price numeric(10, 2) NOT NULL,
-    amount_total numeric(10, 2) GENERATED ALWAYS AS (qty * unit_price) STORED
+    qty smallint NOT NULL,
+    unit_price numeric(6, 2) NOT NULL,
+    amount_total numeric GENERATED ALWAYS AS (qty * unit_price) STORED
 );
 """
 
@@ -68,11 +72,16 @@ def test_stored_generated_column_survives_full_dataset_insert() -> None:
                 SqlProofConfig(connection_string=dsn, schema=schema_name)
             )
 
-            # Property body that just reads back the inserted rows and
-            # confirms Postgres computed the generated column. If the
-            # INSERT failed, we wouldn't even reach this assertion.
+            # Property body verifies the row count (= sizes value)
+            # and the generated value matches qty * unit_price. The
+            # SELECT is schema-qualified explicitly because db.query
+            # doesn't always inherit the dataset's search_path.
             def property_check(db) -> None:
-                rows = db.query("SELECT qty, unit_price, amount_total FROM line_items")
+                rows = db.query(
+                    f'SELECT qty, unit_price, amount_total '
+                    f'FROM "{schema_name}".line_items'
+                )
+                assert len(rows) == 3, f"Expected 3 rows, got {len(rows)}"
                 for row in rows:
                     expected = Decimal(row["qty"]) * row["unit_price"]
                     assert row["amount_total"] == expected, (
