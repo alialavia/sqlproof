@@ -110,6 +110,13 @@ def _table_payload(table: Table) -> dict[str, object]:
             {"columns": list(pu.columns), "predicate": pu.predicate}
             for pu in table.partial_unique_constraints
         ],
+        "exclusion_constraints": [
+            {
+                "columns_with_operators": [list(p) for p in exc.columns_with_operators],
+                "access_method": exc.access_method,
+            }
+            for exc in table.exclusion_constraints
+        ],
         "checks": [check.expression for check in table.check_constraints],
         "foreign_keys": [
             {

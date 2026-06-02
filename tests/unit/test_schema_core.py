@@ -209,6 +209,9 @@ class FakeIntrospectionConnection:
         if "idx.indpred" in sql:
             # Partial unique indexes — none in this fixture's schema.
             return FakeRows([])
+        if "contype = 'x'" in sql:
+            # Exclusion constraints — none in this fixture's schema.
+            return FakeRows([])
         if "pg_attribute att" in sql and "column_name" in sql:
             return FakeRows(
                 [

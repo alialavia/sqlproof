@@ -5,6 +5,7 @@ from typing import Any, Literal, cast
 from sqlproof.schema.model import (
     CheckConstraint,
     Column,
+    ExclusionConstraint,
     ForeignKey,
     PartialUniqueConstraint,
     PgType,
@@ -37,6 +38,7 @@ def introspect_schema(connection: Any, *, schema: str = "public") -> SchemaInfo:
     foreign_keys = _foreign_keys(connection, schema=schema)
     check_constraints = _check_constraints(connection, schema=schema)
     partial_unique_constraints = _partial_unique_constraints(connection, schema=schema)
+    exclusion_constraints = _exclusion_constraints(connection, schema=schema)
 
     tables = [
         Table(
@@ -49,6 +51,9 @@ def introspect_schema(connection: Any, *, schema: str = "public") -> SchemaInfo:
             check_constraints=tuple(check_constraints.get((table_schema, table_name), ())),
             partial_unique_constraints=tuple(
                 partial_unique_constraints.get((table_schema, table_name), ())
+            ),
+            exclusion_constraints=tuple(
+                exclusion_constraints.get((table_schema, table_name), ())
             ),
         )
         for (table_schema, table_name), columns in sorted(columns_by_table.items())
@@ -137,6 +142,23 @@ def _partial_unique_constraints(
             PartialUniqueConstraint(
                 columns=tuple(str(value) for value in row["columns"]),
                 predicate=str(row["predicate"]),
+            )
+        )
+    return grouped
+
+
+def _exclusion_constraints(
+    connection: Any, *, schema: str
+) -> dict[tuple[str, str], list[ExclusionConstraint]]:
+    grouped: dict[tuple[str, str], list[ExclusionConstraint]] = {}
+    for row in _fetch_all(connection, _EXCLUSIONS_SQL, schema):
+        key = (str(row["schema_name"]), str(row["table_name"]))
+        columns = [str(c) for c in row["columns"]]
+        operators = [str(o) for o in row["operators"]]
+        grouped.setdefault(key, []).append(
+            ExclusionConstraint(
+                columns_with_operators=tuple(zip(columns, operators, strict=True)),
+                access_method=str(row["access_method"]),
             )
         )
     return grouped
@@ -280,4 +302,32 @@ WHERE ns.nspname = %s
   AND idx.indpred IS NOT NULL
 GROUP BY ns.nspname, cls.relname, idx.indexrelid, idx.indpred, idx.indrelid
 ORDER BY ns.nspname, cls.relname
+"""
+
+# Exclusion constraints — `EXCLUDE USING <am> (col WITH <op>, ...)`.
+# Postgres stores the column list in `con.conkey`, the operator OIDs
+# in `con.conexclop`, and the index AM via the backing index's
+# `pg_class.relam`. The two `unnest WITH ORDINALITY` joins below
+# pair columns with operators positionally.
+_EXCLUSIONS_SQL = """
+SELECT
+  ns.nspname AS schema_name,
+  cls.relname AS table_name,
+  am.amname AS access_method,
+  array_agg(att.attname ORDER BY ordinality) AS columns,
+  array_agg(op.oprname ORDER BY ordinality) AS operators
+FROM pg_catalog.pg_constraint con
+JOIN pg_catalog.pg_class cls ON cls.oid = con.conrelid
+JOIN pg_catalog.pg_namespace ns ON ns.oid = cls.relnamespace
+JOIN pg_catalog.pg_class idx_cls ON idx_cls.oid = con.conindid
+JOIN pg_catalog.pg_am am ON am.oid = idx_cls.relam
+JOIN unnest(con.conkey) WITH ORDINALITY AS k(attnum, ordinality) ON true
+JOIN pg_catalog.pg_attribute att
+  ON att.attrelid = cls.oid AND att.attnum = k.attnum
+JOIN unnest(con.conexclop) WITH ORDINALITY AS o(oprid, ordinality)
+  USING (ordinality)
+JOIN pg_catalog.pg_operator op ON op.oid = o.oprid
+WHERE ns.nspname = %s AND con.contype = 'x'
+GROUP BY ns.nspname, cls.relname, am.amname, con.oid
+ORDER BY ns.nspname, cls.relname, con.conname
 """

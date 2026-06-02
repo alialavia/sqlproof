@@ -173,7 +173,7 @@ def table_rows_strategy(
 
 def _composite_unique_keys(table: Table) -> tuple[tuple[str, ...], ...]:
     """Composite UNIQUE / PRIMARY KEY constraints with more than one
-    column.
+    column, plus all-equality EXCLUSION constraints.
 
     Used by the row generator to enforce that no two rows produce the
     same tuple on any composite-unique column set. Single-column
@@ -184,6 +184,14 @@ def _composite_unique_keys(table: Table) -> tuple[tuple[str, ...], ...]:
     The composite PRIMARY KEY is included because, semantically, a
     composite PK is a composite UNIQUE + NOT NULL combo. Postgres
     treats it the same way for INSERT rejection purposes.
+
+    EXCLUSION constraints where every operator is ``=`` degrade to
+    composite UNIQUE — they reject any pair of rows where every
+    column is equal, which is the same rule as composite UNIQUE.
+    Exclusion constraints with non-equality operators (e.g. ``&&``
+    for range overlap) need range semantics to enforce and aren't
+    surfaced here; Postgres will reject conflicting INSERTs at
+    runtime.
     """
     keys: list[tuple[str, ...]] = []
     if len(table.primary_key) > 1:
@@ -191,6 +199,9 @@ def _composite_unique_keys(table: Table) -> tuple[tuple[str, ...], ...]:
     for unique in table.unique_constraints:
         if len(unique) > 1:
             keys.append(unique)
+    for exclusion in table.exclusion_constraints:
+        if all(op == "=" for _col, op in exclusion.columns_with_operators):
+            keys.append(tuple(col for col, _op in exclusion.columns_with_operators))
     return tuple(keys)
 
 
