@@ -217,6 +217,52 @@ def test_generator_enforces_uniqueness_within_predicate_match(
     )
 
 
+@given(data=st.data())
+@settings(
+    max_examples=20,
+    deadline=None,
+    suppress_health_check=[HealthCheck.function_scoped_fixture],
+)
+def test_generator_handles_is_not_null_predicate(data: st.DataObject) -> None:
+    """Invariant (iii, mirror): the ``IS NOT NULL`` predicate is the
+    natural opposite of the soft-delete pattern (e.g. a partial
+    unique on archived rows only). The compiler must enforce
+    uniqueness on rows where the column IS set, not on rows where
+    it's NULL. Failure case: the predicate compiler only handles
+    ``IS NULL`` and silently drops ``IS NOT NULL``, breaking the
+    parallel pattern."""
+    table = Table(
+        schema="public",
+        name="archives",
+        columns=(
+            Column("id", INTEGER, nullable=False, default=None, is_generated=False),
+            Column("name", TEXT, nullable=False, default=None, is_generated=False),
+            Column(
+                "archived_at",
+                TIMESTAMPTZ,
+                nullable=True,
+                default=None,
+                is_generated=False,
+            ),
+        ),
+        primary_key=("id",),
+        foreign_keys=(),
+        unique_constraints=(),
+        check_constraints=(),
+        partial_unique_constraints=(
+            PartialUniqueConstraint(
+                columns=("name",), predicate="archived_at IS NOT NULL"
+            ),
+        ),
+    )
+    rows = data.draw(table_rows_strategy(table, count=8))
+    # Rows where archived_at IS NOT NULL must have unique names.
+    archived_names = [row["name"] for row in rows if row["archived_at"] is not None]
+    assert len(set(archived_names)) == len(archived_names), (
+        f"Duplicate names among archived rows: {archived_names}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Invariant (iv): unsupported predicate doesn't crash the generator
 # ---------------------------------------------------------------------------
