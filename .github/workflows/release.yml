@@ -52,7 +52,7 @@ jobs:
           database-url: ${{ env.SQLPROOF_TEST_DATABASE_URL }}
       - run: uv run pytest -m "not nocover"
       - run: uv build
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist
           path: dist/
