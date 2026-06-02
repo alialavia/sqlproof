@@ -77,7 +77,11 @@ def test_range_typed_columns_round_trip_through_postgres() -> None:
             )
 
             def property_check(db) -> None:
-                rows = db.query("SELECT during, quantity FROM bookings")
+                # Schema-qualified — db.query doesn't always inherit
+                # the dataset's search_path across connection reuse.
+                rows = db.query(
+                    f'SELECT during, quantity FROM "{schema_name}".bookings'
+                )
                 assert all(row["during"] is not None for row in rows)
                 assert all(row["quantity"] is not None for row in rows)
 
