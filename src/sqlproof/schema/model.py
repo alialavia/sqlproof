@@ -14,6 +14,12 @@ class PgType:
     enum_values: tuple[str, ...] = ()
     array_dim: int = 0
     modifiers: tuple[int, ...] = ()
+    # Raw CHECK expressions inherited from a `CREATE DOMAIN` clause
+    # (e.g. `("VALUE > 0",)`). Empty for non-domain types or for
+    # domains without CHECK constraints. The row generator substitutes
+    # `VALUE` for the actual column name and feeds the result through
+    # the standard CHECK-refinement pipeline.
+    check_expressions: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

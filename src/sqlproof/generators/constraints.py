@@ -124,8 +124,22 @@ def _sampled_values_for_column(column: Column, values: tuple[Any, ...]) -> Searc
     return strategy
 
 
+def _underlying_type_name(column: Column) -> str:
+    """Resolve a column's effective type name for direct-strategy
+    dispatch.
+
+    Domain types alias a base type; for direct integer/numeric
+    range refinements we want to look at the base, not the domain
+    name. Returns the lowercased name of the underlying type.
+    """
+    pg_type = column.type
+    while pg_type.kind == "domain" and pg_type.base is not None:
+        pg_type = pg_type.base
+    return pg_type.name.lower()
+
+
 def _direct_length_strategy(column: Column, op: str, value: int) -> SearchStrategy[str] | None:
-    name = column.type.name
+    name = _underlying_type_name(column)
     if name not in {"text", "citext", "varchar", "character varying", "char", "character"}:
         return None
     min_size = 0
@@ -151,7 +165,7 @@ def _direct_range_strategy(
     op: str,
     raw_value: Decimal,
 ) -> SearchStrategy[Any] | None:
-    name = column.type.name
+    name = _underlying_type_name(column)
     if op not in {">=", ">"}:
         return None
     minimum = raw_value if op == ">=" else raw_value + Decimal("1")
