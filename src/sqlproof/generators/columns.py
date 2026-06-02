@@ -131,11 +131,9 @@ def _range_strategy(pg_type: PgType) -> SearchStrategy[Range[Any]]:
     """
     assert pg_type.base is not None
     if pg_type.name == "tstzrange":
-        from datetime import timezone
+        from datetime import UTC
 
-        element_strategy: SearchStrategy[Any] = st.datetimes(
-            timezones=st.just(timezone.utc)
-        )
+        element_strategy: SearchStrategy[Any] = st.datetimes(timezones=st.just(UTC))
     else:
         element_strategy = strategy_for_type(pg_type.base)
     return (
