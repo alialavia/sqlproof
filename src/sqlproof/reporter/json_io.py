@@ -28,11 +28,12 @@ def _json_default(value: Any) -> Any:
         # structurally so counterexample files can round-trip cleanly
         # (lower/upper get the standard Decimal/datetime/etc.
         # treatment recursively via json.dumps).
+        range_value: Range[Any] = value
         return {
             "__type__": "Range",
-            "lower": value.lower,
-            "upper": value.upper,
-            "bounds": value.bounds,
+            "lower": range_value.lower,
+            "upper": range_value.upper,
+            "bounds": range_value.bounds,
         }
     if is_dataclass(value):
         return value.__dict__
