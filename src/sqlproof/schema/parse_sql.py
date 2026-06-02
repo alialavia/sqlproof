@@ -27,9 +27,11 @@ def parse_schema_sql(sql: str, *, schema: str = "public") -> SchemaInfo:
         raise SqlProofSchemaError(str(exc)) from exc
 
     enums: list[PgType] = []
-    # `type_names` is the lookup table for user-defined types — both
-    # enums and domains — so column-type resolution finds them either
-    # way.
+    # `type_names` is the lookup table for user-defined types — enums,
+    # domains, and composite types — so column-type resolution finds
+    # them all. CREATE TYPE statements can reference earlier composite
+    # types (a composite-of-composite); we walk in document order so
+    # each statement sees the types defined before it.
     type_names: dict[str, PgType] = {}
     for raw_statement in statements:
         statement: Any = raw_statement.stmt
@@ -46,6 +48,9 @@ def parse_schema_sql(sql: str, *, schema: str = "public") -> SchemaInfo:
         elif type(statement).__name__ == "CreateDomainStmt":
             domain = _parse_domain_statement(statement, schema)
             type_names[domain.name] = domain
+        elif type(statement).__name__ == "CompositeTypeStmt":
+            composite = _parse_composite_type(statement, type_names)
+            type_names[composite.name] = composite
 
     tables = tuple(
         _parse_table_statement(raw_statement.stmt, type_names, schema)
@@ -156,6 +161,23 @@ def _index_param_name(param: Any) -> str:
     if expr is not None:
         return _render(expr)
     return ""
+
+
+def _parse_composite_type(statement: Any, type_names: dict[str, PgType]) -> PgType:
+    """Parse a ``CREATE TYPE foo AS (...)`` node.
+
+    Walks ``coldeflist`` to collect (field_name, field_type) pairs.
+    Nested composite resolution works because we pass the current
+    ``type_names`` dict — composite types defined earlier in the
+    same SQL file are looked up by name when resolving each
+    field's type node.
+    """
+    name = str(statement.typevar.relname)
+    fields: list[tuple[str, PgType]] = []
+    for column_def in statement.coldeflist or ():
+        field_type = _parse_type_node(column_def.typeName, type_names)
+        fields.append((str(column_def.colname), field_type))
+    return PgType(kind="composite", name=name, composite_fields=tuple(fields))
 
 
 def _parse_table_statement(statement: Any, type_names: dict[str, PgType], schema: str) -> Table:
