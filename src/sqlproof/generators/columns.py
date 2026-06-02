@@ -115,6 +115,14 @@ def _range_strategy(pg_type: PgType) -> SearchStrategy[Range[Any]]:
     bounds match Postgres's canonical form for discrete range
     types like int4range and daterange.
 
+    For ``tstzrange`` we override the element strategy to emit
+    timezone-aware datetimes (Postgres rejects ``tstzrange``
+    populated with naive datetimes — they're typed as
+    ``tsrange`` by psycopg's adapter). The plain ``timestamptz``
+    column path continues to use naive datetimes via
+    ``strategy_for_type``; only the range case needs the
+    timezone-aware variant for the wire format to match.
+
     Equal-pair collisions are extraordinarily rare for date and
     datetime element strategies (Hypothesis's ``st.datetimes`` /
     ``st.dates`` cover wide spans), and for numeric types the
@@ -122,7 +130,14 @@ def _range_strategy(pg_type: PgType) -> SearchStrategy[Range[Any]]:
     filter is cheap.
     """
     assert pg_type.base is not None
-    element_strategy = strategy_for_type(pg_type.base)
+    if pg_type.name == "tstzrange":
+        from datetime import timezone
+
+        element_strategy: SearchStrategy[Any] = st.datetimes(
+            timezones=st.just(timezone.utc)
+        )
+    else:
+        element_strategy = strategy_for_type(pg_type.base)
     return (
         st.tuples(element_strategy, element_strategy)
         .filter(lambda pair: pair[0] != pair[1])
