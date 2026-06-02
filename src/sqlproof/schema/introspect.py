@@ -81,9 +81,10 @@ def _load_domains(connection: Any, *, schema: str) -> tuple[PgType, ...]:
     for row in rows:
         base_name = str(row["base_type_name"])
         base = PgType(kind="scalar", name=base_name)
-        check_expressions = tuple(
-            str(expr) for expr in (row["check_expressions"] or [])
+        raw_checks: list[Any] = cast(
+            "list[Any]", row["check_expressions"] or []
         )
+        check_expressions: tuple[str, ...] = tuple(str(expr) for expr in raw_checks)
         domains.append(
             PgType(
                 kind="domain",

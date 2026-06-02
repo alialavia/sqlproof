@@ -60,7 +60,7 @@ def test_domain_typed_column_round_trips_through_postgres() -> None:
             # Introspector-side
             with connection.cursor(row_factory=psycopg.rows.dict_row) as cur:
                 introspected = introspect_schema(cur, schema=schema_name).table(
-                    "products"
+                    "products", schema=schema_name
                 )
             qty_type = introspected.column("qty").type
             assert qty_type.kind == "domain"
