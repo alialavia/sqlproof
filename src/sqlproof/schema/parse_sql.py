@@ -275,7 +275,7 @@ def _parse_type_node(type_node: Any, type_names: dict[str, PgType]) -> PgType:
     if unqualified in type_names:
         return type_names[unqualified]
     modifiers = tuple(_const_int(modifier) for modifier in type_node.typmods or ())
-    range_element = _RANGE_ELEMENT_TYPES.get(unqualified)
+    range_element = RANGE_ELEMENT_TYPES.get(unqualified)
     if range_element is not None:
         return PgType(
             kind="range",
@@ -290,7 +290,7 @@ def _parse_type_node(type_node: Any, type_names: dict[str, PgType]) -> PgType:
 # user-defined range types (rare) aren't covered by this static map —
 # they'd need pg_range introspection. We keep this in parse_sql because
 # both parse_schema_sql and introspect_schema can name-detect off it.
-_RANGE_ELEMENT_TYPES: dict[str, str] = {
+RANGE_ELEMENT_TYPES: dict[str, str] = {
     "int4range": "integer",
     "int8range": "bigint",
     "numrange": "numeric",

@@ -62,7 +62,7 @@ def test_range_typed_columns_round_trip_through_postgres() -> None:
             # Introspector-side
             with connection.cursor(row_factory=psycopg.rows.dict_row) as cur:
                 introspected = introspect_schema(cur, schema=schema_name).table(
-                    "bookings"
+                    "bookings", schema=schema_name
                 )
             during_type = introspected.column("during").type
             assert during_type.kind == "range"

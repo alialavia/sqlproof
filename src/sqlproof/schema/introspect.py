@@ -12,7 +12,7 @@ from sqlproof.schema.model import (
     SchemaInfo,
     Table,
 )
-from sqlproof.schema.parse_sql import _RANGE_ELEMENT_TYPES
+from sqlproof.schema.parse_sql import RANGE_ELEMENT_TYPES
 
 
 def introspect_schema(connection: Any, *, schema: str = "public") -> SchemaInfo:
@@ -212,7 +212,7 @@ def _resolve_pg_type(type_name: str) -> PgType:
     Everything else (scalar, array — represented elsewhere) falls
     through to ``PgType(kind="scalar", name=...)``.
     """
-    range_element = _RANGE_ELEMENT_TYPES.get(type_name)
+    range_element = RANGE_ELEMENT_TYPES.get(type_name)
     if range_element is not None:
         return PgType(
             kind="range",
