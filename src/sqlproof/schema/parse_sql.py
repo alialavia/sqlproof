@@ -27,7 +27,10 @@ def parse_schema_sql(sql: str, *, schema: str = "public") -> SchemaInfo:
         raise SqlProofSchemaError(str(exc)) from exc
 
     enums: list[PgType] = []
-    enum_names: dict[str, PgType] = {}
+    # `type_names` is the lookup table for user-defined types — both
+    # enums and domains — so column-type resolution finds them either
+    # way.
+    type_names: dict[str, PgType] = {}
     for raw_statement in statements:
         statement: Any = raw_statement.stmt
         if type(statement).__name__ == "CreateEnumStmt":
@@ -38,11 +41,14 @@ def parse_schema_sql(sql: str, *, schema: str = "public") -> SchemaInfo:
                 enum_values=tuple(_sval(value) for value in statement.vals),
             )
             enums.append(enum)
-            enum_names[enum_name] = enum
-            enum_names[f"{enum_schema}.{enum_name}"] = enum
+            type_names[enum_name] = enum
+            type_names[f"{enum_schema}.{enum_name}"] = enum
+        elif type(statement).__name__ == "CreateDomainStmt":
+            domain = _parse_domain_statement(statement, schema)
+            type_names[domain.name] = domain
 
     tables = tuple(
-        _parse_table_statement(raw_statement.stmt, enum_names, schema)
+        _parse_table_statement(raw_statement.stmt, type_names, schema)
         for raw_statement in statements
         if type(raw_statement.stmt).__name__ == "CreateStmt"
     )
@@ -56,7 +62,42 @@ def parse_schema_sql(sql: str, *, schema: str = "public") -> SchemaInfo:
     # generate datasets that Postgres rejects at INSERT time.
     tables = _attach_partial_unique_indexes(tables, statements, schema)
 
-    return SchemaInfo(tables=tables, enums=tuple(enums))
+    # De-duplicate domains (same domain may appear under qualified and
+    # unqualified keys in type_names).
+    domains_seq = tuple(t for t in type_names.values() if t.kind == "domain")
+    seen_domain_names: set[str] = set()
+    unique_domains: list[PgType] = []
+    for domain in domains_seq:
+        if domain.name not in seen_domain_names:
+            unique_domains.append(domain)
+            seen_domain_names.add(domain.name)
+    return SchemaInfo(
+        tables=tables, enums=tuple(enums), domains=tuple(unique_domains)
+    )
+
+
+def _parse_domain_statement(statement: Any, default_schema: str) -> PgType:
+    """Parse a CREATE DOMAIN node.
+
+    The base type comes from ``typeName``; CHECK clauses live in
+    ``constraints`` as ordinary ``CONSTR_CHECK`` nodes that reference
+    a placeholder column named ``VALUE`` (Postgres's convention for
+    referring to the domain value inside a CHECK).
+    """
+    _domain_schema, domain_name = _qualified_parts(
+        statement.domainname, default_schema=default_schema
+    )
+    base = _parse_type_node(statement.typeName, type_names={})
+    check_expressions: list[str] = []
+    for constraint in statement.constraints or ():
+        if constraint.contype == ConstrType.CONSTR_CHECK:
+            check_expressions.append(_render(constraint.raw_expr))
+    return PgType(
+        kind="domain",
+        name=domain_name,
+        base=base,
+        check_expressions=tuple(check_expressions),
+    )
 
 
 def _attach_partial_unique_indexes(
@@ -117,7 +158,7 @@ def _index_param_name(param: Any) -> str:
     return ""
 
 
-def _parse_table_statement(statement: Any, enum_names: dict[str, PgType], schema: str) -> Table:
+def _parse_table_statement(statement: Any, type_names: dict[str, PgType], schema: str) -> Table:
     relation = statement.relation
     table_schema = relation.schemaname or schema
     table_name = relation.relname
@@ -130,7 +171,7 @@ def _parse_table_statement(statement: Any, enum_names: dict[str, PgType], schema
 
     for element in statement.tableElts or ():
         if type(element).__name__ == "ColumnDef":
-            column = _parse_column(element, enum_names)
+            column = _parse_column(element, type_names)
             columns.append(column)
             for constraint in element.constraints or ():
                 if constraint.contype == ConstrType.CONSTR_PRIMARY:
@@ -194,9 +235,9 @@ def _parse_exclusion(constraint: Any) -> ExclusionConstraint:
     )
 
 
-def _parse_column(column: Any, enum_names: dict[str, PgType]) -> Column:
+def _parse_column(column: Any, type_names: dict[str, PgType]) -> Column:
     constraints = tuple(column.constraints or ())
-    pg_type = _parse_type_node(column.typeName, enum_names)
+    pg_type = _parse_type_node(column.typeName, type_names)
     identity = _identity_for_constraints(constraints)
     # `GENERATED ALWAYS AS (expr) STORED` columns appear as a
     # CONSTR_GENERATED constraint on the column. Postgres rejects
@@ -225,14 +266,14 @@ def _parse_column(column: Any, enum_names: dict[str, PgType]) -> Column:
     )
 
 
-def _parse_type_node(type_node: Any, enum_names: dict[str, PgType]) -> PgType:
+def _parse_type_node(type_node: Any, type_names: dict[str, PgType]) -> PgType:
     parts = tuple(_sval(part) for part in type_node.names)
     name = _normalize_type_name(".".join(parts))
-    if name in enum_names:
-        return enum_names[name]
+    if name in type_names:
+        return type_names[name]
     unqualified = name.rsplit(".", 1)[-1]
-    if unqualified in enum_names:
-        return enum_names[unqualified]
+    if unqualified in type_names:
+        return type_names[unqualified]
     modifiers = tuple(_const_int(modifier) for modifier in type_node.typmods or ())
     return PgType(kind="scalar", name=unqualified, modifiers=modifiers)
 

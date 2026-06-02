@@ -14,7 +14,7 @@ from hypothesis.strategies import SearchStrategy
 from sqlproof.exceptions import SqlProofGenerationError
 from sqlproof.generators.columns import strategy_for_column
 from sqlproof.generators.constraints import refine_for_checks
-from sqlproof.schema.model import ForeignKey, Table
+from sqlproof.schema.model import CheckConstraint, Column, ForeignKey, Table
 
 DatasetRows = dict[str, list[dict[str, Any]]]
 ColumnOverrides = Mapping[str, Any]
@@ -121,7 +121,9 @@ def table_rows_strategy(
                     row[column.name] = _unique_value(column.name, column.type.name, index)
                     continue
                 strategy = refine_for_checks(
-                    column, strategy_for_column(column), table.check_constraints
+                    column,
+                    strategy_for_column(column),
+                    table.check_constraints + _domain_checks_as_column_checks(column),
                 )
                 row[column.name] = draw(strategy)
 
@@ -288,6 +290,30 @@ def _compile_predicate(predicate: str) -> _PredicateFn:
         column = not_null_match.group(1)
         return lambda row: row.get(column) is not None
     return lambda _row: None
+
+
+_VALUE_PLACEHOLDER_RE = re.compile(r"\bvalue\b", re.IGNORECASE)
+
+
+def _domain_checks_as_column_checks(column: Column) -> tuple[CheckConstraint, ...]:
+    """Translate a domain's CHECK expressions to column-scoped
+    CheckConstraints.
+
+    Domain CHECKs reference ``VALUE`` (Postgres's placeholder for the
+    domain value); the existing CHECK refiner works on expressions
+    that name the column directly. We substitute the column name for
+    ``VALUE`` so a single domain definition can be applied to many
+    columns. pglast renders ``VALUE`` as lowercase, so we match
+    case-insensitively (and word-boundary, to avoid mangling tokens
+    that happen to contain "value" as a substring).
+    """
+    pg_type = column.type
+    if pg_type.kind != "domain" or not pg_type.check_expressions:
+        return ()
+    return tuple(
+        CheckConstraint(expression=_VALUE_PLACEHOLDER_RE.sub(column.name, expr))
+        for expr in pg_type.check_expressions
+    )
 
 
 def _unique_value(column_name: str, type_name: str, index: int) -> Any:

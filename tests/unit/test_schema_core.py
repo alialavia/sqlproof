@@ -194,6 +194,12 @@ class FakeIntrospectionConnection:
                     }
                 ]
             )
+        if "typbasetype" in sql:
+            # Custom domains — none in this fixture's schema. Must
+            # be checked BEFORE `contype = 'c'` because the domains
+            # query joins pg_constraint with contype='c' to pick
+            # up domain-level CHECKs.
+            return FakeRows([])
         if "contype = 'c'" in sql:
             return FakeRows(
                 [

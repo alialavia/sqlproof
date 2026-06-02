@@ -27,6 +27,13 @@ def strategy_for_type(pg_type: PgType) -> SearchStrategy[Any]:
     name = pg_type.name.lower()
     if pg_type.kind == "enum":
         return st.sampled_from(pg_type.enum_values)
+    if pg_type.kind == "domain" and pg_type.base is not None:
+        # Domain types are alias + optional CHECKs. Strategy comes
+        # from the base type; CHECK enforcement happens at column-
+        # generation time in `rows.py` via the existing refinement
+        # pipeline (which knows the actual column name to substitute
+        # for the `VALUE` placeholder in the CHECK expressions).
+        return strategy_for_type(pg_type.base)
     if name in {"smallint", "int2"}:
         return st.integers(-32_768, 32_767)
     if name in {"integer", "int", "int4", "serial"}:

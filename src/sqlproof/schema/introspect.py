@@ -16,12 +16,14 @@ from sqlproof.schema.model import (
 
 def introspect_schema(connection: Any, *, schema: str = "public") -> SchemaInfo:
     enums = _load_enums(connection, schema=schema)
-    enum_by_name = {enum.name: enum for enum in enums}
+    domains = _load_domains(connection, schema=schema)
+    type_by_name: dict[str, PgType] = {pg_type.name: pg_type for pg_type in enums}
+    type_by_name.update({d.name: d for d in domains})
     columns_by_table: dict[tuple[str, str], list[Column]] = {}
     for row in _fetch_all(connection, _COLUMNS_SQL, schema):
         key = (str(row["schema_name"]), str(row["table_name"]))
         type_name = str(row["type_name"])
-        pg_type = enum_by_name.get(type_name, PgType(kind="scalar", name=type_name))
+        pg_type = type_by_name.get(type_name, PgType(kind="scalar", name=type_name))
         columns_by_table.setdefault(key, []).append(
             Column(
                 name=str(row["column_name"]),
@@ -58,7 +60,7 @@ def introspect_schema(connection: Any, *, schema: str = "public") -> SchemaInfo:
         )
         for (table_schema, table_name), columns in sorted(columns_by_table.items())
     ]
-    return SchemaInfo(tables=tuple(tables), enums=enums)
+    return SchemaInfo(tables=tuple(tables), enums=enums, domains=domains)
 
 
 def _fetch_all(connection: Any, sql: str, *params: object) -> list[dict[str, Any]]:
@@ -76,6 +78,27 @@ def _load_enums(connection: Any, *, schema: str) -> tuple[PgType, ...]:
         )
         for row in rows
     )
+
+
+def _load_domains(connection: Any, *, schema: str) -> tuple[PgType, ...]:
+    rows = _fetch_all(connection, _DOMAINS_SQL, schema)
+    domains: list[PgType] = []
+    for row in rows:
+        base_name = str(row["base_type_name"])
+        base = PgType(kind="scalar", name=base_name)
+        raw_checks: list[Any] = cast(
+            "list[Any]", row["check_expressions"] or []
+        )
+        check_expressions: tuple[str, ...] = tuple(str(expr) for expr in raw_checks)
+        domains.append(
+            PgType(
+                kind="domain",
+                name=str(row["domain_name"]),
+                base=base,
+                check_expressions=check_expressions,
+            )
+        )
+    return tuple(domains)
 
 
 def _constraint_columns(
@@ -191,6 +214,33 @@ JOIN pg_catalog.pg_enum e ON e.enumtypid = t.oid
 JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace
 WHERE n.nspname = %s
 GROUP BY n.nspname, t.typname
+ORDER BY n.nspname, t.typname
+"""
+
+# Custom domains. `typtype='d'` filters to domains. `typbasetype`
+# joins back to pg_type to recover the base type name. CHECK
+# expressions live in pg_constraint with `contype='c'` and
+# `contypid=t.oid` (constraints attached to the type, not a table).
+# pg_get_constraintdef returns the canonical text including the
+# enclosing `CHECK (...)`, which the row-generator's expression
+# normalizer strips.
+_DOMAINS_SQL = """
+SELECT
+  n.nspname AS schema_name,
+  t.typname AS domain_name,
+  bt.typname AS base_type_name,
+  COALESCE(
+    array_agg(pg_get_constraintdef(c.oid, true))
+      FILTER (WHERE c.oid IS NOT NULL),
+    ARRAY[]::text[]
+  ) AS check_expressions
+FROM pg_catalog.pg_type t
+JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace
+JOIN pg_catalog.pg_type bt ON bt.oid = t.typbasetype
+LEFT JOIN pg_catalog.pg_constraint c
+  ON c.contypid = t.oid AND c.contype = 'c'
+WHERE n.nspname = %s AND t.typtype = 'd'
+GROUP BY n.nspname, t.typname, bt.typname
 ORDER BY n.nspname, t.typname
 """
 
