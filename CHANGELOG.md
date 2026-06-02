@@ -5,6 +5,20 @@ All notable changes to SqlProof will be documented here. The format is based on
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While SqlProof
 remains in `0.x`, minor versions may include breaking changes.
 
+## [0.5.0](https://github.com/alialavia/sqlproof/compare/v0.4.0...v0.5.0) (2026-06-02)
+
+
+### Added
+
+* **generators:** support built-in range types ([#4](https://github.com/alialavia/sqlproof/issues/4)b) ([#66](https://github.com/alialavia/sqlproof/issues/66)) ([2980a7b](https://github.com/alialavia/sqlproof/commit/2980a7bd82e2e6154a292dd9c0336d734cdb3e58))
+* **generators:** support composite types with recursive resolution ([#4](https://github.com/alialavia/sqlproof/issues/4)c) ([#67](https://github.com/alialavia/sqlproof/issues/67)) ([4e342b0](https://github.com/alialavia/sqlproof/commit/4e342b06521ac60207daffd6211a83339a1aa5f5))
+* **generators:** support custom domain types with CHECK inheritance ([#4](https://github.com/alialavia/sqlproof/issues/4)a) ([#65](https://github.com/alialavia/sqlproof/issues/65)) ([090188a](https://github.com/alialavia/sqlproof/commit/090188a6c36e6610aa3da8497d745a5167c7c547))
+* **mcp:** ship sqlproof-mcp server with v1 tools ([#59](https://github.com/alialavia/sqlproof/issues/59)) ([0952c48](https://github.com/alialavia/sqlproof/commit/0952c480b8d2168d7e204c42fe4819c84d93d91a))
+* **schema:** flag GENERATED ALWAYS AS columns as generated ([#3](https://github.com/alialavia/sqlproof/issues/3)b) ([#63](https://github.com/alialavia/sqlproof/issues/63)) ([152a8b5](https://github.com/alialavia/sqlproof/commit/152a8b5e9ab63666a9b9cad7b044fa02e412b7b6))
+* **schema:** parse and surface EXCLUSION constraints ([#3](https://github.com/alialavia/sqlproof/issues/3)c) ([#64](https://github.com/alialavia/sqlproof/issues/64)) ([fa54eb0](https://github.com/alialavia/sqlproof/commit/fa54eb0fdd8997793fe421e2ee22ed5d735caad1))
+* **schema:** support partial unique indexes ([#3](https://github.com/alialavia/sqlproof/issues/3)a) ([#62](https://github.com/alialavia/sqlproof/issues/62)) ([155a87b](https://github.com/alialavia/sqlproof/commit/155a87b0a66ae3be600baa84cda883dc5ad657ed))
+* **surface:** introduce SurfaceRegistry for function drift detection ([#12](https://github.com/alialavia/sqlproof/issues/12)) ([#68](https://github.com/alialavia/sqlproof/issues/68)) ([073727c](https://github.com/alialavia/sqlproof/commit/073727c72bd8564f1ba6b40863b08fb4e2f2f6a0))
+
 ## [0.4.0](https://github.com/alialavia/sqlproof/compare/v0.3.0...v0.4.0) (2026-06-01)
 
 
