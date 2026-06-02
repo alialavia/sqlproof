@@ -76,7 +76,9 @@ def test_domain_typed_column_round_trips_through_postgres() -> None:
             )
 
             def property_check(db) -> None:
-                rows = db.query("SELECT qty FROM products")
+                # Schema-qualified — db.query doesn't always inherit
+                # the dataset's search_path across connection reuse.
+                rows = db.query(f'SELECT qty FROM "{schema_name}".products')
                 for row in rows:
                     assert row["qty"] > 0, f"Domain constraint violated: {row}"
 
