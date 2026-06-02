@@ -2,7 +2,15 @@ from __future__ import annotations
 
 from typing import Any, Literal, cast
 
-from sqlproof.schema.model import CheckConstraint, Column, ForeignKey, PgType, SchemaInfo, Table
+from sqlproof.schema.model import (
+    CheckConstraint,
+    Column,
+    ForeignKey,
+    PartialUniqueConstraint,
+    PgType,
+    SchemaInfo,
+    Table,
+)
 
 
 def introspect_schema(connection: Any, *, schema: str = "public") -> SchemaInfo:
@@ -28,6 +36,7 @@ def introspect_schema(connection: Any, *, schema: str = "public") -> SchemaInfo:
     unique_constraints = _grouped_constraints(connection, _UNIQUES_SQL, schema)
     foreign_keys = _foreign_keys(connection, schema=schema)
     check_constraints = _check_constraints(connection, schema=schema)
+    partial_unique_constraints = _partial_unique_constraints(connection, schema=schema)
 
     tables = [
         Table(
@@ -38,6 +47,9 @@ def introspect_schema(connection: Any, *, schema: str = "public") -> SchemaInfo:
             foreign_keys=tuple(foreign_keys.get((table_schema, table_name), ())),
             unique_constraints=tuple(unique_constraints.get((table_schema, table_name), ())),
             check_constraints=tuple(check_constraints.get((table_schema, table_name), ())),
+            partial_unique_constraints=tuple(
+                partial_unique_constraints.get((table_schema, table_name), ())
+            ),
         )
         for (table_schema, table_name), columns in sorted(columns_by_table.items())
     ]
@@ -112,6 +124,21 @@ def _check_constraints(
     for row in _fetch_all(connection, _CHECKS_SQL, schema):
         key = (str(row["schema_name"]), str(row["table_name"]))
         grouped.setdefault(key, []).append(CheckConstraint(str(row["expression"])))
+    return grouped
+
+
+def _partial_unique_constraints(
+    connection: Any, *, schema: str
+) -> dict[tuple[str, str], list[PartialUniqueConstraint]]:
+    grouped: dict[tuple[str, str], list[PartialUniqueConstraint]] = {}
+    for row in _fetch_all(connection, _PARTIAL_UNIQUE_SQL, schema):
+        key = (str(row["schema_name"]), str(row["table_name"]))
+        grouped.setdefault(key, []).append(
+            PartialUniqueConstraint(
+                columns=tuple(str(value) for value in row["columns"]),
+                predicate=str(row["predicate"]),
+            )
+        )
     return grouped
 
 
@@ -226,4 +253,31 @@ JOIN pg_catalog.pg_class cls ON cls.oid = con.conrelid
 JOIN pg_catalog.pg_namespace ns ON ns.oid = cls.relnamespace
 WHERE ns.nspname = %s AND con.contype = 'c'
 ORDER BY ns.nspname, cls.relname, con.conname
+"""
+
+# Partial unique indexes — uniqueness conditioned on a WHERE clause.
+# These aren't surfaced by `pg_constraint` (only unconditional UNIQUE
+# constraints are constraint rows); they live in `pg_index` with
+# `indpred IS NOT NULL`. The non-partial form (`CREATE UNIQUE INDEX
+# ... ON t (col)` with no WHERE) is intentionally excluded — that
+# case isn't picked up by sqlproof today and is out of scope for the
+# partial-unique work; the inline `UNIQUE` constraint remains the
+# canonical spelling for unconditional uniques.
+_PARTIAL_UNIQUE_SQL = """
+SELECT
+  ns.nspname AS schema_name,
+  cls.relname AS table_name,
+  array_agg(att.attname ORDER BY key_column.ordinality) AS columns,
+  pg_get_expr(idx.indpred, idx.indrelid, true) AS predicate
+FROM pg_catalog.pg_index idx
+JOIN pg_catalog.pg_class cls ON cls.oid = idx.indrelid
+JOIN pg_catalog.pg_namespace ns ON ns.oid = cls.relnamespace
+JOIN unnest(idx.indkey) WITH ORDINALITY AS key_column(attnum, ordinality) ON true
+JOIN pg_catalog.pg_attribute att
+  ON att.attrelid = cls.oid AND att.attnum = key_column.attnum
+WHERE ns.nspname = %s
+  AND idx.indisunique
+  AND idx.indpred IS NOT NULL
+GROUP BY ns.nspname, cls.relname, idx.indexrelid, idx.indpred, idx.indrelid
+ORDER BY ns.nspname, cls.relname
 """

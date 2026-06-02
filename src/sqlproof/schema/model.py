@@ -30,6 +30,12 @@ class CheckConstraint:
 
 
 @dataclass(frozen=True, slots=True)
+class PartialUniqueConstraint:
+    columns: tuple[str, ...]
+    predicate: str
+
+
+@dataclass(frozen=True, slots=True)
 class Column:
     name: str
     type: PgType
@@ -59,6 +65,7 @@ class Table:
     unique_constraints: tuple[tuple[str, ...], ...]
     check_constraints: tuple[CheckConstraint, ...]
     opaque_constraints: tuple[str, ...] = ()
+    partial_unique_constraints: tuple[PartialUniqueConstraint, ...] = ()
 
     @property
     def qualified_name(self) -> str:
