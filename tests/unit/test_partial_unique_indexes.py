@@ -131,6 +131,33 @@ def test_parser_distinguishes_partial_from_unconditional_unique_index() -> None:
     )
 
 
+def test_parser_renders_expression_form_index_param_as_text() -> None:
+    """Edge case: a partial unique index with an expression-form
+    column (e.g. ``lower(name)``) doesn't have a simple
+    ``IndexElem.name``. The parser falls back to rendering the
+    expression text so the surfaced PartialUniqueConstraint
+    columns tuple has something stable instead of an empty string.
+    Failure case: silently dropping expression-form columns would
+    make the constraint look like it has no columns at all."""
+    sql = """
+        CREATE TABLE items (
+            id serial PRIMARY KEY,
+            name text NOT NULL,
+            deleted_at timestamptz
+        );
+        CREATE UNIQUE INDEX items_lower_name_uq
+          ON items (lower(name)) WHERE deleted_at IS NULL;
+    """
+    info = parse_schema_sql(sql)
+    items = info.table("items")
+    assert len(items.partial_unique_constraints) == 1
+    constraint = items.partial_unique_constraints[0]
+    # The expression renders as text from pglast. We don't pin the
+    # exact rendering — just that it's non-empty and recognizable.
+    assert len(constraint.columns) == 1
+    assert "name" in constraint.columns[0].lower()
+
+
 # ---------------------------------------------------------------------------
 # Invariant (ii) + (iii): generator behavior with simple IS NULL predicate
 # ---------------------------------------------------------------------------
