@@ -12,6 +12,7 @@ from sqlproof.schema.model import (
     SchemaInfo,
     Table,
 )
+from sqlproof.schema.parse_sql import RANGE_ELEMENT_TYPES
 
 
 def introspect_schema(connection: Any, *, schema: str = "public") -> SchemaInfo:
@@ -23,7 +24,7 @@ def introspect_schema(connection: Any, *, schema: str = "public") -> SchemaInfo:
     for row in _fetch_all(connection, _COLUMNS_SQL, schema):
         key = (str(row["schema_name"]), str(row["table_name"]))
         type_name = str(row["type_name"])
-        pg_type = type_by_name.get(type_name, PgType(kind="scalar", name=type_name))
+        pg_type = type_by_name.get(type_name) or _resolve_pg_type(type_name)
         columns_by_table.setdefault(key, []).append(
             Column(
                 name=str(row["column_name"]),
@@ -202,6 +203,23 @@ def _identity(value: object) -> Literal["always", "by_default"] | None:
 
 def _is_serial_default(value: object) -> bool:
     return isinstance(value, str) and value.startswith("nextval(")
+
+
+def _resolve_pg_type(type_name: str) -> PgType:
+    """Resolve a raw pg_catalog type name into a PgType.
+
+    Range types get kind="range" with the element type as base.
+    Everything else (scalar, array — represented elsewhere) falls
+    through to ``PgType(kind="scalar", name=...)``.
+    """
+    range_element = RANGE_ELEMENT_TYPES.get(type_name)
+    if range_element is not None:
+        return PgType(
+            kind="range",
+            name=type_name,
+            base=PgType(kind="scalar", name=range_element),
+        )
+    return PgType(kind="scalar", name=type_name)
 
 
 _ENUMS_SQL = """

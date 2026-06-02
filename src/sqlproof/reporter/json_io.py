@@ -5,8 +5,10 @@ from dataclasses import is_dataclass
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
+
+from psycopg.types.range import Range
 
 
 def write_counterexample(path: Path, payload: dict[str, Any]) -> None:
@@ -21,6 +23,21 @@ def _json_default(value: Any) -> Any:
         return str(value)
     if isinstance(value, timedelta):
         return value.total_seconds()
+    if isinstance(value, Range):
+        # Range values come from pgvector/range columns. Serialize
+        # structurally so counterexample files can round-trip cleanly
+        # (lower/upper get the standard Decimal/datetime/etc.
+        # treatment recursively via json.dumps). cast(Any) escapes
+        # Range[T] generic — isinstance narrows to Range[Unknown] in
+        # strict pyright, which propagates Unknown through attribute
+        # access otherwise.
+        rng = cast(Any, value)
+        return {
+            "__type__": "Range",
+            "lower": rng.lower,
+            "upper": rng.upper,
+            "bounds": rng.bounds,
+        }
     if is_dataclass(value):
         return value.__dict__
     raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")

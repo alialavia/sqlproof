@@ -275,7 +275,29 @@ def _parse_type_node(type_node: Any, type_names: dict[str, PgType]) -> PgType:
     if unqualified in type_names:
         return type_names[unqualified]
     modifiers = tuple(_const_int(modifier) for modifier in type_node.typmods or ())
+    range_element = RANGE_ELEMENT_TYPES.get(unqualified)
+    if range_element is not None:
+        return PgType(
+            kind="range",
+            name=unqualified,
+            base=PgType(kind="scalar", name=range_element),
+            modifiers=modifiers,
+        )
     return PgType(kind="scalar", name=unqualified, modifiers=modifiers)
+
+
+# Builtin Postgres range types mapped to their element type. Custom
+# user-defined range types (rare) aren't covered by this static map —
+# they'd need pg_range introspection. We keep this in parse_sql because
+# both parse_schema_sql and introspect_schema can name-detect off it.
+RANGE_ELEMENT_TYPES: dict[str, str] = {
+    "int4range": "integer",
+    "int8range": "bigint",
+    "numrange": "numeric",
+    "tsrange": "timestamp",
+    "tstzrange": "timestamptz",
+    "daterange": "date",
+}
 
 
 def _parse_foreign_key(constraint: Any, *, columns: tuple[str, ...] | None = None) -> ForeignKey:
