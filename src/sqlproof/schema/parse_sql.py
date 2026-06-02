@@ -90,6 +90,13 @@ def _parse_column(column: Any, enum_names: dict[str, PgType]) -> Column:
     constraints = tuple(column.constraints or ())
     pg_type = _parse_type_node(column.typeName, enum_names)
     identity = _identity_for_constraints(constraints)
+    # `GENERATED ALWAYS AS (expr) STORED` columns appear as a
+    # CONSTR_GENERATED constraint on the column. Postgres rejects
+    # INSERTs that target generated columns, so flag them so the
+    # row generator skips them — same as SERIAL/IDENTITY columns.
+    has_generated_expr = any(
+        constraint.contype == ConstrType.CONSTR_GENERATED for constraint in constraints
+    )
     primary = any(constraint.contype == ConstrType.CONSTR_PRIMARY for constraint in constraints)
     not_null = (
         column.is_not_null
@@ -101,7 +108,11 @@ def _parse_column(column: Any, enum_names: dict[str, PgType]) -> Column:
         type=pg_type,
         nullable=not not_null,
         default=_default_for_constraints(constraints),
-        is_generated=pg_type.name in {"serial", "bigserial"} or identity is not None,
+        is_generated=(
+            pg_type.name in {"serial", "bigserial"}
+            or identity is not None
+            or has_generated_expr
+        ),
         identity=identity,
     )
 
