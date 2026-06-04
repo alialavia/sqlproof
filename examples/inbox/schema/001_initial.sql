@@ -209,3 +209,27 @@ CREATE POLICY "messages visible with parent ticket" ON messages
         )
     )
   );
+
+-- ---------------------------------------------------------------------------
+-- Recipe 3 (idempotent-status-triggers) — BUGGY trigger on tickets
+-- ---------------------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION tg_close_sets_resolved_at()
+  RETURNS TRIGGER
+  LANGUAGE plpgsql
+AS $$
+BEGIN
+  -- BUG: fires on any update where the NEW status is 'resolved',
+  -- including edits that don't change the status. Editing a resolved
+  -- ticket's subject bumps `resolved_at`.
+  IF NEW.status = 'resolved' THEN
+    NEW.resolved_at := now();
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER tg_close_sets_resolved_at
+  BEFORE UPDATE ON tickets
+  FOR EACH ROW
+  EXECUTE FUNCTION tg_close_sets_resolved_at();
