@@ -8,6 +8,8 @@ they aren't part of at all.
 
 from __future__ import annotations
 
+import contextlib
+
 from hypothesis import HealthCheck, assume, given, settings
 from hypothesis import strategies as st
 
@@ -39,15 +41,15 @@ def test_viewer_cannot_delete_admin_in_same_org(supabase_proof, data) -> None:
         assume(admins)
         viewer, admin = viewers[0], admins[0]
 
-        with as_rls_user(db, viewer["user_id"]):
-            with db.savepoint():
-                try:
-                    db.execute(
-                        "DELETE FROM org_members WHERE org_id = %s AND user_id = %s",
-                        admin["org_id"], admin["user_id"],
-                    )
-                except Exception:
-                    pass
+        with (
+            as_rls_user(db, viewer["user_id"]),
+            db.savepoint(),
+            contextlib.suppress(Exception),
+        ):
+            db.execute(
+                "DELETE FROM org_members WHERE org_id = %s AND user_id = %s",
+                admin["org_id"], admin["user_id"],
+            )
 
         still_present = db.scalar(
             "SELECT count(*) FROM org_members WHERE org_id = %s AND user_id = %s",
@@ -83,15 +85,15 @@ def test_member_of_org_a_cannot_delete_member_of_org_b(supabase_proof, data) -> 
         )
         assume(victim is not None)
 
-        with as_rls_user(db, attacker["user_id"]):
-            with db.savepoint():
-                try:
-                    db.execute(
-                        "DELETE FROM org_members WHERE org_id = %s AND user_id = %s",
-                        victim["org_id"], victim["user_id"],
-                    )
-                except Exception:
-                    pass
+        with (
+            as_rls_user(db, attacker["user_id"]),
+            db.savepoint(),
+            contextlib.suppress(Exception),
+        ):
+            db.execute(
+                "DELETE FROM org_members WHERE org_id = %s AND user_id = %s",
+                victim["org_id"], victim["user_id"],
+            )
 
         still_present = db.scalar(
             "SELECT count(*) FROM org_members WHERE org_id = %s AND user_id = %s",

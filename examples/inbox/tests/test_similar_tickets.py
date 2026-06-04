@@ -10,12 +10,11 @@ pending pgvector parser support (issue #69).
 
 from __future__ import annotations
 
+from _helpers import vector_strategy
 from hypothesis import HealthCheck, assume, given, settings
 from hypothesis import strategies as st
 
 from sqlproof.contrib.supabase import as_rls_user
-
-from _helpers import vector_strategy
 
 # pgvector tradeoffs:
 #   data_too_large / too_slow — 384-dim vector serialization overhead per example.

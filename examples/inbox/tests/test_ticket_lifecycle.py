@@ -13,7 +13,8 @@ through its lifecycle.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+from typing import Any, ClassVar
 
 from hypothesis.stateful import invariant, rule
 
@@ -24,11 +25,11 @@ from sqlproof.testing import SqlProofStateMachine
 _ORG_ID      = "00000000-0000-4000-8000-000000000001"
 _CUSTOMER_ID = "00000000-0000-4000-8000-000000000002"
 _TICKET_ID   = "00000000-0000-4000-8000-000000000003"
-_SLA_DUE_AT  = datetime(2026, 12, 31, tzinfo=timezone.utc)
+_SLA_DUE_AT  = datetime(2026, 12, 31, tzinfo=UTC)
 
 
 class TicketLifecycleMachine(SqlProofStateMachine):
-    initial_dataset = {
+    initial_dataset: ClassVar[dict[str, list[dict[str, Any]]]] = {
         "organizations": [
             {
                 "id": _ORG_ID,

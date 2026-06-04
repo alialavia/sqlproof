@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-
 EXPECTED_TABLES = {
     "organizations",
     "org_members",

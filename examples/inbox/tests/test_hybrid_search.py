@@ -11,8 +11,6 @@ from __future__ import annotations
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from _helpers import vector_strategy
-
 PROOF = settings(
     max_examples=20,
     deadline=None,
