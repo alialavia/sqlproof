@@ -27,3 +27,5 @@ AS $$
   ORDER BY distance ASC
   LIMIT p_k;
 $$;
+
+GRANT EXECUTE ON FUNCTION find_similar_tickets(UUID, INT) TO authenticated;

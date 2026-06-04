@@ -17,9 +17,14 @@ from sqlproof.contrib.supabase import as_rls_user
 
 from _helpers import vector_strategy
 
-# 384-dimensional vectors are large for Hypothesis's data budget; we
-# suppress the related health checks and keep max_examples modest so
-# the suite stays fast while still exercising the cross-tenant leak.
+# pgvector tradeoffs:
+#   data_too_large / too_slow — 384-dim vector serialization overhead per example.
+#   filter_too_much — assume(rows) rejects when the sparse 4-ticket/2-embedding
+#     dataset produces no neighbors; not fixable without growing the dataset
+#     (which would worsen the speed budget above).
+#   function_scoped_fixture — supabase_proof is function-scoped to keep
+#     dataset isolation per Hypothesis example.
+# max_examples kept low for the same reason.
 PROOF = settings(
     max_examples=20,
     deadline=None,
