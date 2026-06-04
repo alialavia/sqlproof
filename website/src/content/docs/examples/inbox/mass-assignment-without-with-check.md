@@ -44,10 +44,10 @@ def test_viewer_cannot_self_promote_to_admin(supabase_proof, data):
         with as_rls_user(db, member["user_id"]):
             try:
                 with db.savepoint():
-                    db.execute("UPDATE org_members SET role = 'admin' WHERE user_id = %s", member["user_id"])
+                    db.execute("UPDATE org_members SET role = 'admin' WHERE org_id = %s AND user_id = %s", member["org_id"], member["user_id"])
             except Exception:
                 pass   # the WITH CHECK may raise; post-state check below is what matters
-        role_after = db.scalar("SELECT role FROM org_members WHERE user_id = %s", member["user_id"])
+        role_after = db.scalar("SELECT role FROM org_members WHERE org_id = %s AND user_id = %s", member["org_id"], member["user_id"])
         assert role_after == "viewer"
 ```
 
@@ -66,15 +66,15 @@ Dataset: {"org_members": [{role: "viewer", ...}]}
 
 ## The fix
 
-Add `WITH CHECK` that forbids escalation to a privileged role:
+Add `WITH CHECK` that pins the new row's role to `'viewer'` — the new row must still be a viewer:
 
 ```sql
 WITH CHECK (
   user_id = auth.uid()
-  AND role NOT IN ('admin', 'agent')
+  AND role = 'viewer'
 )
 ```
 
-Role *promotions* must go through a `SECURITY DEFINER` admin function instead — that's the standard Supabase pattern.
+This is enum-stable: any future role added to the `member_role` enum is automatically denied without updating this policy. Role *promotions* must go through a `SECURITY DEFINER` admin function instead — that's the standard Supabase pattern.
 
 See also [Missing DELETE policy](missing-delete-policy) — the sibling write-side RLS bug.
