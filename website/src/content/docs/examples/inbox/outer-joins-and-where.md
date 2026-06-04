@@ -40,9 +40,10 @@ Seeds one ticket in each status. All four buckets present. Test green. The bug o
 @given(data=st.data())
 def test_dashboard_returns_every_status_bucket(proof, data):
     dataset = data.draw(proof.dataset_strategy(
-        sizes={"organizations": 1, "tickets": st.integers(min_value=0, max_value=5)},
+        sizes={"organizations": 1, "customers": 1, "tickets": st.integers(min_value=0, max_value=5)},
     ))
     with proof.client_for_dataset(dataset) as db:
+        org_id = dataset["organizations"][0]["id"]
         rows = db.query("SELECT status FROM organization_dashboard(%s)", org_id)
         assert {r["status"] for r in rows} == {"open", "pending", "resolved", "reopened"}
 ```

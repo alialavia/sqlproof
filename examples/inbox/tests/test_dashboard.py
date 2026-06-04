@@ -46,6 +46,15 @@ def test_dashboard_returns_every_status_bucket(proof, data) -> None:
 @PROOF
 @given(data=st.data())
 def test_dashboard_counts_sum_to_org_ticket_total(proof, data) -> None:
+    """Companion sanity invariant: sum of dashboard counts equals total tickets in the org.
+
+    This property holds even with the BUGGY implementation, because dropping
+    zero-count buckets doesn't change the sum. It's not a bug detector — it's
+    a complementary invariant that demonstrates how a single property test
+    doesn't always cover everything. See `test_dashboard_returns_every_status_bucket`
+    above for the property that actually catches the LEFT-JOIN-collapsed-to-INNER
+    bug.
+    """
     dataset = data.draw(
         proof.dataset_strategy(
             sizes={"organizations": 1, "customers": 1, "tickets": 5},

@@ -14,3 +14,5 @@ AS $$
    AND t.org_id = p_org_id
   GROUP BY s.status;
 $$;
+
+GRANT EXECUTE ON FUNCTION organization_dashboard(UUID) TO authenticated;
