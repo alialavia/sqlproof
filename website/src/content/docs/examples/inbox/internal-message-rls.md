@@ -16,7 +16,11 @@ CREATE POLICY "messages visible with parent ticket" ON messages
     EXISTS (
       SELECT 1 FROM tickets t
       WHERE t.id = messages.ticket_id
-        AND (org_member_check OR customer_owns_ticket_check)
+        AND (
+          EXISTS (SELECT 1 FROM org_members om
+                  WHERE om.user_id = auth.uid() AND om.org_id = t.org_id)
+          OR nullif(auth.jwt() ->> 'customer_id', '')::uuid = t.customer_id
+        )
     )
   );
 ```
@@ -56,6 +60,8 @@ with supabase_proof.client_for_dataset(dataset) as db:
 Notice the `columns={"messages.is_internal": st.booleans()}` override — `is_internal` has a `DEFAULT false`, so the dataset generator omits it; we have to opt in for the test to read it. And `assume(internal)` discards runs where Hypothesis happens to generate zero internal messages, since the bug can't leak what doesn't exist.
 
 ## The counterexample
+
+Illustrative — Hypothesis would print the actual draw and assertion:
 
 ```
 Property failed: customer leaked internal messages

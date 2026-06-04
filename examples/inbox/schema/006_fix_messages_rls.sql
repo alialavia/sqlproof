@@ -18,7 +18,7 @@ CREATE POLICY "messages visible with parent ticket" ON messages
               AND om.org_id  = t.org_id
           )
           OR (
-            (auth.jwt() ->> 'customer_id')::uuid = t.customer_id
+            nullif(auth.jwt() ->> 'customer_id', '')::uuid = t.customer_id
             AND messages.is_internal = false   -- the missing gate
           )
         )

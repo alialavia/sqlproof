@@ -56,6 +56,7 @@ def test_customer_does_not_see_internal_notes_on_their_own_ticket(
             r"SELECT id::text FROM auth.users WHERE email LIKE %s ESCAPE '\' LIMIT 1",
             r"sqlproof\_%@test.invalid",
         )
+        assert rows, "no sqlproof test users seeded in auth.users — bootstrap missing"
         customer_auth_id = rows[0]["id"]
 
         with as_rls_user(

@@ -205,7 +205,7 @@ CREATE POLICY "messages visible with parent ticket" ON messages
             WHERE om.user_id = auth.uid()
               AND om.org_id  = t.org_id
           )
-          OR (auth.jwt() ->> 'customer_id')::uuid = t.customer_id
+          OR nullif(auth.jwt() ->> 'customer_id', '')::uuid = t.customer_id
         )
     )
   );
