@@ -1,4 +1,4 @@
-"""Smoke test: schema loads, every public table exists, no orphan FKs."""
+"""Smoke test: schema loads and every expected public table exists."""
 
 from __future__ import annotations
 
