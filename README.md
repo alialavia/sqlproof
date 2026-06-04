@@ -127,6 +127,39 @@ Common shapes that property tests cover much better than examples:
 
 → Honest comparison with pgTAP (where SqlProof wins, where pgTAP wins, where you should ship both): [SqlProof vs pgTAP](https://sqlproof.com/guides/vs-pgtap/).
 
+### Ad-hoc fixtures without hand-rolled SQL
+
+Property tests cover most cases, but a few residuals — RLS regression pins, HTTP-layer tests that need fixture rows to exist, pytest fixtures shared across many examples — still want one specific row inserted ahead of time. The reflex is to write a helper:
+
+```python
+# Anti-pattern: hand-rolled INSERT in a test helper.
+def insert_project(db, owner_id, *, name):
+    db.execute(
+        "INSERT INTO projects (id, user_id, name) VALUES (%s, %s, %s)",
+        new_id(), owner_id, name,
+    )
+```
+
+This compiles fine, looks fine in review, and silently breaks the next time a migration adds a NOT NULL column to `projects`. The failure surfaces commits later, in tests that aren't nominally about projects, as a cryptic `NotNullViolation`. See [issue #13](https://github.com/alialavia/sqlproof/issues/13).
+
+Use `SqlProof.row_strategy` instead. It's a thin, schema-aware wrapper over the same generator the property runner uses — it knows your NOT NULL columns, your CHECK constraints, your FKs, your enums:
+
+```python
+# Same fixture, schema-backed. When a migration adds `org_id NOT NULL`,
+# this helper keeps working — the generator fills the new column.
+def insert_project(db, owner_id, *, name):
+    row = proof.row_strategy("projects", user_id=owner_id, name=name).example()
+    db.execute(
+        f"INSERT INTO projects ({', '.join(row)}) VALUES ({', '.join(['%s'] * len(row))})",
+        *row.values(),
+    )
+    return row
+```
+
+Override kwargs accept Hypothesis strategies, callables, or bare values. Unknown column names raise immediately so typos surface at the call site rather than silently no-op. Inside a `@given`-decorated test, draw from the strategy directly instead of calling `.example()`.
+
+Reach for property tests (`check()`, `dataset_strategy`) first — they're stronger. `row_strategy` is the smaller hammer for the residual case where a single, hand-pinned row is the right shape.
+
 ## API
 
 See the full API reference at [sqlproof.com](https://sqlproof.com).
@@ -144,6 +177,9 @@ proof.invariant(
     query="SELECT id FROM orders WHERE total < 0",
     expect_empty=True,
 )
+
+# Single-row strategy for ad-hoc fixtures (see "Ad-hoc fixtures" above).
+order = proof.row_strategy("orders", customer_id=42).example()
 
 proof.disconnect()
 ```
