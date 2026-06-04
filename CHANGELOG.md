@@ -5,6 +5,13 @@ All notable changes to SqlProof will be documented here. The format is based on
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While SqlProof
 remains in `0.x`, minor versions may include breaking changes.
 
+## [0.7.0](https://github.com/alialavia/sqlproof/compare/v0.6.0...v0.7.0) (2026-06-04)
+
+
+### Added
+
+* **examples:** inbox sample — multi-tenant Supabase app with 10 buggy-then-fixed recipes ([#79](https://github.com/alialavia/sqlproof/issues/79)) ([0da4feb](https://github.com/alialavia/sqlproof/commit/0da4febffa0bd68f2aed144255524baa69068eaf))
+
 ## [0.6.0](https://github.com/alialavia/sqlproof/compare/v0.5.0...v0.6.0) (2026-06-04)
 
 
