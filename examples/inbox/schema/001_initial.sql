@@ -236,3 +236,26 @@ CREATE TRIGGER tg_close_sets_resolved_at
   BEFORE UPDATE ON tickets
   FOR EACH ROW
   EXECUTE FUNCTION tg_close_sets_resolved_at();
+
+-- ---------------------------------------------------------------------------
+-- Recipe 4 (outer-joins-and-where) — BUGGY dashboard RPC
+-- ---------------------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION organization_dashboard(p_org_id UUID)
+  RETURNS TABLE (status ticket_status, count BIGINT)
+  LANGUAGE sql STABLE
+  SECURITY DEFINER
+  SET search_path = public
+AS $$
+  -- BUG: the LEFT JOIN intends "show every status, even zero ones",
+  -- but `WHERE t.org_id = p_org_id` collapses it to INNER, dropping
+  -- the zero-bucket rows. Dashboards silently lose "pending: 0",
+  -- "reopened: 0", etc.
+  SELECT s.status, count(t.id)
+  FROM unnest(enum_range(NULL::ticket_status)) AS s(status)
+  LEFT JOIN tickets t ON t.status = s.status
+  WHERE t.org_id = p_org_id
+  GROUP BY s.status;
+$$;
+
+GRANT EXECUTE ON FUNCTION organization_dashboard(UUID) TO authenticated;
