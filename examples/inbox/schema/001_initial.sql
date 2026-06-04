@@ -316,3 +316,22 @@ CREATE POLICY "members see co-members" ON org_members
 CREATE POLICY "members manage their own row delete" ON org_members
   FOR DELETE TO authenticated
   USING (true);
+
+-- ---------------------------------------------------------------------------
+-- Recipe 8 (stateful-ticket-lifecycle) — BUGGY reopen RPC
+-- ---------------------------------------------------------------------------
+
+-- BUG: sets status to 'reopened' but forgets to clear resolved_at.
+-- The invariant "non-resolved status -> resolved_at IS NULL" holds
+-- at every isolated state — only the transition resolve->reopen
+-- leaves a stale value behind.
+CREATE OR REPLACE FUNCTION reopen_ticket(p_ticket_id UUID)
+  RETURNS VOID
+  LANGUAGE sql
+  SECURITY DEFINER
+  SET search_path = public
+AS $$
+  UPDATE tickets SET status = 'reopened' WHERE id = p_ticket_id;
+$$;
+
+GRANT EXECUTE ON FUNCTION reopen_ticket(UUID) TO authenticated;
