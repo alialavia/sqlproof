@@ -16,6 +16,7 @@ from sqlproof.client import InMemorySqlProofClient, PsycopgSqlProofClient, SqlPr
 from sqlproof.config import ExternalSeed, ExternalTableSpec, SqlProofConfig
 from sqlproof.exceptions import SqlProofPropertyFailure, SqlProofUsageError
 from sqlproof.generators.graph import ColumnOverrides, Dataset, SizeSpec, dataset_strategy
+from sqlproof.generators.rows import table_rows_strategy
 from sqlproof.generators.sampling import draw_example
 from sqlproof.schema.dependency_graph import resolve_insertion_plan
 from sqlproof.schema.fingerprint import compute
@@ -49,6 +50,52 @@ class SqlProof:
     def customize(self, table: str, **overrides: object) -> Self:
         del table, overrides
         return self
+
+    def row_strategy(
+        self,
+        table: str,
+        /,
+        **overrides: object,
+    ) -> SearchStrategy[dict[str, Any]]:
+        """Schema-backed strategy that draws ONE valid row for ``table``.
+
+        The intended use is ad-hoc test setup — pytest fixtures and
+        regression pins that need a row to exist but don't care about
+        the bulk-data ergonomics of a full ``check()`` / property test.
+        Reach for property tests (``check()``, ``dataset_strategy``)
+        first; ``row_strategy`` is the smaller hammer for the residual
+        cases where one specific row needs to land in the DB.
+
+        The point of using this over a hand-rolled
+        ``INSERT INTO X (a, b, c) VALUES (...)`` helper is that the
+        generator knows the schema. When a migration adds a NOT NULL
+        column to ``X``, ``row_strategy`` callers automatically receive
+        a valid value for it; hand-rolled INSERT strings silently break
+        at runtime, often in tests not nominally about ``X``. See
+        issue #13 for the failure mode.
+
+        Override keyword arguments may be: a Hypothesis ``SearchStrategy``
+        (drawn from), a callable (passed a ``ColumnContext``), or a bare
+        value (used as-is). Unknown column names raise immediately so
+        typos surface at the call site rather than silently no-op.
+        """
+        table_obj = self.schema_info.table(table)
+        valid_columns = {column.name for column in table_obj.columns}
+        unknown = [name for name in overrides if name not in valid_columns]
+        if unknown:
+            msg = (
+                f"row_strategy({table!r}): unknown column(s) in overrides: "
+                f"{sorted(unknown)!r}. Valid columns: {sorted(valid_columns)!r}."
+            )
+            raise SqlProofUsageError(msg)
+        namespaced: dict[str, object] = {
+            f"{table}.{column}": value for column, value in overrides.items()
+        }
+        return table_rows_strategy(
+            table_obj,
+            count=1,
+            columns=namespaced,
+        ).map(lambda rows: rows[0])
 
     def dataset_strategy(
         self,
