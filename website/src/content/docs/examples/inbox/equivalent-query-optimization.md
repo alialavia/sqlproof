@@ -50,7 +50,7 @@ Doesn't compare v1 to v2 at all. Doesn't try an agent with zero tickets.
 @given(data=st.data())
 def test_workload_summary_v1_equivalent_to_v2(supabase_proof, data):
     dataset = data.draw(supabase_proof.dataset_strategy(
-        sizes={"org_members": 3, "tickets": st.integers(min_value=0, max_value=10)},
+        sizes={"organizations": 1, "customers": 1, "org_members": 3, "tickets": st.integers(min_value=0, max_value=10)},
         columns={"org_members.role": st.just("agent")},
     ))
     with supabase_proof.client_for_dataset(dataset) as db:

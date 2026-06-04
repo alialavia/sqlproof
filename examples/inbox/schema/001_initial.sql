@@ -369,7 +369,6 @@ AS $$
          AND t.status = 'pending') AS pending_count,
     (SELECT count(*) FROM tickets t
        WHERE t.assigned_agent_id = m.user_id
-         AND t.sla_due_at IS NOT NULL
          AND t.resolved_at IS NOT NULL
          AND t.sla_due_at < t.resolved_at) AS sla_breach_count
   FROM org_members m

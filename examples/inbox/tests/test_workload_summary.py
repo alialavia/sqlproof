@@ -28,16 +28,19 @@ PROOF = settings(
 )
 
 
-def _v2_loaded(db) -> bool:
-    return bool(
-        db.scalar(
+@pytest.fixture
+def workload_v2_required(supabase_proof):
+    """Skip the test if workload_summary_v2 hasn't been loaded yet."""
+    with supabase_proof.client_for_dataset({}) as db:
+        if not db.scalar(
             "SELECT to_regprocedure('public.agent_workload_summary_v2(uuid)') "
             "IS NOT NULL",
-        ),
-    )
+        ):
+            pytest.skip("apply 008_add_workload_summary_v2.sql first")
 
 
 def _sorted_rows(rows: list[dict]) -> list[tuple]:
+    # psycopg returns UUID columns as uuid.UUID; stringify for stable sort.
     return sorted(
         (
             str(r["user_id"]),
@@ -51,7 +54,9 @@ def _sorted_rows(rows: list[dict]) -> list[tuple]:
 
 @PROOF
 @given(data=st.data())
-def test_workload_summary_v1_equivalent_to_v2(supabase_proof, data) -> None:
+def test_workload_summary_v1_equivalent_to_v2(
+    supabase_proof, workload_v2_required, data,
+) -> None:
     dataset = data.draw(
         supabase_proof.dataset_strategy(
             sizes={
@@ -66,9 +71,6 @@ def test_workload_summary_v1_equivalent_to_v2(supabase_proof, data) -> None:
         ),
     )
     with supabase_proof.client_for_dataset(dataset) as db:
-        if not _v2_loaded(db):
-            pytest.skip("apply 008_add_workload_summary_v2.sql first")
-
         org_id = dataset["organizations"][0]["id"]
         v1 = _sorted_rows(
             db.query(

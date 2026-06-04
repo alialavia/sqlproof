@@ -25,8 +25,7 @@ AS $$
     count(*) FILTER (WHERE t.status = 'open')    AS open_count,
     count(*) FILTER (WHERE t.status = 'pending') AS pending_count,
     count(*) FILTER (
-      WHERE t.sla_due_at IS NOT NULL
-        AND t.resolved_at IS NOT NULL
+      WHERE t.resolved_at IS NOT NULL
         AND t.sla_due_at < t.resolved_at
     ) AS sla_breach_count
   FROM org_members m
