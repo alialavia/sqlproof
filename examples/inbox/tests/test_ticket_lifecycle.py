@@ -13,7 +13,7 @@ through its lifecycle.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from hypothesis.stateful import invariant, rule
 
@@ -60,9 +60,10 @@ class TicketLifecycleMachine(SqlProofStateMachine):
 
     def on_setup(self) -> None:
         self.ticket_id = _TICKET_ID
-        # Force a known initial state. The dataset seed sets status='open'
-        # and resolved_at=NULL, but be explicit so the invariant has a
-        # clean starting point even if Recipe 3's trigger fires.
+        # Guarantee a clean starting point for every Hypothesis example.
+        # initial_dataset already inserts status='open'/resolved_at=NULL, but
+        # this explicit reset guards against any future schema default or
+        # migration that might alter those columns on insert.
         self.db.execute(
             "UPDATE tickets SET status = 'open', resolved_at = NULL "
             "WHERE id = %s",

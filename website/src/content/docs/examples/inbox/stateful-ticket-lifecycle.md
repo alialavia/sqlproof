@@ -73,7 +73,7 @@ Illustrative — Hypothesis would print the actual sequence and state:
 ```
 Property failed: stale resolved_at
 Sequence: resolve(), reopen()
-Final state: status='reopened', resolved_at=2026-06-03 10:00:00+00
+Final state: status='reopened', resolved_at=2026-01-15 09:32:11+00
 ```
 
 ## The fix
