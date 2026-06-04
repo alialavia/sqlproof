@@ -36,10 +36,16 @@ A `@given` test asserting `if status != 'resolved' then resolved_at IS NULL` aga
 
 ```python
 class TicketLifecycleMachine(SqlProofStateMachine):
-    sizes = {"organizations": 1, "customers": 1, "tickets": 1}
+    initial_dataset = {
+        "organizations": [{"id": ORG_ID, "name": "Test Org", "sla_tier": "bronze"}],
+        "customers":     [{"id": CUST_ID, "email": "c@x.invalid", "display_name": "C"}],
+        "tickets":       [{"id": TICKET_ID, "org_id": ORG_ID, "customer_id": CUST_ID,
+                           "status": "open", "priority": "med", "subject": "T",
+                           "sla_due_at": "2026-12-31T00:00:00Z"}],
+    }
 
     def on_setup(self):
-        self.ticket_id = self.dataset["tickets"][0]["id"]
+        self.ticket_id = TICKET_ID
         self.db.execute("UPDATE tickets SET status='open', resolved_at=NULL WHERE id=%s",
                         self.ticket_id)
 
