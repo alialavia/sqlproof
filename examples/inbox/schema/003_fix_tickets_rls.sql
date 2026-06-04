@@ -6,7 +6,7 @@
 --                  AND org_id = tickets.org_id)` — fires true only when
 --         the caller is a member of *this ticket's* org.
 
-DROP POLICY "agents see org tickets" ON tickets;
+DROP POLICY IF EXISTS "agents see org tickets" ON tickets;
 
 CREATE POLICY "agents see org tickets" ON tickets
   FOR SELECT TO authenticated

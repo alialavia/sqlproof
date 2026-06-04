@@ -38,6 +38,9 @@ One org, one ticket — the policy returns the row, the test is green. The cross
 ## The SqlProof property
 
 ```python
+from hypothesis import assume, given
+from hypothesis import strategies as st
+
 @given(data=st.data())
 def test_member_of_org_a_cannot_read_tickets_in_org_b(supabase_proof, data):
     dataset = data.draw(supabase_proof.dataset_strategy(
@@ -51,8 +54,8 @@ def test_member_of_org_a_cannot_read_tickets_in_org_b(supabase_proof, data):
         org_a_only = [m for m in members
                       if m["org_id"] == orgs[0]["id"] and m["user_id"] not in org_b_user_ids]
         tickets_in_b = [t for t in dataset["tickets"] if t["org_id"] == orgs[1]["id"]]
-        if not org_a_only or not tickets_in_b:
-            return
+        assume(org_a_only)
+        assume(tickets_in_b)
         with as_rls_user(db, org_a_only[0]["user_id"]):
             visible = db.query("SELECT id FROM tickets WHERE org_id = %s", orgs[1]["id"])
         assert visible == []

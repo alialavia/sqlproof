@@ -8,7 +8,7 @@ org's tickets.
 
 from __future__ import annotations
 
-from hypothesis import HealthCheck, given, settings
+from hypothesis import HealthCheck, assume, given, settings
 from hypothesis import strategies as st
 
 from sqlproof.contrib.supabase import as_rls_user
@@ -50,10 +50,8 @@ def test_member_of_org_a_cannot_read_tickets_in_org_b(
             if m["org_id"] == orgs[0]["id"] and m["user_id"] not in org_b_user_ids
         ]
         tickets_in_b = [t for t in dataset["tickets"] if t["org_id"] == orgs[1]["id"]]
-        if not org_a_only_members or not tickets_in_b:
-            # Hypothesis happened to put all members/tickets in one org this run;
-            # let the framework re-draw a different dataset.
-            return
+        assume(org_a_only_members)
+        assume(tickets_in_b)
         org_a_member = org_a_only_members[0]
 
         with as_rls_user(db, org_a_member["user_id"]):
