@@ -259,3 +259,15 @@ AS $$
 $$;
 
 GRANT EXECUTE ON FUNCTION organization_dashboard(UUID) TO authenticated;
+
+-- ---------------------------------------------------------------------------
+-- Recipe 9 (mass-assignment-without-with-check) — BUGGY UPDATE policy
+-- ---------------------------------------------------------------------------
+
+-- BUG: missing WITH CHECK. Members can `UPDATE org_members SET role
+-- = 'admin' WHERE user_id = auth.uid()` and self-promote. The USING
+-- clause restricts *which rows* they can touch; without WITH CHECK,
+-- nothing restricts *what they can change about that row*.
+CREATE POLICY "members manage their own row" ON org_members
+  FOR UPDATE TO authenticated
+  USING (org_members.user_id = auth.uid());
