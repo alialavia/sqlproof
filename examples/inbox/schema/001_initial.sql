@@ -168,3 +168,44 @@ CREATE POLICY "agents see org tickets" ON tickets
       WHERE org_members.user_id = auth.uid()
     )
   );
+
+-- ---------------------------------------------------------------------------
+-- Recipe 5 (internal-message-rls) — BUGGY policy on messages
+-- ---------------------------------------------------------------------------
+
+ALTER TABLE messages ENABLE ROW LEVEL SECURITY;
+
+-- Prerequisite: customers must be able to read their own tickets so
+-- that the messages EXISTS subquery can correlate back to the ticket.
+-- This policy is correct for the customer-visibility case.
+CREATE POLICY "customers see own tickets" ON tickets
+  FOR SELECT TO authenticated
+  USING (
+    (auth.jwt() ->> 'customer_id')::uuid = tickets.customer_id
+  );
+
+-- BUG: This policy says "you can read a message iff you can read its
+-- parent ticket." That's correct for agents, but customers viewing
+-- their own ticket also pass it — and the policy never gates on
+-- `is_internal`. Customers read internal agent triage notes meant
+-- for staff only.
+--
+-- Customer identity is simulated via an `customer_id` claim in the
+-- JWT (not an auth.users row), since customers in this app are
+-- external entities tracked in the `customers` table.
+CREATE POLICY "messages visible with parent ticket" ON messages
+  FOR SELECT TO authenticated
+  USING (
+    EXISTS (
+      SELECT 1 FROM tickets t
+      WHERE t.id = messages.ticket_id
+        AND (
+          EXISTS (
+            SELECT 1 FROM org_members om
+            WHERE om.user_id = auth.uid()
+              AND om.org_id  = t.org_id
+          )
+          OR (auth.jwt() ->> 'customer_id')::uuid = t.customer_id
+        )
+    )
+  );
