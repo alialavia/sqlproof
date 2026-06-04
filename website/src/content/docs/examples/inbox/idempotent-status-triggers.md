@@ -38,15 +38,20 @@ Tests the *transition*; doesn't test the no-op update.
 ## The SqlProof property
 
 ```python
-@given(new_subject=st.text(min_size=1, max_size=80))
+@given(data=st.data(), new_subject=st.text(min_size=1, max_size=80))
 def test_editing_resolved_ticket_does_not_bump_resolved_at(proof, data, new_subject):
     dataset = data.draw(proof.dataset_strategy(
         sizes={"tickets": 1},
-        columns={"tickets.status": st.just("resolved")},
+        columns={"tickets.status": st.just("open")},
     ))
     with proof.client_for_dataset(dataset) as db:
         t_id = dataset["tickets"][0]["id"]
+        # Transition open -> resolved to fire the trigger and stamp resolved_at.
+        # This simulates a ticket that was genuinely resolved at some point.
+        db.execute("UPDATE tickets SET status = 'resolved' WHERE id = %s", t_id)
         before = db.scalar("SELECT resolved_at FROM tickets WHERE id = %s", t_id)
+        assert before is not None
+        # Subject edit must not bump resolved_at.
         db.execute("UPDATE tickets SET subject = %s WHERE id = %s", new_subject, t_id)
         after  = db.scalar("SELECT resolved_at FROM tickets WHERE id = %s", t_id)
         assert after == before
@@ -69,7 +74,7 @@ Check that the status *transitioned* into `'resolved'`:
 
 ```sql
 IF NEW.status = 'resolved'
-   AND (OLD IS NULL OR OLD.status IS DISTINCT FROM 'resolved')
+   AND OLD.status IS DISTINCT FROM 'resolved'
 THEN
   NEW.resolved_at := now();
 END IF;

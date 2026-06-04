@@ -222,8 +222,11 @@ BEGIN
   -- BUG: fires on any update where the NEW status is 'resolved',
   -- including edits that don't change the status. Editing a resolved
   -- ticket's subject bumps `resolved_at`.
+  -- Uses clock_timestamp() (wall time, not transaction time) so that
+  -- the second fire within the same transaction produces a distinct
+  -- value — which is what a property test can observe.
   IF NEW.status = 'resolved' THEN
-    NEW.resolved_at := now();
+    NEW.resolved_at := clock_timestamp();
   END IF;
   RETURN NEW;
 END;

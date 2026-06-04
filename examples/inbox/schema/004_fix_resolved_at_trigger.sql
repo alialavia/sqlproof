@@ -7,7 +7,7 @@ CREATE OR REPLACE FUNCTION tg_close_sets_resolved_at()
 AS $$
 BEGIN
   IF NEW.status = 'resolved'
-     AND (OLD IS NULL OR OLD.status IS DISTINCT FROM 'resolved')
+     AND OLD.status IS DISTINCT FROM 'resolved'
   THEN
     NEW.resolved_at := now();
   END IF;
