@@ -271,3 +271,40 @@ GRANT EXECUTE ON FUNCTION organization_dashboard(UUID) TO authenticated;
 CREATE POLICY "members manage their own row" ON org_members
   FOR UPDATE TO authenticated
   USING (org_members.user_id = auth.uid());
+
+-- ---------------------------------------------------------------------------
+-- Recipe 10 (missing-delete-policy) — overly permissive DELETE policy
+-- ---------------------------------------------------------------------------
+
+-- SECURITY DEFINER helper: check whether a given user is a member of an
+-- org. Used by the co-member SELECT policy below (and later by the fix
+-- migration) to avoid infinite RLS recursion inside org_members policies.
+CREATE OR REPLACE FUNCTION is_member_in_org(p_org_id UUID, p_user_id UUID)
+  RETURNS BOOLEAN
+  LANGUAGE sql STABLE SECURITY DEFINER
+  SET search_path = public
+AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM org_members
+    WHERE org_id = p_org_id AND user_id = p_user_id
+  );
+$$;
+
+GRANT EXECUTE ON FUNCTION is_member_in_org(UUID, UUID) TO authenticated;
+
+-- Co-member visibility: members can see all other members of orgs they
+-- belong to. This is the realistic SELECT policy that ships alongside the
+-- DELETE policy — without it, the buggy DELETE is unobservable in raw
+-- Postgres because users can only see their own row.
+CREATE POLICY "members see co-members" ON org_members
+  FOR SELECT TO authenticated
+  USING (is_member_in_org(org_members.org_id, auth.uid()));
+
+-- BUG: shipped as "any authenticated user can delete any membership row"
+-- but the USING clause doesn't restrict *who* the deleted row belongs
+-- to — a viewer can issue a DELETE that removes an admin from the org.
+-- (The intent was probably user_id = auth.uid() OR is_admin_in_org(...);
+-- the shipped version forgot the constraint entirely.)
+CREATE POLICY "members manage their own row delete" ON org_members
+  FOR DELETE TO authenticated
+  USING (true);
