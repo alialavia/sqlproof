@@ -335,3 +335,46 @@ AS $$
 $$;
 
 GRANT EXECUTE ON FUNCTION reopen_ticket(UUID) TO authenticated;
+
+-- ---------------------------------------------------------------------------
+-- Recipe 7 (equivalent-query-optimization) — v1 reference implementation
+-- ---------------------------------------------------------------------------
+
+-- The canonical "slow but correct" version: one correlated subquery
+-- per metric, joined back to `org_members` so EVERY agent in the org
+-- appears in the result — including those with zero assigned tickets.
+--
+-- v2 (in 008_add_workload_summary_v2.sql) rewrites this as a single
+-- scan with FILTER aggregations. The rewrite ships with one subtle
+-- bug — see recipe doc.
+
+CREATE OR REPLACE FUNCTION agent_workload_summary_v1(p_org_id UUID)
+  RETURNS TABLE (
+    user_id          UUID,
+    open_count       BIGINT,
+    pending_count    BIGINT,
+    sla_breach_count BIGINT
+  )
+  LANGUAGE sql STABLE
+  SECURITY DEFINER
+  SET search_path = public
+AS $$
+  SELECT
+    m.user_id,
+    (SELECT count(*) FROM tickets t
+       WHERE t.assigned_agent_id = m.user_id
+         AND t.status = 'open')    AS open_count,
+    (SELECT count(*) FROM tickets t
+       WHERE t.assigned_agent_id = m.user_id
+         AND t.status = 'pending') AS pending_count,
+    (SELECT count(*) FROM tickets t
+       WHERE t.assigned_agent_id = m.user_id
+         AND t.sla_due_at IS NOT NULL
+         AND t.resolved_at IS NOT NULL
+         AND t.sla_due_at < t.resolved_at) AS sla_breach_count
+  FROM org_members m
+  WHERE m.org_id = p_org_id
+    AND m.role   = 'agent';
+$$;
+
+GRANT EXECUTE ON FUNCTION agent_workload_summary_v1(UUID) TO authenticated;
