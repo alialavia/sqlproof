@@ -1,0 +1,93 @@
+---
+title: Stale resolved_at after resolve→reopen
+description: A sequence-dependent bug a single-shot property test cannot reach.
+---
+
+## Problem
+
+A customer reopens a ticket. The status field flips to `reopened` but the `resolved_at` timestamp stays set to the original resolution time. SLA reporting now thinks the ticket is both reopened *and* resolved. A snapshot test of an open or resolved ticket passes; only the *transition* exposes the inconsistency.
+
+## The code
+
+```sql
+CREATE FUNCTION reopen_ticket(p_ticket_id UUID) RETURNS VOID AS $$
+  UPDATE tickets SET status = 'reopened' WHERE id = p_ticket_id;
+$$ LANGUAGE sql;
+```
+
+## Why review misses it
+
+You read the function and confirm "yes, it reopens." You don't look at every column the ticket has and ask "what stale state could be left behind?" The bug is in what the function *doesn't* update.
+
+## The example test that passes
+
+```python
+def test_reopen_sets_status(db, resolved_ticket):
+    db.scalar("SELECT reopen_ticket(%s)", resolved_ticket["id"])
+    status = db.scalar("SELECT status FROM tickets WHERE id = %s", resolved_ticket["id"])
+    assert status == "reopened"
+```
+
+Tests the one thing the function *does*. Misses the thing it *should also have done*.
+
+## The SqlProof property
+
+A `@given` test asserting `if status != 'resolved' then resolved_at IS NULL` against a freshly-generated ticket would pass — because every individual ticket state respects the invariant. The bug requires a *sequence*.
+
+```python
+class TicketLifecycleMachine(SqlProofStateMachine):
+    initial_dataset = {
+        "organizations": [{"id": ORG_ID, "name": "Test Org", "sla_tier": "bronze"}],
+        "customers":     [{"id": CUST_ID, "email": "c@x.invalid", "display_name": "C"}],
+        "tickets":       [{"id": TICKET_ID, "org_id": ORG_ID, "customer_id": CUST_ID,
+                           "status": "open", "priority": "med", "subject": "T",
+                           "sla_due_at": "2026-12-31T00:00:00Z"}],
+    }
+
+    def on_setup(self):
+        self.ticket_id = TICKET_ID
+        self.db.execute("UPDATE tickets SET status='open', resolved_at=NULL WHERE id=%s",
+                        self.ticket_id)
+
+    @rule()
+    def resolve(self): self.db.execute("UPDATE tickets SET status='resolved' WHERE id=%s", self.ticket_id)
+
+    @rule()
+    def reopen(self):  self.db.execute("SELECT reopen_ticket(%s)", self.ticket_id)
+
+    @invariant()
+    def consistent(self):
+        row = self.db.query("SELECT status, resolved_at FROM tickets WHERE id=%s", self.ticket_id)[0]
+        if row["status"] != "resolved":
+            assert row["resolved_at"] is None
+
+
+def test_ticket_lifecycle_invariant(proof):
+    proof.run_state_machine(TicketLifecycleMachine)
+```
+
+## The counterexample
+
+Illustrative — Hypothesis would print the actual sequence and state:
+
+```
+Property failed: stale resolved_at
+Sequence: resolve(), reopen()
+Final state: status='reopened', resolved_at=2026-01-15 09:32:11+00
+```
+
+## The fix
+
+```sql
+UPDATE tickets SET status = 'reopened', resolved_at = NULL WHERE id = p_ticket_id;
+```
+
+## When to reach for state machines
+
+A `@given` property test would have generated thousands of individual tickets and asserted the invariant on each. Every individual ticket would have satisfied it. The bug is in the *transition* between two valid states.
+
+Rule of thumb:
+- **Single update** changes a row from invalid to invalid? → `@given` catches it on the first example.
+- **Sequence** of updates leaves a row in a logically-impossible state? → state machine.
+
+State machines are slower (each example replays N rules), so don't reach for them when a single-shot property would do — see [recipe 3](idempotent-status-triggers) for the single-shot variant.

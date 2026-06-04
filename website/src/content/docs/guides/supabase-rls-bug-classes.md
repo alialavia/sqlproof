@@ -1,0 +1,128 @@
+---
+title: Supabase RLS bug classes — reference
+description: A compact catalog of common Supabase RLS bug shapes and the SqlProof properties that catch each one.
+---
+
+This page catalogs the RLS bug classes that don't get full case studies in the [Inbox sample](/examples/inbox/). One paragraph per bug, one short SqlProof property snippet, plus an audit-style snippet for the schema-level ones.
+
+For the fuller, recipe-style treatment of the most-impactful RLS bugs (tenant scoping in `SECURITY DEFINER` RPCs, uncorrelated `EXISTS`, missing `WITH CHECK`, missing DELETE policies, internal-vs-public message gating), see the [Inbox sample recipes](/examples/inbox/).
+
+## Over-permissive policy (`USING (true)`)
+
+A policy `USING (true)` on a SELECT/INSERT/UPDATE/DELETE grants the operation to any caller in the policy's role. Sometimes intentional for public-read tables, often a copy-paste error from a "make it work first" prototype.
+
+```python
+@given(data=st.data())
+def test_policy_excludes_some_rows(supabase_proof, data):
+    # If the policy is restrictive at all, at least one non-owner should
+    # see fewer rows than the owner. If they see all rows, the policy is
+    # equivalent to USING (true).
+    ...
+```
+
+## UPDATE policy without a paired SELECT policy
+
+PostgreSQL evaluates UPDATE policies by first reading the row (via the SELECT policy chain). With no SELECT policy on the table, the read returns nothing, and the UPDATE silently affects zero rows even for the owner.
+
+```python
+def test_owner_update_actually_modifies_the_row(supabase_proof, data):
+    with as_rls_user(db, owner_id):
+        db.execute("UPDATE table SET col = %s WHERE id = %s", new_val, row_id)
+    after = db.scalar("SELECT col FROM table WHERE id = %s", row_id)
+    assert after == new_val   # fails silently if SELECT policy missing
+```
+
+## `security_invoker` view bypass
+
+Pre-PG15, views run as their creator (often `postgres`), so the underlying table's RLS is ignored. In PG15+ create views with `WITH (security_invoker = true)`.
+
+```python
+def test_view_respects_underlying_rls(supabase_proof, data):
+    with as_rls_user(db, non_owner_id):
+        via_view  = db.query("SELECT id FROM the_view WHERE id = %s", row_id)
+        direct    = db.query("SELECT id FROM the_table WHERE id = %s", row_id)
+    assert via_view == direct
+```
+
+## `user_metadata` trust
+
+Supabase exposes `auth.jwt() -> 'user_metadata'` as JWT claims that the *client* can write. Policies that trust `user_metadata->>'role' = 'admin'` are bypassable; use `app_metadata` (server-only) or a database table.
+
+SqlProof's `as_supabase_user` accepts an `extra_claims=` arg, so you can directly test that a user *with* an `admin` claim in `user_metadata` doesn't gain admin powers:
+
+```python
+with as_rls_user(db, user_id, extra_claims={"user_metadata": {"role": "admin"}}):
+    rows = db.query("SELECT * FROM admin_only_table")
+assert rows == []   # if the policy correctly ignores user_metadata
+```
+
+## Infinite policy recursion
+
+A policy on table `A` that references table `B`, whose policy references table `A`, can cause PostgreSQL to recurse until `stack depth limit exceeded`. The property: every policy-gated query completes within a reasonable budget.
+
+```python
+def test_policy_query_does_not_recurse(supabase_proof, data):
+    with as_rls_user(db, user_id):
+        db.query("SELECT id FROM table_a LIMIT 1")
+    # If we reach here, no stack overflow.
+```
+
+The Inbox sample's Recipe 2 includes a comment about this pattern — the recursive form of `org_members` self-reference is exactly this class.
+
+## Schema-level audits (one-shot, not property tests)
+
+These are introspection queries, not invariants — run them once per CI build to enforce shop-wide RLS hygiene.
+
+### Every public table has RLS enabled
+
+```python
+def test_every_public_table_has_rls(db):
+    rows = db.query("""
+        SELECT c.relname FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE c.relkind = 'r' AND n.nspname = 'public' AND NOT c.relrowsecurity
+    """)
+    assert rows == [], f"tables without RLS: {[r['relname'] for r in rows]}"
+```
+
+### Every policy specifies a `TO` clause
+
+```python
+def test_every_policy_targets_a_role(db):
+    rows = db.query("""
+        SELECT schemaname, tablename, policyname
+        FROM pg_policies
+        WHERE roles = '{public}'   -- public means "all roles", almost always a mistake
+    """)
+    assert rows == []
+```
+
+### Every `SECURITY DEFINER` function pins `search_path`
+
+```python
+def test_security_definer_functions_lock_search_path(db):
+    rows = db.query("""
+        SELECT n.nspname, p.proname
+        FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE p.prosecdef = true
+          AND n.nspname = 'public'
+          AND (p.proconfig IS NULL
+               OR NOT EXISTS (SELECT 1 FROM unnest(p.proconfig) c WHERE c LIKE 'search_path=%'))
+    """)
+    assert rows == []
+```
+
+When SqlProof ships [issue #77](https://github.com/alialavia/sqlproof/issues/77) (planned `sqlproof.contrib.supabase.audit` module), these snippets will become one-liners like `assert_rls_enabled(db, "tickets")` and `tables_without_rls(db) == set()`.
+
+## Identity / silent-fail bugs
+
+When `auth.uid()` returns NULL (anonymous request) and a policy like `USING (auth.uid() = user_id)` evaluates to NULL → false, the API returns an empty result. Test the anonymous path explicitly — see [SqlProof issue #78](https://github.com/alialavia/sqlproof/issues/78) for the planned `as_anonymous()` helper; today's workaround:
+
+```python
+db.execute("SET LOCAL ROLE anon")
+try:
+    rows = db.query("SELECT * FROM tickets")
+finally:
+    db.execute("RESET ROLE")
+assert rows == []
+```

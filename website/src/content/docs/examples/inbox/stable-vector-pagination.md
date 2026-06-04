@@ -1,0 +1,89 @@
+---
+title: Pagination breaks on tied similarity scores
+description: An ORDER BY without a tiebreaker over a similarity score quietly drops and duplicates results across pages.
+---
+
+## Problem
+
+You ship a hybrid-search API combining vector and text scores. Paginate with `LIMIT 5 OFFSET 0`, then `LIMIT 5 OFFSET 5`, etc. Users on the second page see articles they already saw on the first, and articles they should see vanish entirely.
+
+## The code
+
+```sql
+SELECT a.id, (vector_part + text_part) AS score
+FROM kb_articles a JOIN kb_article_embeddings ae ...
+ORDER BY score DESC
+LIMIT p_limit OFFSET p_offset;
+```
+
+## Why review misses it
+
+The reviewer sees `ORDER BY score DESC` and assumes stable ordering. Postgres doesn't promise a stable order for tied rows — and ties are far more common in hybrid search (sparse embeddings, short text matches that snap to 0/1) than reviewers expect.
+
+There's a second, subtler problem: the JOIN between `kb_articles` and `kb_article_embeddings` is one-to-many (one article may have multiple embedding chunks). Without deduplication, a single article with N chunks appears N times in the result, inflating page sizes and corrupting pagination even after the tiebreaker is added.
+
+## The example test that passes
+
+```python
+def test_first_page_has_results(db, org_with_articles):
+    rows = db.query("SELECT * FROM search_kb_hybrid(%s, ...) LIMIT 5 OFFSET 0", org_id)
+    assert len(rows) > 0
+```
+
+Doesn't paginate. Doesn't compare across pages.
+
+## The SqlProof property
+
+```python
+@given(data=st.data(), page_size=st.integers(min_value=1, max_value=3))
+def test_pagination_partitions_full_result_set(proof, data, page_size):
+    # Force ties: identical embeddings, identical titles.
+    fixed_vec = "[" + ",".join(["0.0"] * 384) + "]"
+    dataset = data.draw(proof.dataset_strategy(
+        sizes={"organizations": 1, "kb_articles": 8, "kb_article_embeddings": 8},
+        columns={
+            "kb_article_embeddings.embedding": st.just(fixed_vec),
+            "kb_articles.title": st.just("zzz_nomatch_zzz"),
+            "kb_articles.published": st.just(True),
+        },
+    ))
+    # ...
+    full_set  = set(db.query("... LIMIT 100"))
+    paged_ids = paginate_through_all(db, page_size)
+    assert len(paged_ids) == len(set(paged_ids))    # no duplicates
+    assert set(paged_ids) == full_set               # nothing missing
+```
+
+The teaching beat: when you can articulate the property as "paging is a partition of the full set," any pagination bug is testable.
+
+## The counterexample
+
+Illustrative — Hypothesis would print the actual sequence and assertion:
+
+```
+Property failed: duplicate article ids across pages
+page_size=2, articles=[a1, a2, a3, a4]
+page 0 = [a3, a1], page 1 = [a3, a2], page 2 = [a4]
+```
+
+## The fix
+
+Two changes are needed. First, add `DISTINCT ON (a.id)` in the inner query to collapse the one-article-many-chunks JOIN fanout, keeping the best-scoring chunk per article. Second, add a stable tiebreaker on a unique column in the outer `ORDER BY`:
+
+```sql
+SELECT article_id, score
+FROM (
+  SELECT DISTINCT ON (a.id)
+    a.id AS article_id,
+    (vector_part + text_part) AS score
+  FROM kb_articles a JOIN kb_article_embeddings ae ...
+  WHERE a.org_id = p_org_id
+  ORDER BY a.id, score DESC        -- DISTINCT ON requires id first
+) best_per_article
+ORDER BY score DESC, article_id ASC  -- total order: stable pagination
+LIMIT p_limit OFFSET p_offset;
+```
+
+## Related
+
+For the general "vector RPC missing tenant filter" pattern, see [Tenant-scoped vector search](tenant-scoped-vector-search).
