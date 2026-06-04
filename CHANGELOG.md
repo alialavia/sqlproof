@@ -5,6 +5,13 @@ All notable changes to SqlProof will be documented here. The format is based on
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While SqlProof
 remains in `0.x`, minor versions may include breaking changes.
 
+## [0.6.0](https://github.com/alialavia/sqlproof/compare/v0.5.0...v0.6.0) (2026-06-04)
+
+
+### Added
+
+* **api:** add SqlProof.row_strategy for ad-hoc fixture rows ([#13](https://github.com/alialavia/sqlproof/issues/13)) ([#75](https://github.com/alialavia/sqlproof/issues/75)) ([74e717d](https://github.com/alialavia/sqlproof/commit/74e717d0ca3b0ef06158f74326a509f490242e96))
+
 ## [0.5.0](https://github.com/alialavia/sqlproof/compare/v0.4.0...v0.5.0) (2026-06-02)
 
 
