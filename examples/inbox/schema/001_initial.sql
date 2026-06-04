@@ -377,3 +377,36 @@ AS $$
 $$;
 
 GRANT EXECUTE ON FUNCTION agent_workload_summary_v1(UUID) TO authenticated;
+
+-- ---------------------------------------------------------------------------
+-- Recipe 1 (tenant-scoped-vector-search) — BUGGY similar-ticket RPC
+-- ---------------------------------------------------------------------------
+
+-- BUG: returns the k nearest tickets by embedding distance, but never
+-- filters by org_id. A ticket in org A finds matches from org B.
+-- Reviewers see a sensible-looking similarity query.
+CREATE OR REPLACE FUNCTION find_similar_tickets(
+  p_ticket_id UUID,
+  p_k INT DEFAULT 5
+)
+  RETURNS TABLE (ticket_id UUID, distance double precision)
+  LANGUAGE sql STABLE
+  SECURITY DEFINER
+  SET search_path = public
+AS $$
+  WITH target AS (
+    SELECT me.embedding
+    FROM message_embeddings me
+    JOIN messages m ON m.id = me.message_id
+    WHERE m.ticket_id = p_ticket_id
+    LIMIT 1
+  )
+  SELECT m.ticket_id, (me.embedding <-> (SELECT embedding FROM target)) AS distance
+  FROM message_embeddings me
+  JOIN messages m ON m.id = me.message_id
+  WHERE m.ticket_id <> p_ticket_id
+  ORDER BY distance ASC
+  LIMIT p_k;
+$$;
+
+GRANT EXECUTE ON FUNCTION find_similar_tickets(UUID, INT) TO authenticated;
