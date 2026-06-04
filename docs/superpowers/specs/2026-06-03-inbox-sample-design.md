@@ -25,8 +25,9 @@ on a single property pattern. There is no single sample that:
 
 Ship a single mid-sized Supabase-shaped sample (`examples/inbox/`) that
 backs a new section of the documentation site
-(`docs/examples/inbox/`). The sample's schema contains six intentional,
-realistic bugs in its RPCs / RLS policies / trigger, plus one
+(`docs/examples/inbox/`). The sample's schema contains seven intentional,
+realistic bugs in its RPCs / RLS policies / trigger (including one
+sequence-dependent bug that only a stateful test surfaces), plus one
 *equivalence-pattern* recipe demonstrating safe query optimization.
 Each bug is the subject of one recipe page following an identical
 structure (problem → buggy code → passing example test → failing
@@ -43,9 +44,6 @@ them pass — one bug at a time.
   `storage.objects` is the only Postgres-level surface, and that is
   better demoed as a focused snippet than as a recipe in this sample.
   Revisit in v2 if a strong recipe emerges.)
-- A stateful test of the ticket lifecycle. The six bug recipes already
-  cover all five canonical property patterns; adding a stateful recipe
-  would not add a new shape, only a new domain. Reserve for v2.
 - A Makefile, justfile, or seed-data SQL. Six bash lines in the README
   is enough setup documentation; property tests generate their own
   datasets and don't depend on seeds.
@@ -100,7 +98,7 @@ pgvector type.
 
 ### Functions / triggers / policies (the bug surface)
 
-`001_initial.sql` ships all of these together. The six bug fixes ship
+`001_initial.sql` ships all of these together. The seven bug fixes ship
 as separate numbered migrations (see Layout). Recipe 7 (equivalence)
 ships v2 of one function as a later migration.
 
@@ -113,13 +111,16 @@ ships v2 of one function as a later migration.
 | 5 | `internal-message-rls` | RLS policy on `messages` | Policy gates on parent-ticket visibility but doesn't gate `is_internal = true`; customers see agent-only internal notes on their own tickets | RLS regression |
 | 6 | `stable-vector-pagination` | RPC `search_kb_hybrid(org_id, query_text, query_embedding, limit, offset)` | `ORDER BY combined_score DESC LIMIT k OFFSET o` with no tiebreaker; tied scores cause duplicates and gaps across pages | Round-trip / paginated set equality |
 | 7 | `equivalent-query-optimization` | RPC `agent_workload_summary(org_id)` v1 vs v2 | v1 uses one correlated subquery per metric (slow); v2 uses single LEFT JOIN with `FILTER` (fast). v2 returns `NULL` for agents with zero tickets, v1 returns `0`. Hypothesis surfaces the divergence on the first run | Equivalence / migration safety |
+| 8 | `stateful-ticket-lifecycle` | RPC `reopen_ticket(ticket_id)` | Sets `status = 'reopened'` but forgets to clear `resolved_at`. Single-shot property tests miss this because the invariant ("non-resolved status → resolved_at IS NULL") holds at every individual state — only the transition resolve→reopen leaves a stale value | Stateful (sequence-dependent) |
 
 Coverage check: pattern 1 (aggregation) → #4; pattern 2 (RLS) → #1,
 #2, #5; pattern 3 (migration / equivalence) → #7; pattern 4
 (idempotency) → #3; pattern 5 (round-trip / serialization) → #6
-(paginated-set equality is the same shape as serialize→parse equality).
-All five canonical patterns hit; plus a pgvector-specific shape (#1,
-#6) that the existing docs don't cover at all.
+(paginated-set equality is the same shape as serialize→parse equality);
+plus stateful / sequence-dependent → #8 (the `SqlProofStateMachine`
+pattern from AGENTS.md Pattern 3); plus a pgvector-specific shape (#1,
+#6). All five canonical property patterns hit, plus the stateful
+pattern that the existing examples don't currently exercise.
 
 ### Schema design notes
 
@@ -139,7 +140,7 @@ All five canonical patterns hit; plus a pgvector-specific shape (#1,
 
 ## Recipes (docs site pages)
 
-Seven pages under `website/src/content/docs/examples/inbox/`. Every
+Eight pages under `website/src/content/docs/examples/inbox/`. Every
 page follows the same structure so readers can skim across them:
 
 1. **Problem** (~50 words) — what real engineering task leads to this
@@ -167,9 +168,20 @@ but with one extra section after the fix:
    deprecation window (typically ~1 week) while callers migrate from
    v1 to v2, (d) deleted alongside v1. This framing is what
    distinguishes equivalence-shape properties (scaffolding, short-lived)
-   from the forever-properties of recipes 1–6.
+   from the forever-properties of recipes 1–6 and #8.
 
-Each recipe page is ~200–300 words. Total docs payload: ~7 pages plus
+Recipe 8 (`stateful-ticket-lifecycle`) follows the same structure but
+with one extra section after the fix:
+
+8. **When to reach for state machines** — sequence-dependent bugs
+   (resolve → reopen leaving stale `resolved_at`) cannot be caught by
+   `@given` because every individual state satisfies the invariant.
+   State machines are slower per example, so use them only when the
+   bug truly requires an ordered sequence; for single-update
+   assertions, write a property test instead (cross-link to recipe 3).
+   Mirrors AGENTS.md's Pattern 3 anti-pattern callout, made concrete.
+
+Each recipe page is ~200–300 words. Total docs payload: ~8 pages plus
 one `index.md`.
 
 ### Index page (`docs/examples/inbox/index.md`)
@@ -178,7 +190,7 @@ one `index.md`.
 - An entity-relationship diagram (Mermaid, ~10 lines) showing the ten
   tables
 - The repro flow (the six bash commands a reader runs)
-- A table linking the seven recipes, each with a one-line summary and
+- A table linking the eight recipes, each with a one-line summary and
   its property pattern
 - A note that this sample is intentionally buggy and is meant to be
   cloned and explored, not deployed
@@ -189,7 +201,7 @@ one `index.md`.
 examples/inbox/
 ├── README.md                                # ~one screen: overview, how to run
 ├── schema/
-│   ├── 001_initial.sql                      # tables + the 6 buggy RPCs/policies/trigger + v1 of workload_summary
+│   ├── 001_initial.sql                      # tables + the 7 buggy RPCs/policies/trigger + v1 of workload_summary
 │   ├── 002_fix_similar_tickets.sql          # recipe 1 fix
 │   ├── 003_fix_tickets_rls.sql              # recipe 2 fix
 │   ├── 004_fix_resolved_at_trigger.sql      # recipe 3 fix
@@ -197,7 +209,8 @@ examples/inbox/
 │   ├── 006_fix_messages_rls.sql             # recipe 5 fix
 │   ├── 007_fix_hybrid_search.sql            # recipe 6 fix
 │   ├── 008_add_workload_summary_v2.sql      # recipe 7: ships v2 (subtly diverges on NULL handling)
-│   └── 009_fix_workload_summary_v2_nulls.sql # recipe 7 fix (COALESCE in v2)
+│   ├── 009_fix_workload_summary_v2_nulls.sql # recipe 7 fix (COALESCE in v2)
+│   └── 010_fix_reopen_ticket.sql            # recipe 8 fix (clears resolved_at on reopen)
 └── tests/
     ├── test_similar_tickets.py              # recipe 1
     ├── test_tickets_rls.py                  # recipe 2
@@ -205,7 +218,8 @@ examples/inbox/
     ├── test_dashboard.py                    # recipe 4
     ├── test_messages_rls.py                 # recipe 5
     ├── test_hybrid_search.py                # recipe 6
-    └── test_workload_summary.py             # recipe 7
+    ├── test_workload_summary.py             # recipe 7
+    └── test_ticket_lifecycle.py             # recipe 8 (SqlProofStateMachine)
 
 website/src/content/docs/examples/inbox/
 ├── index.md
@@ -215,14 +229,16 @@ website/src/content/docs/examples/inbox/
 ├── outer-joins-and-where.md                 # recipe 4
 ├── internal-message-rls.md                  # recipe 5
 ├── stable-vector-pagination.md              # recipe 6
-└── equivalent-query-optimization.md         # recipe 7
+├── equivalent-query-optimization.md         # recipe 7
+└── stateful-ticket-lifecycle.md             # recipe 8
 ```
 
 ### Why per-bug fix migrations (vs. one `fixed.sql`)
 
 The reader's repro flow benefits: after `psql -f 001_initial.sql`,
-`pytest examples/inbox/tests -v` produces six failures (test_7 skips
-because v2 doesn't exist yet). The reader opens any one recipe, runs
+`pytest examples/inbox/tests -v` produces seven failures (test_7 skips
+because v2 doesn't exist yet; the state machine test for recipe 8 is
+one of the failures). The reader opens any one recipe, runs
 `psql -f schema/00X_fix_*.sql`, and that recipe's test goes green —
 one bug at a time. This matches how Supabase users actually ship
 schema fixes (per-PR migration files), gives each recipe a fully
@@ -266,7 +282,9 @@ export SUPABASE_DB_URL='postgresql://postgres:postgres@127.0.0.1:54322/postgres'
 # 3. Load the initial (buggy) schema
 psql "$SUPABASE_DB_URL" -f examples/inbox/schema/001_initial.sql
 
-# 4. Run the tests — 6 failures, 1 skipped
+# 4. Run the tests — 7 failures, 1 skipped (test_workload_summary
+#    skips until v2 is loaded; the state-machine test for the
+#    ticket-lifecycle bug is one of the failures)
 pytest examples/inbox/tests -v
 
 # 5. Pick a recipe (say recipe 2). Apply the fix.
@@ -304,11 +322,12 @@ phases:
 dual-writes, or compatibility shims maintained across a versioned API
 boundary. The recipe mentions these briefly.
 
-This framing is intentionally orthogonal to recipes 1–6, which guard
-permanent invariants (RLS, idempotency, aggregation correctness).
-Calling out the lifecycle difference is the recipe's most distinctive
-teaching beat — readers should leave understanding *when* to reach for
-equivalence properties as much as *how*.
+This framing is intentionally orthogonal to recipes 1–6 and #8, which
+guard permanent invariants (RLS, idempotency, aggregation correctness,
+sequence-dependent state). Calling out the lifecycle difference is the
+recipe's most distinctive teaching beat — readers should leave
+understanding *when* to reach for equivalence properties as much as
+*how*.
 
 ## Integration with existing docs
 
@@ -327,8 +346,9 @@ equivalence properties as much as *how*.
   vector`). Documented in the README, prerequisite for running.
 - No changes to SqlProof's own package dependencies. The inbox sample
   consumes SqlProof's public API only.
-- The seven test files are conventional `pytest` files using existing
-  fixtures from SqlProof's pytest plugin. They are not added to
+- The eight test files are conventional `pytest` files using existing
+  fixtures from SqlProof's pytest plugin (one of them uses
+  `SqlProofStateMachine` for recipe 8). They are not added to
   SqlProof's own CI test suite — they are demonstration code, intended
   to be run by end users following the docs. (If the team wants
   CI-level smoke coverage of "the inbox sample at least starts up,"
