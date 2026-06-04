@@ -52,7 +52,7 @@ CREATE TABLE customers (
 CREATE TABLE tickets (
     id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     org_id             UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-    customer_id        UUID NOT NULL REFERENCES customers(id),
+    customer_id        UUID NOT NULL REFERENCES customers(id) ON DELETE RESTRICT,
     assigned_agent_id  UUID REFERENCES auth.users(id),
     status             ticket_status NOT NULL DEFAULT 'open',
     priority           ticket_priority NOT NULL DEFAULT 'med',
@@ -137,3 +137,34 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON kb_article_embeddings   TO authenticated
 -- ---------------------------------------------------------------------------
 -- Buggy RPCs, policies, and triggers are appended below by recipe tasks.
 -- ---------------------------------------------------------------------------
+
+-- ---------------------------------------------------------------------------
+-- Recipe 2 (correlated-rls-subqueries) — BUGGY policies on tickets
+-- ---------------------------------------------------------------------------
+
+ALTER TABLE tickets       ENABLE ROW LEVEL SECURITY;
+ALTER TABLE org_members   ENABLE ROW LEVEL SECURITY;
+
+-- Building block: members can see their own membership row(s).
+-- A naive "see all members of the same org" policy that queries
+-- `org_members` from within an `org_members` policy causes infinite
+-- RLS recursion. For the broader "see co-members" visibility, use a
+-- SECURITY DEFINER function — see the RLS bug-classes reference page
+-- for the pattern.
+CREATE POLICY "members can see their own membership" ON org_members
+  FOR SELECT TO authenticated
+  USING (org_members.user_id = auth.uid());
+
+-- BUG: This policy says "any authenticated user who is a member of
+-- ANY org can read ALL tickets." The EXISTS subquery filters
+-- `org_members.user_id = auth.uid()` but never correlates back to
+-- `tickets.org_id`. Reviewers skim past it because the shape "looks
+-- like other RLS policies."
+CREATE POLICY "agents see org tickets" ON tickets
+  FOR SELECT TO authenticated
+  USING (
+    EXISTS (
+      SELECT 1 FROM org_members
+      WHERE org_members.user_id = auth.uid()
+    )
+  );
