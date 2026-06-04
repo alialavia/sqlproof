@@ -24,7 +24,10 @@ from hypothesis import strategies as st
 PROOF = settings(
     max_examples=50,
     deadline=None,
-    suppress_health_check=[HealthCheck.function_scoped_fixture],
+    suppress_health_check=[
+        HealthCheck.function_scoped_fixture,
+        HealthCheck.filter_too_much,
+    ],
 )
 
 
