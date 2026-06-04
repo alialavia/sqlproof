@@ -38,12 +38,29 @@ export default defineConfig({
             { label: 'Stateful Tests', slug: 'api/state-machine' },
             { label: 'Realistic Data Generation', slug: 'examples/data-generation' },
             { label: 'E-Commerce Orders Walkthrough', slug: 'examples/orders' },
+            {
+              label: 'Inbox sample (full Supabase app)',
+              items: [
+                { label: 'Overview', slug: 'examples/inbox' },
+                { label: '1. Tenant-scoped vector search', slug: 'examples/inbox/tenant-scoped-vector-search' },
+                { label: '2. Correlated RLS subqueries', slug: 'examples/inbox/correlated-rls-subqueries' },
+                { label: '3. Idempotent status triggers', slug: 'examples/inbox/idempotent-status-triggers' },
+                { label: '4. Outer joins and WHERE', slug: 'examples/inbox/outer-joins-and-where' },
+                { label: '5. Internal-message RLS', slug: 'examples/inbox/internal-message-rls' },
+                { label: '6. Stable vector pagination', slug: 'examples/inbox/stable-vector-pagination' },
+                { label: '7. Equivalent query optimization', slug: 'examples/inbox/equivalent-query-optimization' },
+                { label: '8. Stateful ticket lifecycle', slug: 'examples/inbox/stateful-ticket-lifecycle' },
+                { label: '9. Mass assignment without WITH CHECK', slug: 'examples/inbox/mass-assignment-without-with-check' },
+                { label: '10. Missing DELETE policy', slug: 'examples/inbox/missing-delete-policy' },
+              ],
+            },
           ],
         },
         {
           label: 'Supabase',
           items: [
             { label: 'Testing Supabase Apps', slug: 'guides/supabase' },
+            { label: 'RLS bug classes (reference)', slug: 'guides/supabase-rls-bug-classes' },
           ],
         },
         {

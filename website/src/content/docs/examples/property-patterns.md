@@ -232,3 +232,15 @@ Some assertions don't gain much from generation:
 A healthy test suite has both. Property tests catch the bugs you
 didn't anticipate; example tests document the bugs you've already
 seen and don't want back.
+
+## Worked examples in the Inbox sample
+
+Every pattern above has a fully-worked, runnable recipe in the [Inbox sample](/examples/inbox/) — a multi-tenant Supabase support inbox where each recipe pairs a buggy production-shape RPC/policy/trigger with the SqlProof property that catches it:
+
+- **Aggregation invariant** → [Outer joins and WHERE](/examples/inbox/outer-joins-and-where/)
+- **RLS policy regression** → [Correlated RLS subqueries](/examples/inbox/correlated-rls-subqueries/), [Internal-message RLS](/examples/inbox/internal-message-rls/), [Mass assignment](/examples/inbox/mass-assignment-without-with-check/), [Missing DELETE policy](/examples/inbox/missing-delete-policy/), [Tenant-scoped vector search](/examples/inbox/tenant-scoped-vector-search/)
+- **Migration safety / equivalence** → [Equivalent query optimization](/examples/inbox/equivalent-query-optimization/)
+- **Idempotency** → [Idempotent status triggers](/examples/inbox/idempotent-status-triggers/)
+- **Round-trip serialization** → [Stable vector pagination](/examples/inbox/stable-vector-pagination/) (paginated-set equality is the same shape)
+
+Plus one **stateful (sequence-dependent)** pattern not represented above: [Stateful ticket lifecycle](/examples/inbox/stateful-ticket-lifecycle/).
