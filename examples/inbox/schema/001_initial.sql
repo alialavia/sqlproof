@@ -410,3 +410,38 @@ AS $$
 $$;
 
 GRANT EXECUTE ON FUNCTION find_similar_tickets(UUID, INT) TO authenticated;
+
+-- ---------------------------------------------------------------------------
+-- Recipe 6 (stable-vector-pagination) — BUGGY hybrid search RPC
+-- ---------------------------------------------------------------------------
+
+-- BUG: ORDER BY combined_score with no tiebreaker. When multiple
+-- articles tie on score (common with short queries or sparse
+-- embeddings), Postgres's tie-breaking is implementation-defined;
+-- the same article can appear on two pages or vanish entirely.
+CREATE OR REPLACE FUNCTION search_kb_hybrid(
+  p_org_id           UUID,
+  p_query_embedding  vector(384),
+  p_text_query       TEXT,
+  p_limit            INT DEFAULT 5,
+  p_offset           INT DEFAULT 0
+)
+  RETURNS TABLE (article_id UUID, score double precision)
+  LANGUAGE sql STABLE
+  SECURITY DEFINER
+  SET search_path = public
+AS $$
+  SELECT
+    a.id AS article_id,
+    (
+      0.7 * (1 - (ae.embedding <=> p_query_embedding))
+      + 0.3 * CASE WHEN a.title ILIKE '%' || p_text_query || '%' THEN 1.0 ELSE 0.0 END
+    ) AS score
+  FROM kb_articles a
+  JOIN kb_article_embeddings ae ON ae.article_id = a.id
+  WHERE a.org_id = p_org_id
+  ORDER BY score DESC
+  LIMIT p_limit OFFSET p_offset;
+$$;
+
+GRANT EXECUTE ON FUNCTION search_kb_hybrid(UUID, vector, TEXT, INT, INT) TO authenticated;
