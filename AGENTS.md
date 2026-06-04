@@ -547,6 +547,31 @@ def test_x(supabase_proof, data):
 The hand-rolled helpers test only the shape *you* hand-built. The
 generated approach tests every shape your schema permits.
 
+**Residual case — RLS regression pins, HTTP-layer tests, shared
+fixtures that need one specific row.** Property tests fit most cases
+but not all. When you genuinely need a single hand-pinned row, reach
+for `proof.row_strategy(table, **overrides)` instead of writing the
+INSERT yourself:
+
+```python
+# Schema-aware single-row builder. When a migration adds a NOT NULL
+# column to `projects`, this keeps working — the generator fills it.
+@pytest.fixture
+def project(proof, db, user):
+    row = proof.row_strategy("projects", user_id=user["id"]).example()
+    db.execute(
+        f"INSERT INTO projects ({', '.join(row)}) VALUES "
+        f"({', '.join(['%s'] * len(row))})",
+        *row.values(),
+    )
+    return row
+```
+
+`row_strategy` is a Hypothesis `SearchStrategy[dict]` — inside a
+`@given`-decorated test, draw from it instead of calling `.example()`.
+Override kwargs accept bare values, strategies, or callables. Unknown
+column names raise immediately so typos surface at the call site.
+
 ### ❌ Don't write a `tests/conftest.py` with `proof` / `db` fixtures
 
 The plugin ships them. If you find yourself copying ~30 lines of fixture
