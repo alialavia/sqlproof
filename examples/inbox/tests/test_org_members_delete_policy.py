@@ -56,3 +56,47 @@ def test_viewer_cannot_delete_admin_in_same_org(supabase_proof, data) -> None:
         assert still_present == 1, (
             f"viewer deleted admin's membership; rows remaining: {still_present}"
         )
+
+
+@PROOF
+@given(data=st.data())
+def test_member_of_org_a_cannot_delete_member_of_org_b(supabase_proof, data) -> None:
+    """Cross-org case: a member of one org can't delete a member of another."""
+    dataset = data.draw(
+        supabase_proof.dataset_strategy(
+            sizes={"organizations": 2, "org_members": 2},
+        ),
+    )
+    with supabase_proof.client_for_dataset(dataset) as db:
+        orgs = dataset["organizations"]
+        members = dataset["org_members"]
+
+        # Find an attacker in org A and a victim in org B with different user_ids
+        a_members = [m for m in members if m["org_id"] == orgs[0]["id"]]
+        b_members = [m for m in members if m["org_id"] == orgs[1]["id"]]
+        assume(a_members)
+        assume(b_members)
+        attacker = a_members[0]
+        victim = next(
+            (m for m in b_members if m["user_id"] != attacker["user_id"]),
+            None,
+        )
+        assume(victim is not None)
+
+        with as_rls_user(db, attacker["user_id"]):
+            with db.savepoint():
+                try:
+                    db.execute(
+                        "DELETE FROM org_members WHERE org_id = %s AND user_id = %s",
+                        victim["org_id"], victim["user_id"],
+                    )
+                except Exception:
+                    pass
+
+        still_present = db.scalar(
+            "SELECT count(*) FROM org_members WHERE org_id = %s AND user_id = %s",
+            victim["org_id"], victim["user_id"],
+        )
+        assert still_present == 1, (
+            f"cross-org delete succeeded; victim rows remaining: {still_present}"
+        )

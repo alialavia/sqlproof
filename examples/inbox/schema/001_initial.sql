@@ -276,9 +276,17 @@ CREATE POLICY "members manage their own row" ON org_members
 -- Recipe 10 (missing-delete-policy) — overly permissive DELETE policy
 -- ---------------------------------------------------------------------------
 
--- SECURITY DEFINER helper: check whether a given user is a member of an
--- org. Used by the co-member SELECT policy below (and later by the fix
--- migration) to avoid infinite RLS recursion inside org_members policies.
+-- SECURITY DEFINER helper: checks whether a given user is a member of
+-- a given org. Used by the co-member SELECT policy below.
+--
+-- Why SECURITY DEFINER: a naive subquery like
+-- `EXISTS (SELECT 1 FROM org_members WHERE ...)` from inside an
+-- `org_members` RLS policy causes infinite RLS recursion. The helper
+-- runs as its owner (postgres), so the inner query bypasses RLS on
+-- `org_members` cleanly.
+--
+-- Recipe 10's fix migration ships a separate helper, `is_admin_in_org`,
+-- using the same pattern.
 CREATE OR REPLACE FUNCTION is_member_in_org(p_org_id UUID, p_user_id UUID)
   RETURNS BOOLEAN
   LANGUAGE sql STABLE SECURITY DEFINER
