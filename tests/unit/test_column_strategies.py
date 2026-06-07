@@ -10,6 +10,8 @@ sample broadly and check.
 from __future__ import annotations
 
 import datetime as dt
+import math
+import re
 from decimal import Decimal
 from uuid import UUID
 
@@ -215,3 +217,43 @@ def test_non_nullable_column_never_yields_none(data) -> None:
     column = _column(_scalar("integer"), nullable=False)
     for _ in range(10):
         assert data.draw(strategy_for_column(column)) is not None
+
+
+_VECTOR_LITERAL_RE = re.compile(r"^\[(.+)\]$")
+
+
+@NON_NULL_KW
+@given(data=st.data())
+def test_vector_strategy_yields_literal_of_declared_dimension(data) -> None:
+    pg = _scalar("vector", modifiers=(8,))
+    value = data.draw(strategy_for_type(pg))
+    assert isinstance(value, str)
+    match = _VECTOR_LITERAL_RE.match(value)
+    assert match is not None, f"not a pgvector literal: {value!r}"
+    components = [float(part) for part in match.group(1).split(",")]
+    assert len(components) == 8
+    for component in components:
+        assert -1.0 <= component <= 1.0
+        assert not math.isnan(component)
+        assert not math.isinf(component)
+
+
+@pytest.mark.parametrize("dim", [1, 4, 384, 1536, 2000])
+@NON_NULL_KW
+@given(data=st.data())
+def test_vector_strategy_holds_dimension_across_sizes(data, dim) -> None:
+    pg = _scalar("vector", modifiers=(dim,))
+    value = data.draw(strategy_for_type(pg))
+    match = _VECTOR_LITERAL_RE.match(value)
+    assert match is not None
+    assert len(match.group(1).split(",")) == dim
+
+
+def test_vector_without_dimension_raises_schema_error() -> None:
+    from sqlproof.exceptions import SqlProofSchemaError
+
+    pg = _scalar("vector", modifiers=())
+    with pytest.raises(SqlProofSchemaError) as excinfo:
+        strategy_for_type(pg)
+    assert "vector" in str(excinfo.value)
+    assert "dimension" in str(excinfo.value)
