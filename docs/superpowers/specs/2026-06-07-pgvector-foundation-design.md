@@ -70,38 +70,51 @@ final text fallback:
 if name == "vector":
     if not pg_type.modifiers:
         raise SqlProofSchemaError(
-            "vector type requires a dimension (e.g. vector(384)); got vector"
+            "vector type requires a dimension (e.g. vector(384)); "
+            "got vector with no modifier"
         )
     dim = pg_type.modifiers[0]
-    component = st.floats(
-        min_value=-1.0,
-        max_value=1.0,
-        allow_nan=False,
-        allow_infinity=False,
-        width=32,
-    )
+    # Bounded integers + scale-to-float rather than st.floats:
+    # Hypothesis's bounded-float draws use ~3x the entropy per value
+    # of bounded integers, and exhaust the default 8KB conjecture
+    # buffer at common embedding sizes (1536, 2000). Integers also
+    # shrink toward 0, so end-state is still an all-zeros vector.
+    component = st.integers(min_value=-1_000_000, max_value=1_000_000)
     return (
         st.lists(component, min_size=dim, max_size=dim)
-        .map(lambda xs: "[" + ",".join(repr(x) for x in xs) + "]")
+        .map(
+            lambda xs: "["
+            + ",".join(f"{x / 1_000_000:.6f}" for x in xs)
+            + "]"
+        )
     )
 ```
 
 Rationale:
 
-- `width=32` matches pgvector's float32 storage; no silent precision
-  loss between generation and INSERT.
-- `allow_nan=False, allow_infinity=False` — pgvector accepts ±inf but
-  downstream distance operators then NaN out, which makes
-  counterexamples harder to read. Excluding both keeps counterexamples
-  legible.
-- `repr(x)` over `f"{x:.6f}"` — preserves the exact float Hypothesis
-  drew; no rounding masks shrink targets.
+- Component values come from bounded integers in `[-1_000_000,
+  1_000_000]` scaled to `[-1, 1]` via `/ 1_000_000`. The earlier
+  draft proposed `st.floats(width=32, ...)` to match pgvector's
+  float32 storage, but Hypothesis's bounded-float strategy exhausts
+  the default 8KB conjecture buffer at dim ≥ ~1100 — fatal for
+  realistic embedding sizes like OpenAI's `text-embedding-3-small`
+  (1536) and `text-embedding-3-large` (3072). Integers carry less
+  per-draw entropy, fit comfortably at 2000+ dims, and preserve the
+  shrink-toward-zero semantics the spec depends on (integer 0 maps
+  to `0.000000`).
+- 6-decimal-digit resolution per component (`f"{x / 1_000_000:.6f}"`)
+  is well within pgvector's float32 storage precision; no meaningful
+  loss for property tests.
 - The strategy emits a string, INSERTed verbatim. No new dependency on
   the `pgvector` Python package; works with bare `psycopg`.
 - Component range `[-1, 1]` keeps L2 distances bounded and cosine
   well-conditioned, matching the existing workaround so behavioural
   changes in the inbox sample are limited to "where the vectors come
-  from."
+  from." This is a test-input convention (normalised embeddings),
+  not a pgvector constraint — pgvector itself accepts any float32.
+- `±inf` and `NaN` aren't representable through the integer scale —
+  same exclusion the float-based draft enforced via `allow_nan=False,
+  allow_infinity=False`, but achieved structurally.
 
 ### Shrinking behaviour (documented in the docstring on the branch)
 
