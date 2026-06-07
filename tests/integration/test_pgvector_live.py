@@ -52,7 +52,10 @@ def test_vector_column_round_trips_through_postgres() -> None:
 
         connection.execute(f'CREATE SCHEMA "{schema_name}"')
         try:
-            connection.execute(f'SET search_path TO "{schema_name}"')
+            # Include public on the path so the `vector` type (created
+            # by CREATE EXTENSION in the public schema) resolves when
+            # the per-test schema is the search target.
+            connection.execute(f'SET search_path TO "{schema_name}", public')
             for statement in SCHEMA_SQL.strip().split(";"):
                 if statement.strip():
                     connection.execute(statement)

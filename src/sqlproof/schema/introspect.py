@@ -24,7 +24,8 @@ def introspect_schema(connection: Any, *, schema: str = "public") -> SchemaInfo:
     for row in _fetch_all(connection, _COLUMNS_SQL, schema):
         key = (str(row["schema_name"]), str(row["table_name"]))
         type_name = str(row["type_name"])
-        pg_type = type_by_name.get(type_name) or _resolve_pg_type(type_name)
+        modifiers = tuple(int(value) for value in (row.get("modifiers") or ()))
+        pg_type = type_by_name.get(type_name) or _resolve_pg_type(type_name, modifiers)
         columns_by_table.setdefault(key, []).append(
             Column(
                 name=str(row["column_name"]),
@@ -205,12 +206,15 @@ def _is_serial_default(value: object) -> bool:
     return isinstance(value, str) and value.startswith("nextval(")
 
 
-def _resolve_pg_type(type_name: str) -> PgType:
+def _resolve_pg_type(type_name: str, modifiers: tuple[int, ...] = ()) -> PgType:
     """Resolve a raw pg_catalog type name into a PgType.
 
     Range types get kind="range" with the element type as base.
     Everything else (scalar, array — represented elsewhere) falls
-    through to ``PgType(kind="scalar", name=...)``.
+    through to ``PgType(kind="scalar", name=..., modifiers=...)``.
+    Modifiers are passed through to the scalar variant; the columns
+    query surfaces them only for types where decoding atttypmod is
+    implemented (today: vector).
     """
     range_element = RANGE_ELEMENT_TYPES.get(type_name)
     if range_element is not None:
@@ -219,7 +223,7 @@ def _resolve_pg_type(type_name: str) -> PgType:
             name=type_name,
             base=PgType(kind="scalar", name=range_element),
         )
-    return PgType(kind="scalar", name=type_name)
+    return PgType(kind="scalar", name=type_name, modifiers=modifiers)
 
 
 _ENUMS_SQL = """
