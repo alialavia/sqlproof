@@ -79,8 +79,6 @@ def test_table_level_check_is_captured_alongside_column_level() -> None:
 
 
 def test_vector_typed_column_parses_with_dimension_in_modifiers() -> None:
-    from sqlproof.schema.parse_sql import parse_schema_sql
-
     sql = """
     CREATE TABLE embeddings (
         id serial PRIMARY KEY,
