@@ -272,7 +272,11 @@ SELECT
   pg_get_expr(def.adbin, def.adrelid) AS default,
   att.attgenerated <> '' AS is_generated,
   CASE att.attidentity WHEN 'a' THEN 'always' WHEN 'd' THEN 'by default' ELSE NULL END AS identity,
-  ARRAY[]::integer[] AS modifiers
+  CASE
+    WHEN typ.typname = 'vector' AND att.atttypmod > 0
+      THEN ARRAY[att.atttypmod]
+    ELSE ARRAY[]::integer[]
+  END AS modifiers
 FROM pg_catalog.pg_attribute att
 JOIN pg_catalog.pg_class cls ON cls.oid = att.attrelid
 JOIN pg_catalog.pg_namespace ns ON ns.oid = cls.relnamespace
