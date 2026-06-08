@@ -5,6 +5,13 @@ All notable changes to SqlProof will be documented here. The format is based on
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While SqlProof
 remains in `0.x`, minor versions may include breaking changes.
 
+## [0.8.0](https://github.com/alialavia/sqlproof/compare/v0.7.0...v0.8.0) (2026-06-08)
+
+
+### Added
+
+* **pgvector:** generate and introspect vector(N) columns end-to-end ([#81](https://github.com/alialavia/sqlproof/issues/81)) ([10bdc59](https://github.com/alialavia/sqlproof/commit/10bdc599855d8f97f37f84b2110f04a971e7bf90))
+
 ## [0.7.0](https://github.com/alialavia/sqlproof/compare/v0.6.0...v0.7.0) (2026-06-04)
 
 
