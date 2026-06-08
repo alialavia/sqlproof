@@ -7,6 +7,7 @@ from hypothesis import strategies as st
 from hypothesis.strategies import SearchStrategy
 from psycopg.types.range import Range
 
+from sqlproof.exceptions import SqlProofSchemaError
 from sqlproof.schema.model import Column, PgType
 
 _POSTGRES_BLACKLIST_CATEGORIES: tuple[Literal["Cs"], ...] = ("Cs",)
@@ -108,6 +109,31 @@ def strategy_for_type(pg_type: PgType) -> SearchStrategy[Any]:
         )
     if name == "bytea":
         return st.binary()
+    if name == "vector":
+        if not pg_type.modifiers:
+            raise SqlProofSchemaError(
+                "vector type requires a dimension (e.g. vector(384)); "
+                "got vector with no modifier"
+            )
+        dim = pg_type.modifiers[0]
+        # Use bounded integers + scale-to-float instead of st.floats:
+        # Hypothesis's bounded-float draws spend enough entropy per
+        # value (~9 bytes) that the default 8KB conjecture buffer is
+        # exhausted at common embedding sizes (1536, 2000). Bounded
+        # integers spend ~3 bytes per draw, leaving headroom for the
+        # full range of real-world vector dimensions. Shrink target
+        # is identical (integers shrink toward 0, scale-map preserves
+        # that). 6-digit decimal resolution per component is well
+        # within pgvector's float32 storage precision.
+        component = st.integers(min_value=-1_000_000, max_value=1_000_000)
+        return (
+            st.lists(component, min_size=dim, max_size=dim)
+            .map(
+                lambda xs: "["
+                + ",".join(f"{x / 1_000_000:.6f}" for x in xs)
+                + "]"
+            )
+        )
     return _postgres_text(max_size=255)
 
 

@@ -76,3 +76,18 @@ def test_table_level_check_is_captured_alongside_column_level() -> None:
     info = parse_schema_sql(sql)
     [table] = info.tables
     assert any("a + b" in chk.expression for chk in table.check_constraints)
+
+
+def test_vector_typed_column_parses_with_dimension_in_modifiers() -> None:
+    sql = """
+    CREATE TABLE embeddings (
+        id serial PRIMARY KEY,
+        embedding vector(384) NOT NULL
+    );
+    """
+    schema = parse_schema_sql(sql)
+    column = schema.table("embeddings").column("embedding")
+    assert column.type.kind == "scalar"
+    assert column.type.name == "vector"
+    assert column.type.modifiers == (384,)
+    assert column.nullable is False

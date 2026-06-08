@@ -3,14 +3,10 @@
 `find_similar_tickets` returns the k nearest neighbors by message
 embedding distance but never filters by org_id. A ticket in org A
 finds matches from org B.
-
-Uses `vector_strategy` (see _helpers.py) to work around SqlProof's
-pending pgvector parser support (issue #69).
 """
 
 from __future__ import annotations
 
-from _helpers import vector_strategy
 from hypothesis import HealthCheck, assume, given, settings
 from hypothesis import strategies as st
 
@@ -48,9 +44,6 @@ def test_similar_tickets_are_all_in_the_input_org(supabase_proof, data) -> None:
                 "tickets":            4,
                 "messages":           4,
                 "message_embeddings": 2,
-            },
-            columns={
-                "message_embeddings.embedding": vector_strategy(384),
             },
         ),
     )
