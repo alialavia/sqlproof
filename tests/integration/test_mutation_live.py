@@ -109,18 +109,22 @@ def test_mutation_run_kills_and_survives(tmp_path: Path) -> None:
         statuses = {o.description: o.status for o in result.outcomes}
         assert statuses[
             "total_usage: replace 'user_id = p_user' -> 'user_id <> p_user'"
-        ] == "killed"
+        ] == "killed", result.to_dict()
         assert statuses[
             "total_usage: replace 'COALESCE(SUM(amount), 0)' -> 'COALESCE(SUM(amount), 1)'"
-        ] == "survived"
+        ] == "survived", result.to_dict()
 
         with pytest.raises(SqlProofMutationError, match="COALESCE"):
             result.assert_no_survivors()
 
-        # No clone databases left behind.
+        # No clone databases left behind by THIS run (scoped to its mutant
+        # ids — a shared server may hold orphans from previously
+        # interrupted runs, which are not this test's concern).
+        expected_clones = [f"sqlproof_mutant_{o.mutant_id}" for o in result.outcomes]
         with psycopg.connect(base_dsn, autocommit=True) as admin:
             cursor = admin.execute(
-                "SELECT datname FROM pg_database WHERE datname LIKE 'sqlproof_mutant_%'"
+                "SELECT datname FROM pg_database WHERE datname = ANY(%s)",
+                (expected_clones,),
             )
             assert cursor.fetchall() == []
     finally:
