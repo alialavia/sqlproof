@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import secrets
 import subprocess
 import sys
 import threading
@@ -20,6 +21,17 @@ from sqlproof.mutation.result import MutantOutcome, MutationResult, outcome_for_
 _OUTPUT_TAIL = 2000
 
 
+def _resolve_seed(seed: int | None) -> int:
+    """Return *seed* unchanged if given, otherwise generate a fresh random seed.
+
+    The returned value is always in ``range(2**32)`` so it is safe to pass
+    directly to ``--hypothesis-seed``.
+    """
+    if seed is not None:
+        return seed
+    return secrets.randbelow(2**32)
+
+
 class LocalMutationRunner:
     """Clone-per-mutant local execution.
 
@@ -31,6 +43,15 @@ class LocalMutationRunner:
     NOTE: `CREATE DATABASE ... TEMPLATE` requires the template database
     to have no other connections. Close dev sessions against it first.
     Clone creation is serialized behind a lock for the same reason.
+
+    Interrupted runs may leave ``sqlproof_mutant_*`` databases behind.
+    Rerunning the same mutation set self-heals (each run drops-then-recreates
+    by id); edited mutants receive new ids, so orphans from those must be
+    dropped manually (e.g. ``DROP DATABASE IF EXISTS sqlproof_mutant_<id>``).
+
+    The pytest child process inherits the parent environment, so any
+    ``PYTEST_ADDOPTS`` set in CI will affect mutant suites — review that
+    variable when debugging unexpected pytest behaviour inside mutation runs.
     """
 
     def __init__(
@@ -42,6 +63,7 @@ class LocalMutationRunner:
         maintenance_db: str = "postgres",
         hypothesis_seed: int | None = None,
         max_workers: int = 1,
+        timeout_s: float | None = 600.0,
     ) -> None:
         self.database_url = database_url
         self.pytest_args = list(pytest_args)
@@ -49,6 +71,7 @@ class LocalMutationRunner:
         self.maintenance_db = maintenance_db
         self.hypothesis_seed = hypothesis_seed
         self.max_workers = max(1, max_workers)
+        self.timeout_s = timeout_s
         self._clone_lock = threading.Lock()
 
     # -- orchestration ------------------------------------------------
@@ -71,6 +94,9 @@ class LocalMutationRunner:
             finally:
                 self._drop_clone(clone_name)
         except Exception as exc:
+            detail = f"{type(exc).__name__}: {exc}"
+            if exc.__context__ is not None:
+                detail += f" (during handling of: {exc.__context__!r})"
             return MutantOutcome(
                 mutant_id=prepared.mutant_id,
                 target=prepared.mutant.target_name,
@@ -78,7 +104,7 @@ class LocalMutationRunner:
                 status="error",
                 pytest_exit_code=None,
                 hypothesis_seed=self.hypothesis_seed,
-                detail=f"{type(exc).__name__}: {exc}",
+                detail=detail,
             )
         return outcome_for_exit_code(
             mutant_id=prepared.mutant_id,
@@ -98,7 +124,9 @@ class LocalMutationRunner:
             self._dsn_for(self.maintenance_db), autocommit=True
         ) as connection:
             connection.execute(
-                sql.SQL("DROP DATABASE IF EXISTS {}").format(sql.Identifier(clone_name))
+                sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(
+                    sql.Identifier(clone_name)
+                )
             )
             connection.execute(
                 sql.SQL("CREATE DATABASE {} TEMPLATE {}").format(
@@ -112,7 +140,9 @@ class LocalMutationRunner:
             self._dsn_for(self.maintenance_db), autocommit=True
         ) as connection:
             connection.execute(
-                sql.SQL("DROP DATABASE IF EXISTS {}").format(sql.Identifier(clone_name))
+                sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(
+                    sql.Identifier(clone_name)
+                )
             )
 
     def _apply_ddl(self, clone_dsn: str, ddl: str) -> None:
@@ -129,6 +159,7 @@ class LocalMutationRunner:
             capture_output=True,
             text=True,
             check=False,
+            timeout=self.timeout_s,
         )
         return process.returncode, process.stdout + process.stderr
 
@@ -164,6 +195,7 @@ def run_mutation_tests(
     maintenance_db: str = "postgres",
     hypothesis_seed: int | None = None,
     max_workers: int = 1,
+    timeout_s: float | None = 600.0,
 ) -> MutationResult:
     """Prepare every mutant (all authoring errors raise here, before any
     database work), then run each against a fresh clone of `database_url`.
@@ -171,9 +203,23 @@ def run_mutation_tests(
     `database_url` is the template database: schema applied, no
     connections open. `pytest_args` selects the suite; the subprocess
     sees `env_var` pointing at the per-mutant clone.
+
+    `hypothesis_seed` pins the Hypothesis seed for every mutant run,
+    making failures reproducible. If ``None`` (the default), a fresh
+    random seed is generated via :func:`secrets.randbelow` so every
+    invocation is pinned to a concrete, replayable value — check the
+    ``hypothesis_seed`` field on each :class:`~sqlproof.mutation.result.MutantOutcome`
+    to replay a specific run.
+
+    `timeout_s` is the per-mutant pytest timeout in seconds (default
+    600 s / 10 minutes). Pass ``None`` to disable. A hung mutant —
+    the canonical mutation-testing failure for a mutated loop condition —
+    raises :class:`subprocess.TimeoutExpired`, which flows through to an
+    ``"error"`` outcome.
     """
     schema_sql = Path(schema_file).read_text(encoding="utf-8")
     prepared = prepare_mutants(mutations, schema_sql)
+    hypothesis_seed = _resolve_seed(hypothesis_seed)
     runner = LocalMutationRunner(
         database_url=database_url,
         pytest_args=pytest_args,
@@ -181,5 +227,6 @@ def run_mutation_tests(
         maintenance_db=maintenance_db,
         hypothesis_seed=hypothesis_seed,
         max_workers=max_workers,
+        timeout_s=timeout_s,
     )
     return runner.run(prepared)
