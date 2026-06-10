@@ -45,3 +45,7 @@ class SqlProofPropertyFailure(SqlProofError):
 
 class SqlProofContainerError(SqlProofError):
     """testcontainers startup, container died mid-run, etc."""
+
+
+class SqlProofMutationError(SqlProofError):
+    """Mutation testing: bad mutant definition, apply failure, or surviving mutants."""
