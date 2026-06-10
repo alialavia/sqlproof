@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from sqlproof.exceptions import SqlProofMutationError
-from sqlproof.mutation.extract import extract_function
+from sqlproof.mutation.extract import build_mutated_ddl, extract_function
 
 SCHEMA_SQL = """
 CREATE TABLE usage_events (
@@ -77,3 +77,22 @@ def test_begin_atomic_body_is_rejected_for_now() -> None:
     """
     with pytest.raises(SqlProofMutationError, match="BEGIN ATOMIC"):
         extract_function(atomic, "one")
+
+
+def test_build_mutated_ddl_splices_body_and_uses_or_replace() -> None:
+    mutated_body = (
+        "\n    SELECT COALESCE(SUM(amount), 1) FROM usage_events WHERE user_id = p_user\n"
+    )
+    ddl = build_mutated_ddl(SCHEMA_SQL, "total_usage", mutated_body)
+    assert "OR REPLACE" in ddl.upper()
+    assert "COALESCE(SUM(amount), 1)" in ddl
+    assert "COALESCE(SUM(amount), 0)" not in ddl
+
+
+def test_build_mutated_ddl_round_trips_through_pglast() -> None:
+    from pglast import parse_sql
+
+    ddl = build_mutated_ddl(SCHEMA_SQL, "total_usage", " SELECT 42 ")
+    (raw,) = parse_sql(ddl)
+    assert type(raw.stmt).__name__ == "CreateFunctionStmt"
+    assert raw.stmt.replace is True

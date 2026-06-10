@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from pglast import ast as pg_ast
 from pglast import parse_sql as parse_postgres_sql
 from pglast.stream import RawStream
 
@@ -52,7 +53,7 @@ def _matching_statement(schema_sql: str, name: str) -> Any:
         )
         raise SqlProofMutationError(msg)
     statement = matches[0]
-    if getattr(statement, "sql_body", None) is not None:
+    if statement.sql_body is not None:
         msg = (
             f"Function {name!r} uses a BEGIN ATOMIC body, which is not supported "
             "yet; define it with AS $$ ... $$ instead."
@@ -88,3 +89,18 @@ def extract_function(schema_sql: str, name: str) -> FunctionSource:
     body = _body_from_statement(statement, name)
     stream = RawStream()  # type: ignore[no-untyped-call]
     return FunctionSource(name=name, language=language, body=body, ddl=stream(statement))
+
+
+def build_mutated_ddl(schema_sql: str, name: str, mutated_body: str) -> str:
+    """CREATE OR REPLACE FUNCTION statement with `mutated_body` spliced in.
+
+    Re-parses the schema and mutates the AST (pglast nodes are mutable),
+    then deparses — no text splicing, so dollar-quoting and clause order
+    are the deparser's problem, not ours.
+    """
+    statement = _matching_statement(schema_sql, name)
+    statement.replace = True
+    as_option = _option(statement, "as", name)
+    as_option.arg = (pg_ast.String(sval=mutated_body),)  # type: ignore[no-untyped-call]
+    stream = RawStream()  # type: ignore[no-untyped-call]
+    return stream(statement)  # type: ignore[no-any-return]
