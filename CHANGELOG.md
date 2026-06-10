@@ -5,6 +5,13 @@ All notable changes to SqlProof will be documented here. The format is based on
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While SqlProof
 remains in `0.x`, minor versions may include breaking changes.
 
+## [0.9.0](https://github.com/alialavia/sqlproof/compare/v0.8.0...v0.9.0) (2026-06-10)
+
+
+### Added
+
+* **mutation:** mutation testing harness v1 ([#89](https://github.com/alialavia/sqlproof/issues/89)) ([20f2971](https://github.com/alialavia/sqlproof/commit/20f2971be3bd8a6e07dd1795ff55767b30874482))
+
 ## [0.8.0](https://github.com/alialavia/sqlproof/compare/v0.7.0...v0.8.0) (2026-06-08)
 
 
