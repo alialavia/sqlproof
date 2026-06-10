@@ -96,7 +96,8 @@ def build_mutated_ddl(schema_sql: str, name: str, mutated_body: str) -> str:
 
     Re-parses the schema and mutates the AST (pglast nodes are mutable),
     then deparses — no text splicing, so dollar-quoting and clause order
-    are the deparser's problem, not ours.
+    are the deparser's problem, not ours.  `_matching_statement` re-parses
+    the schema, so the tree mutated here is private to this call.
     """
     statement = _matching_statement(schema_sql, name)
     statement.replace = True
