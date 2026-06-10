@@ -26,6 +26,9 @@ class Replace:
     reason: str | None = None
 
     def __post_init__(self) -> None:
+        if not self.old:
+            msg = "Replace.old must be non-empty."
+            raise SqlProofMutationError(msg)
         if self.old == self.new:
             msg = f"Replace is a no-op: old and new are both {self.old!r}."
             raise SqlProofMutationError(msg)
@@ -47,6 +50,9 @@ class Drop:
     reason: str | None = None
 
     def __post_init__(self) -> None:
+        if not self.pattern:
+            msg = "Drop.pattern must be non-empty."
+            raise SqlProofMutationError(msg)
         _check_survivor_fields(self.expect_survives, self.reason)
 
     def describe(self) -> str:
@@ -85,6 +91,19 @@ class Mutant:
     ops: tuple[Op, ...]
     expect_survives: bool = False
     reason: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.ops:
+            msg = f"Mutant for {self.target_name!r} needs at least one op."
+            raise SqlProofMutationError(msg)
+        for op in self.ops:
+            if op.expect_survives or op.reason:
+                msg = (
+                    "Ops passed to Mutant must not carry expect_survives/reason flags. "
+                    "Set them on the Mutant directly or use MutationSet.for_function."
+                )
+                raise SqlProofMutationError(msg)
+        _check_survivor_fields(self.expect_survives, self.reason)
 
     def describe(self) -> str:
         rendered = "; ".join(op.describe() for op in self.ops)
@@ -135,7 +154,9 @@ class MutationSet:
         )
         return cls(mutants)
 
-    def __add__(self, other: MutationSet) -> MutationSet:
+    def __add__(self, other: object) -> MutationSet:
+        if not isinstance(other, MutationSet):
+            return NotImplemented
         return MutationSet(self.mutants + other.mutants)
 
     def to_dict(self) -> dict[str, Any]:
