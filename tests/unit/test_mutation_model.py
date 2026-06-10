@@ -187,3 +187,16 @@ def test_from_dict_unknown_target_kind_raises() -> None:
     }
     with pytest.raises(SqlProofMutationError, match="Unknown mutant target kind"):
         Mutant.from_dict(payload)
+
+
+def test_public_exports() -> None:
+    import sqlproof
+
+    assert sqlproof.MutationSet is MutationSet
+    assert sqlproof.Replace is Replace
+    assert sqlproof.Drop is Drop
+    from sqlproof.mutation.result import MutationResult
+    from sqlproof.mutation.runner import run_mutation_tests
+
+    assert sqlproof.run_mutation_tests is run_mutation_tests
+    assert sqlproof.MutationResult is MutationResult
