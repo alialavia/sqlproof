@@ -1,6 +1,6 @@
 # Mutation Testing Harness v1 Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Ship `run_mutation_tests()` — apply deliberate bugs to SQL function bodies, run the user's pytest suite against each on a fresh clone database, and report every mutant the suite failed to kill.
 
@@ -31,7 +31,7 @@
 **Files:**
 - Create: `docs/superpowers/plans/2026-06-10-mutation-testing-v1.md` (this file)
 
-- [ ] **Step 1: Commit**
+- [x] **Step 1: Commit**
 
 ```bash
 git add docs/superpowers/plans/2026-06-10-mutation-testing-v1.md
@@ -48,7 +48,7 @@ git commit -m "docs(plan): mutation testing harness v1 implementation plan"
 - Create: `src/sqlproof/mutation/model.py`
 - Test: `tests/unit/test_mutation_model.py`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 # tests/unit/test_mutation_model.py
@@ -138,12 +138,12 @@ def test_describe_is_human_readable() -> None:
     assert "'b'" in mutant.describe()
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_mutation_model.py -q`
 Expected: FAIL — `ModuleNotFoundError: No module named 'sqlproof.mutation'` (and `ImportError` for `SqlProofMutationError`).
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Append to `src/sqlproof/exceptions.py`:
 
@@ -316,12 +316,12 @@ def _bare(op: Op) -> Op:
     return Drop(op.pattern)
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_mutation_model.py -q`
 Expected: PASS (9 tests).
 
-- [ ] **Step 5: Lint and commit**
+- [x] **Step 5: Lint and commit**
 
 ```bash
 uv run ruff check src/sqlproof/mutation/ src/sqlproof/exceptions.py tests/unit/test_mutation_model.py
@@ -339,7 +339,7 @@ The file-based schema parser (`schema/parse_sql.py`) ignores `CREATE FUNCTION` e
 - Create: `src/sqlproof/mutation/extract.py`
 - Test: `tests/unit/test_mutation_extract.py`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 # tests/unit/test_mutation_extract.py
@@ -424,12 +424,12 @@ def test_begin_atomic_body_is_rejected_for_now() -> None:
         extract_function(atomic, "one")
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_mutation_extract.py -q`
 Expected: FAIL — `ModuleNotFoundError` for `sqlproof.mutation.extract`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Create `src/sqlproof/mutation/extract.py`:
 
@@ -525,14 +525,14 @@ def extract_function(schema_sql: str, name: str) -> FunctionSource:
     return FunctionSource(name=name, language=language, body=body, ddl=stream(statement))
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_mutation_extract.py -q`
 Expected: PASS (7 tests).
 
 If `test_begin_atomic_body_is_rejected_for_now` fails because pglast represents the BEGIN ATOMIC body differently (e.g. attribute named `sql_body` is always present but `None`): inspect with `python -c "from pglast import parse_sql; print(parse_sql('CREATE FUNCTION one() RETURNS integer LANGUAGE sql BEGIN ATOMIC SELECT 1; END;')[0].stmt)"` and adjust the guard — the contract under test (a clear `SqlProofMutationError` mentioning BEGIN ATOMIC) must hold.
 
-- [ ] **Step 5: Lint and commit**
+- [x] **Step 5: Lint and commit**
 
 ```bash
 uv run ruff check src/sqlproof/mutation/extract.py tests/unit/test_mutation_extract.py
@@ -548,7 +548,7 @@ git commit -m "feat(mutation): extract function source from schema DDL via pglas
 - Modify: `src/sqlproof/mutation/extract.py` (append)
 - Test: `tests/unit/test_mutation_extract.py` (append)
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `tests/unit/test_mutation_extract.py`:
 
@@ -573,12 +573,12 @@ def test_build_mutated_ddl_round_trips_through_pglast() -> None:
     assert raw.stmt.replace is True
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_mutation_extract.py -q`
 Expected: FAIL — `ImportError: cannot import name 'build_mutated_ddl'`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Append to `src/sqlproof/mutation/extract.py` (add `from pglast import ast as pg_ast` to the imports):
 
@@ -600,12 +600,12 @@ def build_mutated_ddl(schema_sql: str, name: str, mutated_body: str) -> str:
 
 If attribute assignment on the pglast node raises (older pglast versions had read-only nodes): rebuild instead — construct a new `pg_ast.CreateFunctionStmt(**{...existing fields..., "replace": True, "options": patched_options})` from the original node's attributes. Current pglast 6/7 nodes are mutable, so the straight assignment should work; verify before reaching for the rebuild.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_mutation_extract.py -q`
 Expected: PASS (9 tests).
 
-- [ ] **Step 5: Lint and commit**
+- [x] **Step 5: Lint and commit**
 
 ```bash
 uv run ruff check src/sqlproof/mutation/extract.py tests/unit/test_mutation_extract.py
@@ -621,7 +621,7 @@ git commit -m "feat(mutation): build CREATE OR REPLACE DDL via AST splice and de
 - Create: `src/sqlproof/mutation/apply.py`
 - Test: `tests/unit/test_mutation_apply.py`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 # tests/unit/test_mutation_apply.py
@@ -745,12 +745,12 @@ def test_duplicate_mutants_are_rejected() -> None:
         prepare_mutants(mutations, SCHEMA_SQL)
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_mutation_apply.py -q`
 Expected: FAIL — `ModuleNotFoundError` for `sqlproof.mutation.apply`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Create `src/sqlproof/mutation/apply.py`:
 
@@ -869,14 +869,14 @@ def prepare_mutants(mutations: MutationSet, schema_sql: str) -> tuple[PreparedMu
     return tuple(prepared)
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_mutation_apply.py -q`
 Expected: PASS (11 tests).
 
 Likely friction point: `parse_plpgsql` exists in `pglast.parser` (it wraps libpg_query's plpgsql parser) and takes the full `CREATE FUNCTION` DDL. If the plpgsql syntax-error test fails because `parse_plpgsql` tolerates `UPDAT` (the plpgsql parser defers some statement parsing to runtime), change that test's broken mutant to one the parser does reject (e.g. `Replace("END;", "ENDD;")` — mangle block structure, which it must parse) and add a comment explaining plpgsql's lazy statement parsing.
 
-- [ ] **Step 5: Lint and commit**
+- [x] **Step 5: Lint and commit**
 
 ```bash
 uv run ruff check src/sqlproof/mutation/apply.py tests/unit/test_mutation_apply.py
@@ -892,7 +892,7 @@ git commit -m "feat(mutation): apply text ops, AST validation, no-op and duplica
 - Create: `src/sqlproof/mutation/result.py`
 - Test: `tests/unit/test_mutation_result.py`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 # tests/unit/test_mutation_result.py
@@ -974,12 +974,12 @@ def test_to_dict_is_json_serializable() -> None:
     assert json.loads(json.dumps(result.to_dict()))["outcomes"][1]["status"] == "survived"
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_mutation_result.py -q`
 Expected: FAIL — `ModuleNotFoundError` for `sqlproof.mutation.result`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Create `src/sqlproof/mutation/result.py`:
 
@@ -1064,12 +1064,12 @@ class MutationResult:
         return {"outcomes": [asdict(outcome) for outcome in self.outcomes]}
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_mutation_result.py -q`
 Expected: PASS (13 tests).
 
-- [ ] **Step 5: Lint and commit**
+- [x] **Step 5: Lint and commit**
 
 ```bash
 uv run ruff check src/sqlproof/mutation/result.py tests/unit/test_mutation_result.py
@@ -1085,7 +1085,7 @@ git commit -m "feat(mutation): outcome mapping and MutationResult.assert_no_surv
 - Create: `src/sqlproof/mutation/runner.py`
 - Test: `tests/unit/test_mutation_runner.py`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 # tests/unit/test_mutation_runner.py
@@ -1187,12 +1187,12 @@ def test_pytest_command_omits_seed_flag_by_default() -> None:
     assert not any(arg.startswith("--hypothesis-seed") for arg in runner._pytest_command())
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_mutation_runner.py -q`
 Expected: FAIL — `ModuleNotFoundError` for `sqlproof.mutation.runner`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Create `src/sqlproof/mutation/runner.py`:
 
@@ -1380,12 +1380,12 @@ def run_mutation_tests(
     return runner.run(prepared)
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_mutation_runner.py -q`
 Expected: PASS (7 tests).
 
-- [ ] **Step 5: Lint and commit**
+- [x] **Step 5: Lint and commit**
 
 ```bash
 uv run ruff check src/sqlproof/mutation/runner.py tests/unit/test_mutation_runner.py
@@ -1400,7 +1400,7 @@ git commit -m "feat(mutation): clone-per-mutant local runner and run_mutation_te
 **Files:**
 - Create: `tests/integration/test_mutation_live.py`
 
-- [ ] **Step 1: Write the integration test**
+- [x] **Step 1: Write the integration test**
 
 ```python
 # tests/integration/test_mutation_live.py
@@ -1540,7 +1540,7 @@ def test_mutation_run_kills_and_survives(tmp_path: Path) -> None:
 
 Note `maintenance_db` defaults to `"postgres"` — if the CI service exposes a different always-on database, pass `maintenance_db=` accordingly. If `CREATE DATABASE ... TEMPLATE` fails with "source database is being accessed by other users", the leak is a connection to the template — every psycopg context manager touching it must be closed before `run_mutation_tests` (the code above already does this; preserve that property when editing).
 
-- [ ] **Step 2: Run the unit suite (integration skips locally without a DB)**
+- [x] **Step 2: Run the unit suite (integration skips locally without a DB)**
 
 Run: `uv run pytest tests/integration/test_mutation_live.py -q`
 Expected: 1 skipped (locally) — or PASS if `SQLPROOF_TEST_DATABASE_URL` is exported. If a local Postgres is available, export it and verify the test actually passes before committing:
@@ -1550,7 +1550,7 @@ SQLPROOF_TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/postgre
   uv run pytest tests/integration/test_mutation_live.py -q
 ```
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 uv run ruff check tests/integration/test_mutation_live.py
@@ -1566,7 +1566,7 @@ git commit -m "test(mutation): live end-to-end kill/survive integration test"
 - Modify: `src/sqlproof/__init__.py`
 - Test: `tests/unit/test_mutation_model.py` (append)
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `tests/unit/test_mutation_model.py`:
 
@@ -1584,12 +1584,12 @@ def test_public_exports() -> None:
     assert sqlproof.MutationResult is MutationResult
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `uv run pytest tests/unit/test_mutation_model.py::test_public_exports -q`
 Expected: FAIL — `AttributeError: MutationSet`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `src/sqlproof/__init__.py`, extend the existing lazy-import pattern exactly as the other exports do:
 
@@ -1620,12 +1620,12 @@ In `src/sqlproof/__init__.py`, extend the existing lazy-import pattern exactly a
         return run_mutation_tests
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_mutation_model.py -q`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 uv run ruff check src/sqlproof/__init__.py tests/unit/test_mutation_model.py
@@ -1637,7 +1637,7 @@ git commit -m "feat(mutation): export MutationSet, Replace, Drop, run_mutation_t
 
 ### Task 9: Full verification
 
-- [ ] **Step 1: Run the full CI-parity suite**
+- [x] **Step 1: Run the full CI-parity suite**
 
 ```bash
 uv run pytest -q
@@ -1648,7 +1648,7 @@ uv run mypy src/sqlproof/
 
 Expected: pytest ≥ 283 + ~40 new passing (26+ skipped without DB); zero ruff/pyright/mypy findings. Fix anything that surfaces — pglast's lack of type stubs is the likely pyright/mypy friction; mirror the `Any` + targeted-ignore style already used in `schema/parse_sql.py`.
 
-- [ ] **Step 2: Run the integration test against a live database if available**
+- [x] **Step 2: Run the integration test against a live database if available**
 
 ```bash
 SQLPROOF_TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/postgres \
@@ -1657,7 +1657,7 @@ SQLPROOF_TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/postgre
 
 Expected: PASS. If no local Postgres exists, state that explicitly in the final report — do not claim live verification.
 
-- [ ] **Step 3: Commit any fixes**
+- [x] **Step 3: Commit any fixes**
 
 ```bash
 git add -A

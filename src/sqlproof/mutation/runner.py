@@ -204,6 +204,18 @@ def run_mutation_tests(
     connections open. `pytest_args` selects the suite; the subprocess
     sees `env_var` pointing at the per-mutant clone.
 
+    `maintenance_db` is the always-on database used for ``CREATE DATABASE``
+    and ``DROP DATABASE`` commands. It must be reachable with the same
+    credentials as `database_url` — the default ``"postgres"`` is correct
+    for most setups; override when the cluster exposes a different
+    always-available database (e.g. ``"template1"`` or the CI service name).
+
+    `max_workers` controls how many clone-create/pytest subprocesses run in
+    parallel. Clone creation and deletion serialize on an internal lock
+    (``CREATE DATABASE ... TEMPLATE`` requires the template to have zero
+    connections), so the actual concurrency is in the pytest subprocesses
+    themselves. Default is ``1`` (sequential).
+
     `hypothesis_seed` pins the Hypothesis seed for every mutant run,
     making failures reproducible. If ``None`` (the default), a fresh
     random seed is generated via :func:`secrets.randbelow` so every
@@ -216,6 +228,13 @@ def run_mutation_tests(
     the canonical mutation-testing failure for a mutated loop condition —
     raises :class:`subprocess.TimeoutExpired`, which flows through to an
     ``"error"`` outcome.
+
+    .. note:: **PYTEST_ADDOPTS**
+        The pytest child process inherits the parent environment. If
+        ``PYTEST_ADDOPTS`` is set (e.g. by CI to add ``--tb=short`` or
+        ``--no-header``), those flags affect every mutant suite. Review
+        that variable when debugging unexpected pytest behaviour inside
+        mutation runs.
     """
     schema_sql = Path(schema_file).read_text(encoding="utf-8")
     prepared = prepare_mutants(mutations, schema_sql)

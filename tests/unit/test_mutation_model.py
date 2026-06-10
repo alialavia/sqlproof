@@ -191,12 +191,19 @@ def test_from_dict_unknown_target_kind_raises() -> None:
 
 def test_public_exports() -> None:
     import sqlproof
+    import sqlproof.mutation as mutation_pkg
 
     assert sqlproof.MutationSet is MutationSet
     assert sqlproof.Replace is Replace
     assert sqlproof.Drop is Drop
-    from sqlproof.mutation.result import MutationResult
+    from sqlproof.mutation.result import MutantOutcome, MutationResult
     from sqlproof.mutation.runner import run_mutation_tests
 
     assert sqlproof.run_mutation_tests is run_mutation_tests
     assert sqlproof.MutationResult is MutationResult
+    assert sqlproof.MutantOutcome is MutantOutcome
+
+    # subpackage __init__ re-exports must resolve to the same objects
+    assert mutation_pkg.run_mutation_tests is run_mutation_tests
+    assert mutation_pkg.MutationResult is MutationResult
+    assert mutation_pkg.MutantOutcome is MutantOutcome
