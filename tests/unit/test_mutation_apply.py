@@ -80,11 +80,7 @@ def test_prepare_rejects_ast_no_op() -> None:
 
 
 def test_prepare_validates_plpgsql_body() -> None:
-    # plpgsql lazily parses statement bodies, so mangling a statement keyword
-    # (e.g. "UPDATE" -> "UPDAT") is not caught by parse_plpgsql.  We instead
-    # mangle the block structure itself ("END;" -> "ENDD;"), which causes
-    # parse_plpgsql to fail immediately.
-    mutations = MutationSet.for_function("bump", [Replace("END;", "ENDD;")])
+    mutations = MutationSet.for_function("bump", [Replace("UPDATE", "UPDAT")])
     with pytest.raises(SqlProofMutationError, match="does not parse"):
         prepare_mutants(mutations, SCHEMA_SQL)
 

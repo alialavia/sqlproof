@@ -7,7 +7,8 @@ from typing import Any
 
 from pglast import parse_sql as parse_postgres_sql
 
-# pglast v7+ exposes parse_plpgsql_json (not parse_plpgsql) in pglast.parser.
+# parse_plpgsql_json returns the raw JSON string; we re-dump with sort_keys for a
+# deterministic AST key (pglast.parse_plpgsql is just json.loads of this).
 from pglast.parser import parse_plpgsql_json
 
 from sqlproof.exceptions import SqlProofMutationError
