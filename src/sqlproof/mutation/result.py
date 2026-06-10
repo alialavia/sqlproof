@@ -5,6 +5,12 @@ from typing import Any, Literal
 
 from sqlproof.exceptions import SqlProofMutationError
 
+# killed             — tests failed under the mutant: the suite caught it (gate: pass)
+# survived           — tests passed under the mutant: untested behavior (gate: FAIL)
+# expected_survivor  — declared survivor (expect_survives=True) survived (gate: pass)
+# unexpected_kill    — declared survivor was killed: tests now cover it; drop the
+#                      stale expect_survives declaration (gate: pass — good news)
+# error              — run proved nothing (pytest exit >= 2 or infra failure) (gate: FAIL)
 Status = Literal["killed", "survived", "expected_survivor", "unexpected_kill", "error"]
 
 
@@ -67,9 +73,12 @@ class MutationResult:
         problems = [*self.survivors, *self.errors]
         if not problems:
             return
-        lines = [f"{len(problems)} mutant(s) not killed:"]
+        lines = [f"{len(self.survivors)} survivor(s), {len(self.errors)} error(s):"]
         for outcome in problems:
-            lines.append(f"  [{outcome.status}] {outcome.description}")
+            lines.append(
+                f"  [{outcome.status}] {outcome.description}"
+                f" (exit={outcome.pytest_exit_code}, seed={outcome.hypothesis_seed})"
+            )
             if outcome.detail:
                 lines.append(f"    {outcome.detail.strip()[-500:]}")
         raise SqlProofMutationError("\n".join(lines))

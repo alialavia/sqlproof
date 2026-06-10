@@ -63,6 +63,37 @@ def test_assert_no_survivors_raises_on_error_outcomes() -> None:
         result.assert_no_survivors()
 
 
+def test_assert_no_survivors_message_shape() -> None:
+    """Pin the exact header and per-line format: counts, exit code, seed, detail tail."""
+    survivor = MutantOutcome(
+        mutant_id="s1",
+        target="total_usage",
+        description="total_usage: drop 's1'",
+        status="survived",
+        pytest_exit_code=0,
+        hypothesis_seed=7,
+        detail="x" * 600,  # longer than 500-char tail
+    )
+    error = MutantOutcome(
+        mutant_id="e1",
+        target="total_usage",
+        description="total_usage: drop 'e1'",
+        status="error",
+        pytest_exit_code=5,
+        hypothesis_seed=None,
+        detail=None,
+    )
+    result = MutationResult(outcomes=(survivor, error))
+    with pytest.raises(SqlProofMutationError) as exc_info:
+        result.assert_no_survivors()
+    msg = str(exc_info.value)
+    assert "1 survivor(s), 1 error(s):" in msg
+    assert "(exit=0, seed=7)" in msg
+    assert "(exit=5, seed=None)" in msg
+    # detail tail: last 500 chars of "x" * 600
+    assert "x" * 500 in msg
+
+
 def test_unexpected_kill_does_not_fail_the_run() -> None:
     # Tests now cover what was declared dead code — good news, not failure.
     result = MutationResult(outcomes=(_outcome("unexpected_kill"),))
