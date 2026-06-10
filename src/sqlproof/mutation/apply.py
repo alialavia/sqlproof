@@ -49,18 +49,30 @@ def apply_op(body: str, op: Op) -> str:
 
 def _sql_ast_key(sql: str, *, context: str) -> str:
     try:
-        return repr(parse_postgres_sql(sql))
+        # Key on the statement nodes, not RawStmt wrappers, so that
+        # stmt_location/stmt_len (which encode formatting) don't affect identity.
+        return repr(tuple(raw.stmt for raw in parse_postgres_sql(sql)))
     except Exception as exc:
-        msg = f"{context}: mutated body does not parse — authoring error: {exc}"
+        msg = f"{context}: body does not parse — authoring error: {exc}"
         raise SqlProofMutationError(msg) from exc
+
+
+def _strip_linenos(node: object) -> object:
+    """Recursively remove 'lineno' keys from a parsed plpgsql JSON structure."""
+    if isinstance(node, dict):
+        return {k: _strip_linenos(v) for k, v in node.items() if k != "lineno"}
+    if isinstance(node, list):
+        return [_strip_linenos(item) for item in node]
+    return node
 
 
 def _plpgsql_ast_key(ddl: str, *, context: str) -> str:
     try:
         raw: Any = parse_plpgsql_json(ddl)
-        return json.dumps(json.loads(raw) if isinstance(raw, str) else raw, sort_keys=True)
+        parsed = json.loads(raw) if isinstance(raw, str) else raw
+        return json.dumps(_strip_linenos(parsed), sort_keys=True)
     except Exception as exc:
-        msg = f"{context}: mutated body does not parse — authoring error: {exc}"
+        msg = f"{context}: body does not parse — authoring error: {exc}"
         raise SqlProofMutationError(msg) from exc
 
 
@@ -80,7 +92,7 @@ def _ast_keys(
     """
     if source.language == "sql":
         return (
-            repr(parse_postgres_sql(source.body)),
+            _sql_ast_key(source.body, context=f"{context} (original)"),
             _sql_ast_key(mutated_body, context=context),
         )
     if source.language == "plpgsql":
@@ -103,7 +115,11 @@ def prepare_mutants(mutations: MutationSet, schema_sql: str) -> tuple[PreparedMu
         source = extract_function(schema_sql, mutant.target_name)
         body = source.body
         for op in mutant.ops:
-            body = apply_op(body, op)
+            try:
+                body = apply_op(body, op)
+            except SqlProofMutationError as exc:
+                msg = f"{mutant.target_name}: {exc}"
+                raise SqlProofMutationError(msg) from None
         ddl = build_mutated_ddl(schema_sql, mutant.target_name, body)
         original_key, mutated_key = _ast_keys(source, body, ddl, context=context)
         if original_key == mutated_key:
