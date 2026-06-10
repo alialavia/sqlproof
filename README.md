@@ -4,39 +4,11 @@
 [![codecov](https://codecov.io/gh/alialavia/sqlproof/branch/main/graph/badge.svg)](https://codecov.io/gh/alialavia/sqlproof)
 [![PyPI](https://img.shields.io/pypi/v/sqlproof?include_prereleases&v=2)](https://pypi.org/project/sqlproof/)
 
-**→ Full docs: [sqlproof.com](https://sqlproof.com)**
+Property-based testing for PostgreSQL. Describe an invariant about your schema
+or SQL; SqlProof generates valid datasets with Hypothesis, runs your query
+through `psycopg`, and saves the shrunk counterexample when something breaks.
 
-> ⚠️ **Pre-1.0 (`0.x`).** APIs may change between minor versions, but
-> changes follow a documented policy: see
-> [Stability and deprecation policy](./CONTRIBUTING.md#stability-and-deprecation-policy)
-> for what counts as breaking, how deprecations are announced, and
-> what the path to 1.0 looks like. Postgres edge cases and Hypothesis
-> shrink behavior are still being discovered, and coverage of the
-> schema surface area is incomplete. **Evaluate carefully before
-> relying on this for production test suites.** Bug reports and
-> reproductions welcome — [open an issue](https://github.com/alialavia/sqlproof/issues).
->
-> Known gaps tracked openly in the [issue list](https://github.com/alialavia/sqlproof/issues):
-> - [#3 Schema: exclusion constraints, partial unique indexes, generated columns](https://github.com/alialavia/sqlproof/issues/3)
-> - [#4 Generators: range types, composite types, custom domains](https://github.com/alialavia/sqlproof/issues/4)
-> - [#5 Pytest plugin: CLI flags and reporter wiring still stabilizing](https://github.com/alialavia/sqlproof/issues/5)
-> - [#7 Coverage: CLI and reporter modules](https://github.com/alialavia/sqlproof/issues/7)
-> - [#26 Generator: composite UNIQUE / PRIMARY KEY support](https://github.com/alialavia/sqlproof/issues/26)
-> - [#47 insertion_order: legitimate FK cycles](https://github.com/alialavia/sqlproof/issues/47)
-
-Property-based testing for PostgreSQL schemas and SQL behavior. Define properties about
-your database code; SqlProof generates valid datasets with Hypothesis, executes your
-queries through `psycopg`, and saves the smallest counterexample it finds.
-
-## Built for Supabase founders who don't write tests by hand
-
-If you're a solo founder building on Supabase and your testing strategy
-is "ask Claude / Cursor to write the tests" — SqlProof was made for you.
-This repo ships with [`AGENTS.md`](./AGENTS.md), a rules file that
-primes your AI coding agent on the exact patterns to use for RLS
-policies, RPC functions, and stateful tests on a Supabase schema.
-
-**60-second path:** [Test your Supabase project in 60 seconds](https://sqlproof.com/supabase-quickstart/).
+**Full docs: [sqlproof.com](https://sqlproof.com)**
 
 ## Install
 
@@ -48,16 +20,15 @@ uv add sqlproof
 
 Requires Python 3.11+ and PostgreSQL 13+.
 
-**Running in CI?** See [the CI/CD guide](https://sqlproof.com/guides/ci-cd/)
-for copy-paste GitHub Actions workflows covering vanilla Postgres and the
-extra setup Supabase-shaped projects need (auth migration, plpgsql_check).
+Running in CI? See [the CI/CD guide](https://sqlproof.com/guides/ci-cd/) for
+copy-paste GitHub Actions workflows covering vanilla Postgres and the extra
+setup Supabase-shaped projects need (auth migration, plpgsql_check).
 
-## Quick Start (general)
+## Quick start
 
-Given a schema file:
+Given `schema.sql`:
 
 ```sql
--- schema.sql
 CREATE TABLE orders (
   id SERIAL PRIMARY KEY,
   customer_id INTEGER NOT NULL,
@@ -72,7 +43,7 @@ CREATE TABLE line_items (
 );
 ```
 
-Write property tests with pytest:
+Write a property test with pytest:
 
 ```python
 from sqlproof import SqlProof, sqlproof
@@ -91,27 +62,35 @@ def test_no_orphan_line_items(db):
     assert rows == []
 ```
 
-SqlProof will:
+SqlProof parses your schema, topologically orders tables by FK, generates rows
+that honor types / CHECK / UNIQUE / NOT NULL / FK constraints, runs the
+property under Hypothesis, and shrinks any failure to the smallest reproducer.
 
-1. Parse your schema (tables, columns, FKs, CHECK constraints, enums)
-2. Topologically order tables by foreign-key dependencies
-3. Generate datasets that respect common type, FK, CHECK, UNIQUE, and NOT NULL constraints
-4. Run your property with Hypothesis-managed execution and shrinking
-5. Save the shrunk counterexample as JSON when a property fails
-
-## What you can do with SqlProof
+## What you can do
 
 ### Generate datasets that respect your schema
 
-The generation engine reads your schema and produces multi-table datasets where every FK references a real parent, every CHECK constraint is honored at generation time (no rejection sampling), every UNIQUE constraint is enforced, and types are realistic — `NUMERIC(10,2)` gets scale-2 decimals, `varchar(50)` gets bounded strings, enums sample from declared values.
+The generation engine reads your schema and produces multi-table datasets
+where every FK references a real parent, every CHECK constraint is honored at
+generation time (no rejection sampling), every UNIQUE constraint is enforced,
+and types are realistic — `NUMERIC(10,2)` gets scale-2 decimals, `varchar(50)`
+gets bounded strings, enums sample from declared values, `vector(N)` gets
+length-correct embeddings.
 
-Useful far beyond tests: seed local dev databases, generate fixtures, replay schema-respecting data through migrations, sample child-row FKs from external parent tables (e.g. Supabase `auth.users`).
+Useful far beyond tests: seed local dev databases, generate fixtures, replay
+schema-respecting data through migrations, sample child-row FKs from external
+parent tables (e.g. Supabase `auth.users`).
 
-→ Walkthrough with column overrides, derived values, shrinkable cardinalities, and external parent tables: [Realistic Data Generation](https://sqlproof.com/examples/data-generation/).
+→ Walkthrough with column overrides, derived values, shrinkable cardinalities,
+and external parent tables: [Realistic Data Generation](https://sqlproof.com/examples/data-generation/).
 
-### Property-based testing
+### Catch invariant violations across hundreds of datasets
 
-A pgTAP test asserts a specific value against a fixed fixture. A SqlProof property describes an *invariant* and lets Hypothesis throw hundreds of valid datasets at it — including edge cases (NULLs, decimal precision, empty groups, tied window values) you wouldn't think to type. When a property fails, Hypothesis shrinks the dataset to the smallest reproducer and saves it.
+A pgTAP test asserts a specific value against a fixed fixture. A SqlProof
+property describes an *invariant* and lets Hypothesis throw hundreds of valid
+datasets at it — including edge cases (NULLs, decimal precision, empty groups,
+tied window values) you wouldn't think to type. When a property fails,
+Hypothesis shrinks the dataset to the smallest reproducer and saves it.
 
 Common shapes that property tests cover much better than examples:
 
@@ -123,13 +102,19 @@ Common shapes that property tests cover much better than examples:
 
 → Walkthroughs of all five: [Five Property Patterns](https://sqlproof.com/examples/property-patterns/).
 
-→ The strongest case: testing **SQL functions** with stacked discounts, country-specific tax, and rounding edge cases — pgTAP version side-by-side with the SqlProof version, showing four realistic regressions where pgTAP silently passes and SqlProof catches: [Testing SQL Functions — pgTAP vs SqlProof](https://sqlproof.com/examples/testing-sql-functions/).
+→ The strongest case: testing **SQL functions** with stacked discounts,
+country-specific tax, and rounding edge cases — pgTAP version side-by-side
+with the SqlProof version, showing four realistic regressions where pgTAP
+silently passes and SqlProof catches: [Testing SQL Functions — pgTAP vs SqlProof](https://sqlproof.com/examples/testing-sql-functions/).
 
-→ Honest comparison with pgTAP (where SqlProof wins, where pgTAP wins, where you should ship both): [SqlProof vs pgTAP](https://sqlproof.com/guides/vs-pgtap/).
+→ Honest comparison with pgTAP: [SqlProof vs pgTAP](https://sqlproof.com/guides/vs-pgtap/).
 
-### Ad-hoc fixtures without hand-rolled SQL
+### Generate ad-hoc fixtures from the same schema
 
-Property tests cover most cases, but a few residuals — RLS regression pins, HTTP-layer tests that need fixture rows to exist, pytest fixtures shared across many examples — still want one specific row inserted ahead of time. The reflex is to write a helper:
+Property tests cover most cases, but a few residuals — RLS regression pins,
+HTTP-layer tests that need a fixture row to exist, pytest fixtures shared
+across many examples — still want one specific row inserted ahead of time.
+The reflex is to write a helper:
 
 ```python
 # Anti-pattern: hand-rolled INSERT in a test helper.
@@ -140,9 +125,13 @@ def insert_project(db, owner_id, *, name):
     )
 ```
 
-This compiles fine, looks fine in review, and silently breaks the next time a migration adds a NOT NULL column to `projects`. The failure surfaces commits later, in tests that aren't nominally about projects, as a cryptic `NotNullViolation`. See [issue #13](https://github.com/alialavia/sqlproof/issues/13).
+This compiles fine, looks fine in review, and silently breaks the next time a
+migration adds a NOT NULL column to `projects`. The failure surfaces commits
+later, in tests that aren't nominally about projects, as a cryptic
+`NotNullViolation`.
 
-Use `SqlProof.row_strategy` instead. It's a thin, schema-aware wrapper over the same generator the property runner uses — it knows your NOT NULL columns, your CHECK constraints, your FKs, your enums:
+Use `SqlProof.row_strategy` instead — a thin, schema-aware wrapper over the
+same generator the property runner uses:
 
 ```python
 # Same fixture, schema-backed. When a migration adds `org_id NOT NULL`,
@@ -156,21 +145,43 @@ def insert_project(db, owner_id, *, name):
     return row
 ```
 
-Override kwargs accept Hypothesis strategies, callables, or bare values. Unknown column names raise immediately so typos surface at the call site rather than silently no-op. Inside a `@given`-decorated test, draw from the strategy directly instead of calling `.example()`.
+Override kwargs accept Hypothesis strategies, callables, or bare values.
+Unknown column names raise immediately. Inside a `@given`-decorated test, draw
+from the strategy directly instead of calling `.example()`.
 
-Reach for property tests (`check()`, `dataset_strategy`) first — they're stronger. `row_strategy` is the smaller hammer for the residual case where a single, hand-pinned row is the right shape.
+Reach for property tests (`check()`, `dataset_strategy`) first — they're
+stronger. `row_strategy` is the smaller hammer for the residual case.
 
-## API
+## Built for Supabase projects shipping with AI agents
 
-See the full API reference at [sqlproof.com](https://sqlproof.com).
+If you're building on Supabase and most of your tests are written by Claude or
+Cursor, SqlProof was made for that workflow:
 
-### Quick reference
+- **[`AGENTS.md`](./AGENTS.md)** — primes your AI coding agent on the exact
+  patterns for RLS policies, RPC functions, and stateful tests on a Supabase
+  schema.
+- **[`sqlproof-skills`](https://github.com/alialavia/sqlproof-skills)** — a
+  Claude Code / Cursor plugin that teaches the agent how to drive SqlProof
+  end-to-end.
+- **[`sqlproof-mcp`](./src/sqlproof/mcp/)** — an MCP server exposing schema
+  introspection and property generation as agent tools.
+- **[Inbox sample](./examples/inbox/)** — a multi-tenant Supabase app
+  (organizations, tickets, agents, messages, pgvector embeddings) with 10
+  intentional bugs across RLS, RPCs, and triggers, each paired with a property
+  test that catches it and a walkthrough recipe.
+
+**60-second path:** [Test your Supabase project in 60 seconds](https://sqlproof.com/supabase-quickstart/).
+
+## API at a glance
 
 ```python
 proof = SqlProof.from_schema_file("./schema.sql")
 proof = SqlProof.from_connection_string("postgresql://localhost/postgres")
 
+# Property runner (decorator shown above, or method form):
 proof.check("name", sizes={"orders": 10}, property=lambda db: ...)
+
+# Shorthand for "this query must return no rows":
 proof.invariant(
     "no bad rows",
     sizes={"orders": 10},
@@ -178,29 +189,11 @@ proof.invariant(
     expect_empty=True,
 )
 
-# Single-row strategy for ad-hoc fixtures (see "Ad-hoc fixtures" above).
+# Ad-hoc fixture row (see above):
 order = proof.row_strategy("orders", customer_id=42).example()
 
 proof.disconnect()
 ```
-
-### Schema Sources
-
-**SQL file** — SqlProof parses `CREATE TABLE`, `CREATE TYPE ... AS ENUM`, foreign keys, CHECK constraints, UNIQUE constraints, and column types directly from `.sql` files.
-
-**Connection string** — Pass a `postgresql://` URL and SqlProof introspects the live database via `information_schema` and `pg_catalog`.
-
-```python
-proof = SqlProof.from_connection_string("postgresql://localhost:5432/mydb")
-```
-
-### Custom Column Generators
-
-SqlProof maps PostgreSQL types to Hypothesis strategies and refines simple range,
-`IN (...)`, length, FK, and unique constraints. The public customization API is present
-for v0.1 and will grow with richer per-column strategy overrides.
-
-### The `db` Client
 
 The property function receives a `SqlProofClient`:
 
@@ -211,13 +204,9 @@ typed = db.query_typed("SELECT id, total FROM orders", OrderRow)
 data = db.get_generated_data()
 ```
 
-- `query()` returns a list of dictionaries.
-- `query_typed()` maps rows into `TypedDict`, dataclass, or Pydantic models.
-- `get_generated_data()` returns the dataset for the current run.
+Full reference at [sqlproof.com](https://sqlproof.com).
 
-## Failure Output
-
-When a property fails, SqlProof throws with a formatted counterexample:
+## When a property fails
 
 ```text
 Property failed: order totals match sum of line items
@@ -226,7 +215,8 @@ Row context: {'order_id': 1}
 Dataset shape: {'orders': {'rows': 1}, 'line_items': {'rows': 2}}
 ```
 
-Counterexamples are written under `.sqlproof/failures/` and can be inspected with:
+Counterexamples are written under `.sqlproof/failures/` and can be inspected
+with:
 
 ```bash
 sqlproof report .sqlproof/failures/test_name.json
@@ -234,26 +224,29 @@ sqlproof report .sqlproof/failures/test_name.json --format json
 sqlproof replay .sqlproof/failures/test_name.json
 ```
 
-## How It Works
+## Supported PostgreSQL types
 
-1. **Schema parsing** — Reads your SQL file (or introspects a live DB) to extract tables, columns, types, foreign keys, CHECK/UNIQUE constraints, and enums
+`integer`, `smallint`, `bigint`, `serial`, `bigserial`, `numeric(p,s)`, `real`,
+`double precision`, `boolean`, `text`, `varchar(n)`, `char(n)`, `uuid`,
+`timestamp`, `timestamptz`, `date`, `time`, `json`, `jsonb`, `bytea`,
+`vector(n)` (pgvector), custom `ENUM` types, custom domains (with CHECK
+inheritance), built-in range types, and composite types.
 
-2. **Dependency ordering** — Topologically sorts tables by foreign key references so parent rows are always inserted first
+Schema features parsed and respected: foreign keys, CHECK / UNIQUE / EXCLUSION
+constraints, partial unique indexes, `GENERATED ALWAYS AS` columns, and enums.
 
-3. **Data generation** — Maps PostgreSQL types to Hypothesis strategies and applies constraint-aware generation for CHECK, UNIQUE, NOT NULL, and FK constraints
+## How it works
 
-4. **Isolated execution** — Schema-file proofs run against an in-memory client for fast local feedback. DSN-backed proofs introspect PostgreSQL, insert generated data inside savepoints, run the property, then roll back the run.
-
-5. **Shrinking** — When a property fails, Hypothesis shrinks the dataset to find the simplest counterexample
-
-## Supported PostgreSQL Types
-
-`integer`, `smallint`, `bigint`, `serial`, `bigserial`, `numeric(p,s)`, `real`, `double precision`, `boolean`, `text`, `varchar(n)`, `char(n)`, `uuid`, `timestamp`, `timestamptz`, `date`, `time`, `json`, `jsonb`, `bytea`, and custom `ENUM` types.
+1. **Schema parsing** — reads your SQL file (or introspects a live DB) to extract tables, columns, types, foreign keys, CHECK/UNIQUE/EXCLUSION constraints, partial unique indexes, generated columns, and enums.
+2. **Dependency ordering** — topologically sorts tables by foreign key so parents are inserted first.
+3. **Data generation** — maps PostgreSQL types to Hypothesis strategies and applies constraint-aware generation for CHECK, UNIQUE, NOT NULL, and FK.
+4. **Isolated execution** — schema-file proofs run against an in-memory client for fast local feedback. DSN-backed proofs insert generated data inside savepoints, run the property, then roll back the run.
+5. **Shrinking** — when a property fails, Hypothesis shrinks the dataset to find the simplest counterexample.
 
 ## Development
 
 ```bash
-git clone https://github.com/your-org/sqlproof.git
+git clone https://github.com/alialavia/sqlproof.git
 cd sqlproof
 uv sync --extra dev
 
@@ -272,14 +265,15 @@ SQLPROOF_TEST_DATABASE_URL='postgresql://postgres:postgres@127.0.0.1:5432/postgr
 uv run pytest tests/benchmarks
 ```
 
-The integration tests create a temporary schema named `sqlproof_it_*` and drop it at the end.
+The integration tests create a temporary schema named `sqlproof_it_*` and drop
+it at the end.
 
 ### Why SqlProof tests itself with properties
 
-SqlProof uses Hypothesis internally, and its own tests use properties for schema
-fingerprinting, dependency ordering, FK validity, constraint generation, shrinking,
-parser idempotence, and counterexample replay. This keeps the library honest about
-the same invariants it asks users to write.
+SqlProof uses Hypothesis internally, and its own tests use properties for
+schema fingerprinting, dependency ordering, FK validity, constraint
+generation, shrinking, parser idempotence, and counterexample replay. This
+keeps the library honest about the same invariants it asks users to write.
 
 ## License
 
