@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from pglast import parse_sql as parse_postgres_sql
 
@@ -51,7 +51,8 @@ def _sql_ast_key(sql: str, *, context: str) -> str:
     try:
         # Key on the statement nodes, not RawStmt wrappers, so that
         # stmt_location/stmt_len (which encode formatting) don't affect identity.
-        return repr(tuple(raw.stmt for raw in parse_postgres_sql(sql)))
+        statements: tuple[Any, ...] = tuple(parse_postgres_sql(sql))
+        return repr(tuple(raw.stmt for raw in statements))
     except Exception as exc:
         msg = f"{context}: body does not parse — authoring error: {exc}"
         raise SqlProofMutationError(msg) from exc
@@ -60,9 +61,11 @@ def _sql_ast_key(sql: str, *, context: str) -> str:
 def _strip_linenos(node: object) -> object:
     """Recursively remove 'lineno' keys from a parsed plpgsql JSON structure."""
     if isinstance(node, dict):
-        return {k: _strip_linenos(v) for k, v in node.items() if k != "lineno"}
+        items = cast("dict[str, object]", node)
+        return {key: _strip_linenos(value) for key, value in items.items() if key != "lineno"}
     if isinstance(node, list):
-        return [_strip_linenos(item) for item in node]
+        items_list = cast("list[object]", node)
+        return [_strip_linenos(item) for item in items_list]
     return node
 
 
