@@ -140,7 +140,7 @@ const posthogScript = posthogScriptContent({
           <div class="sp-code-dot" style="background:#28c840"></div>
           <span class="sp-code-filename">test_orders.py</span>
         </div>
-        <div class="sp-code-body"><span class="sp-kw">from</span> sqlproof <span class="sp-kw">import</span> SqlProof, sqlproof
+        <pre class="sp-code-body"><span class="sp-kw">from</span> sqlproof <span class="sp-kw">import</span> SqlProof, sqlproof
 
 proof = SqlProof.<span class="sp-fn">from_schema_file</span>(<span class="sp-str">'./schema.sql'</span>)
 
@@ -150,7 +150,7 @@ proof = SqlProof.<span class="sp-fn">from_schema_file</span>(<span class="sp-str
     <span class="sp-kw">assert</span> all(row[<span class="sp-str">'total'</span>] >= <span class="sp-num">0</span> <span class="sp-kw">for</span> row <span class="sp-kw">in</span> rows)
 
 <span class="sp-cm"># On failure, SqlProof writes a minimal counterexample JSON.</span>
-<span class="sp-cm"># Reproduce with: pytest ... --sqlproof-seed=1708891234</span></div>
+<span class="sp-cm"># Reproduce with: pytest ... --sqlproof-seed=1708891234</span></pre>
       </div>
     </div>
 
