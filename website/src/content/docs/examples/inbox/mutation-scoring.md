@@ -1,0 +1,163 @@
+---
+title: Scoring the suite with mutation testing
+description: Re-introduce each recipe's bug as a mutant and prove the property suite kills it — the objective check on test strength.
+---
+
+## Problem
+
+The other ten recipes each pair a bug with a property that catches it.
+After applying all the fix migrations, the suite is green — but green
+only proves the properties pass, not that they still *constrain*
+anything. If someone later weakens a property (or an agent rewrites a
+test and quietly breaks its oracle), the suite stays green while the
+protection evaporates.
+
+Mutation testing checks this mechanically: re-introduce each recipe's
+bug into the fixed schema as a **mutant**, run that recipe's tests
+against it on a throwaway clone database, and require that they fail. A
+mutant the suite doesn't kill is a behavior the suite doesn't constrain.
+
+This recipe is a *meta*-recipe: it doesn't test the schema, it tests the
+other recipes' tests.
+
+## The mutants are the recipes' bugs
+
+Because every recipe documents its bug as a diff against the fix, the
+mutants write themselves:
+
+| Mutant | Re-introduces | Killed by |
+|--------|---------------|-----------|
+| `agent_workload_summary_v2`: `Replace("LEFT JOIN", "JOIN")` | Recipe 7, verbatim | the v1 ≡ v2 equivalence property |
+| `reopen_ticket`: `Replace("resolved_at = NULL", "resolved_at = resolved_at")` | Recipe 8 | the stateful lifecycle invariant |
+| `is_admin_in_org`: `Drop(" AND role = 'admin'")` | Recipe 10 (any member passes the admin gate) | the DELETE-policy properties |
+| `find_similar_tickets`: org filter → `TRUE` | Recipe 1 (cross-tenant leak) | the tenant-isolation property |
+| `organization_dashboard`: `Replace("LEFT JOIN", "JOIN")` | Recipe 4's symptom | the every-status-bucket property |
+| `organization_dashboard`: `count(t.id)` → `count(*)` | a new bug: empty buckets report 1 | the counts-sum property |
+
+One mutant per question: does the boundary hold, does the empty group
+hold, does the tenant filter gate, does the admin check gate.
+
+Source:
+[examples/inbox/tests/mutation/test_mutation_inbox.py](https://github.com/alialavia/sqlproof/blob/main/examples/inbox/tests/mutation/test_mutation_inbox.py).
+
+```python
+@pytest.mark.mutation
+def test_workload_summary_property_kills_join_mutant() -> None:
+    mutations = MutationSet.for_function(
+        "agent_workload_summary_v2",
+        [Replace("LEFT JOIN", "JOIN")],
+    )
+    result = run_mutation_tests(
+        mutations,
+        schema_file=SCHEMA / "009_fix_workload_summary_v2_nulls.sql",
+        database_url=os.environ["SQLPROOF_TEMPLATE_URL"],
+        pytest_args=[str(TESTS / "test_workload_summary.py"), "-q"],
+        env_var="SQLPROOF_DATABASE_URL",
+    )
+    result.assert_no_survivors()
+```
+
+Each mutant gets a fresh database cloned from a template, the mutated
+`CREATE OR REPLACE FUNCTION`, one pytest run, and a drop. The template
+is never touched.
+
+## Run it
+
+The harness needs a server where it can create and drop databases and
+where the template has zero open connections — use a dedicated test
+container (CI service or local Docker), not `supabase start`, whose
+services hold connections. The baseline matters too: **all fixes
+applied, suite green** — against the buggy schema every mutant would
+look "killed" by tests that fail anyway.
+
+```bash
+# Supabase-shaped Postgres test container (same image as CI)
+docker run -d --name sqlproof-pg -e POSTGRES_PASSWORD=postgres \
+  -p 54399:5432 supabase/postgres:15.8.1.040
+until docker exec sqlproof-pg pg_isready -U postgres >/dev/null 2>&1; do sleep 2; done
+docker exec -i sqlproof-pg psql -v ON_ERROR_STOP=1 -U postgres -d postgres \
+  < .github/actions/setup-supabase-test-db/sql/supabase-test-init.sql
+
+# Template: clone the auth-bearing postgres DB
+docker exec -e PGPASSWORD=postgres sqlproof-pg psql -U supabase_admin -d template1 \
+  -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity
+      WHERE datname='postgres' AND pid <> pg_backend_pid()" \
+  -c 'CREATE DATABASE inbox_proof_template TEMPLATE postgres' \
+  -c 'ALTER DATABASE inbox_proof_template OWNER TO postgres'
+
+for f in examples/inbox/schema/*.sql; do
+  docker exec -i sqlproof-pg psql -v ON_ERROR_STOP=1 -U postgres \
+    -d inbox_proof_template < "$f"
+done
+
+export SQLPROOF_TEMPLATE_URL='postgresql://postgres:postgres@127.0.0.1:54399/inbox_proof_template'
+uv run pytest examples/inbox/tests/mutation -m mutation -v   # repo venv — needs psycopg + sqlproof
+```
+
+Three things this sequence handles: the test-init SQL makes a bare
+`supabase/postgres` image match managed Supabase semantics
+(JSON-aware `auth.uid()`, `plpgsql_check`); `TEMPLATE postgres` clones
+the auth schema into the template; and the terminate-and-clone runs as
+`supabase_admin` in one session because the image's `pg_cron`/`pg_net`
+background workers hold sessions on `postgres` that the non-superuser
+`postgres` role cannot terminate.
+
+## What a survivor looks like
+
+Delete the `assert v1 == v2` line from the workload-summary property and
+rerun. The suite still passes — and the mutation gate now fails:
+
+```
+SqlProofMutationError: 1 survivor(s), 0 error(s):
+  [survived] agent_workload_summary_v2: replace 'LEFT JOIN' -> 'JOIN'
+  (exit=0, seed=2483915027)
+```
+
+That's the signal nothing else gives you: the test *exists*, it *runs*,
+it *passes* — and it no longer protects anything. The recorded seed
+replays the exact run.
+
+## Declaring an equivalent mutant
+
+The `is_admin_in_org` set includes a mutant that can never be killed —
+`SELECT 1` → `SELECT 2` inside an `EXISTS`, which Postgres treats
+identically:
+
+```python
+Replace(
+    "SELECT 1", "SELECT 2",
+    expect_survives=True,
+    reason="EXISTS ignores the SELECT list; semantically identical",
+)
+```
+
+Declaring it keeps the gate honest (`assert_no_survivors()` passes) and
+puts the triage verdict in the diff where review can see it. If a
+declared survivor ever starts getting *killed*, the outcome flips to
+`unexpected_kill` — your tests improved; delete the stale declaration.
+
+## Why the RLS recipes aren't here
+
+Recipes 2, 5, and 9 are bugs in **policies**, and v1 of the harness
+mutates function bodies only (`for_policy` is planned). Recipe 10 makes
+the cut because its fix routes the policy through the
+`is_admin_in_org()` helper function — which is exactly the pattern to
+reach for: putting policy predicates in `SECURITY DEFINER` helpers makes
+them testable, reusable, *and* mutatable.
+
+## Notes
+
+- `Replace`/`Drop` patterns match the function body **verbatim** as
+  written in the schema file, and must match exactly once. Absent or
+  ambiguous patterns fail at prepare time, before any database is
+  cloned — a mutant that didn't apply must never count as killed.
+- Each meta-test passes the *fix migration* as `schema_file`, not a
+  concatenation: several functions are defined in both `001_initial.sql`
+  and a fix, and duplicate definitions are rejected as ambiguous. The
+  clone's actual schema comes from the template database.
+- The mutation meta-tests are gated behind `-m mutation` and skip when
+  `SQLPROOF_TEMPLATE_URL` is unset, so plain `pytest examples/inbox/tests`
+  behaves as before.
+
+Workflow guide: [mutation testing](/guides/mutation-testing/) · API:
+[mutation testing reference](/api/mutation-testing/)
