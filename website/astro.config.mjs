@@ -1,5 +1,6 @@
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
+import starlightThemeNova from 'starlight-theme-nova';
 
 import { posthogHeadEntries } from './src/posthog.mjs';
 
@@ -22,9 +23,10 @@ export default defineConfig({
   integrations: [
     starlight({
       title: 'SqlProof',
-      social: {
-        github: 'https://github.com/alialavia/sqlproof',
-      },
+      plugins: [starlightThemeNova()],
+      social: [
+        { icon: 'github', label: 'GitHub', href: 'https://github.com/alialavia/sqlproof' },
+      ],
       customCss: ['./src/styles/custom.css'],
       head: posthogHead,
       sidebar: [

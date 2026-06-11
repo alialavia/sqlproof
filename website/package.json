@@ -8,9 +8,10 @@
     "preview": "astro preview"
   },
   "dependencies": {
-    "@astrojs/starlight": "^0.30.0",
-    "astro": "^5.0.0",
+    "@astrojs/starlight": "^0.40.0",
+    "astro": "^6.4.5",
     "sharp": "^0.33.0",
+    "starlight-theme-nova": "^0.11.11",
     "zod": "^3.25.76"
   }
 }
