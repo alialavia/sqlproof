@@ -18,7 +18,7 @@
       {
         "tab": "Guides",
         "groups": [
-          { "group": "Get Started", "pages": ["index"] }
+          { "group": "Get Started", "pages": ["index", "supabase-quickstart", "getting-started"] }
         ]
       }
     ]
