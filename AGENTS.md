@@ -518,6 +518,78 @@ def test_membership_visibility_invariant(supabase_proof: SqlProof) -> None:
 - **Run with `supabase_proof.run_state_machine(MachineClass)`**, not `run_state_machine_as_test` directly.
 - **State machines are slower than property tests.** Use them only when the bug requires a sequence.
 
+## Pattern 4: Mutation testing (scoring the tests you wrote)
+
+**When to write:** after writing property tests for a SQL function, when
+the user asks "would these tests actually catch a bug?" — or when *you*
+should ask it, because you wrote the tests and you share your own blind
+spots. A mutant either gets killed or it doesn't; it's the objective
+check on agent-written tests that self-review cannot provide.
+
+**Template** (marker-gated; never in the default test run):
+
+```python
+import os
+import pytest
+
+from sqlproof import MutationSet, Replace, Drop, run_mutation_tests
+
+
+@pytest.mark.mutation
+def test_billing_suite_kills_all_mutants():
+    mutations = MutationSet.for_function("get_user_usage_total", [
+        Replace("used_at >= p_period_start", "used_at > p_period_start"),  # boundary
+        Replace("COALESCE(SUM(usage), 0)", "COALESCE(SUM(usage), 1)"),     # empty group
+        Drop("AND feature = p_feature"),                                   # filter gates?
+    ])
+    result = run_mutation_tests(
+        mutations,
+        schema_file="supabase/schemas/schema.sql",
+        database_url=os.environ["SQLPROOF_TEMPLATE_URL"],  # dedicated template DB
+        pytest_args=["tests/test_billing.py", "-q"],
+        env_var="SQLPROOF_DATABASE_URL",
+    )
+    result.assert_no_survivors()
+```
+
+Each mutant runs the suite on a fresh clone of the template database
+(`CREATE DATABASE ... TEMPLATE`), then the clone is dropped. The
+template is never modified.
+
+**Important rules:**
+- **The template DB is not the dev DB.** `CREATE DATABASE ... TEMPLATE`
+  requires zero connections on the template, and `supabase start` holds
+  connections to its `postgres` DB. Create a separate database on the
+  same server, apply the schema, disconnect.
+- **The baseline suite must be green** against the unmutated schema —
+  otherwise every mutant looks killed and the run is meaningless.
+- **Pass `env_var="SQLPROOF_DATABASE_URL"`** when the inner suite uses
+  sqlproof fixtures; that's the variable the pytest plugin reads. The
+  default (`SQLPROOF_TEST_DATABASE_URL`) is only for suites that read
+  the DSN themselves.
+- **Mark with `@pytest.mark.mutation` and deselect by default**
+  (`addopts = "-ra -m 'not mutation'"`, register the marker). Mutation
+  runs multiply suite time by mutant count; they're nightly/on-demand.
+- **Author few, sharp mutants.** Each encodes a question: `>=`→`>` (the
+  boundary), `COALESCE(x, 0)`→`, 1` (the empty group), `AND`→`OR` (do
+  both conditions gate?), `LEFT JOIN`→`JOIN` (zero children), dropping a
+  `WHERE user_id = ...` (cross-user isolation). Five sharp mutants beat
+  fifty operator permutations.
+- **A survivor is a work item, not a failure to hide:** write a test
+  that kills it, rerun. If it's a true equivalent mutant or an accepted
+  gap, declare `expect_survives=True, reason="..."` on the op so the
+  acceptance is visible in the diff. Never delete a surviving mutant to
+  make the gate pass.
+- **Functions only in v1** — there is no `for_policy` yet. To score RLS
+  tests, mutate the helper functions policies call
+  (`is_admin_in_org`-style predicates), not the policies.
+- **Errors fail the gate too.** `assert_no_survivors()` raises on
+  `error` outcomes (pytest exit ≥ 2, timeout) because an errored run
+  proves nothing. Don't swallow them.
+
+Full reference: <https://sqlproof.com/api/mutation-testing/> and the
+workflow guide at <https://sqlproof.com/guides/mutation-testing/>.
+
 ---
 
 ## Anti-patterns: things agents commonly get wrong
@@ -699,7 +771,9 @@ project_root/
 │   ├── test_rls_<table>.py            # one file per table with RLS policies
 │   ├── test_rpc_<function_name>.py    # one file per public function
 │   ├── test_trigger_<trigger_name>.py # one file per trigger
-│   └── test_migration_<n>_<desc>.py   # migration safety tests
+│   ├── test_migration_<n>_<desc>.py   # migration safety tests
+│   └── mutation/
+│       └── test_mutation_<area>.py    # marker-gated mutation runs (Pattern 4)
 └── supabase/
     ├── migrations/...
     ├── schemas/...

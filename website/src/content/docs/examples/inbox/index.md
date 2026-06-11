@@ -29,7 +29,7 @@ pip install sqlproof psycopg
 supabase start
 export SUPABASE_DB_URL='postgresql://postgres:postgres@127.0.0.1:54322/postgres'
 psql "$SUPABASE_DB_URL" -f examples/inbox/schema/001_initial.sql
-pytest examples/inbox/tests -v    # 9 failures + 1 skipped
+pytest examples/inbox/tests -v    # 9 failures + 2 skipped
 ```
 
 Apply any fix migration to watch one recipe go green:
@@ -53,6 +53,11 @@ pytest examples/inbox/tests/test_tickets_rls.py -v
 | [Stateful ticket lifecycle](stateful-ticket-lifecycle) | Stateful (sequence-dependent) | `reopen_ticket` doesn't clear `resolved_at` |
 | [Mass assignment without WITH CHECK](mass-assignment-without-with-check) | RLS regression (write side) | UPDATE policy lets members change any column of their own row |
 | [Overly permissive DELETE policy](missing-delete-policy) | RLS regression (write side) | DELETE policy with `USING (true)` lets viewers eject admins |
+
+And one meta-recipe that runs after all the fixes are applied:
+[Scoring the suite with mutation testing](mutation-scoring) re-introduces
+each recipe's bug as a mutant and proves the property suite kills it —
+the objective check that the tests above still constrain anything.
 
 For smaller RLS bug classes that don't justify a full case study (over-permissive `USING (true)`, UPDATE-without-SELECT silent fail, `security_invoker` view bypass, `user_metadata` trust, infinite policy recursion, plus schema-level audits like "RLS enabled on every public table"), see the [Supabase RLS bug classes](/guides/supabase-rls-bug-classes/) reference page.
 

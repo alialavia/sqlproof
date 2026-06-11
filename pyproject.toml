@@ -84,6 +84,9 @@ packages = ["src/sqlproof"]
 addopts = "-ra"
 pythonpath = ["src"]
 testpaths = ["tests"]
+markers = [
+  "mutation: meta-tests that score a suite via mutation runs; select with -m mutation",
+]
 
 [tool.ruff]
 line-length = 100

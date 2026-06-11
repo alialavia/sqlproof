@@ -52,6 +52,7 @@ export default defineConfig({
                 { label: '8. Stateful ticket lifecycle', slug: 'examples/inbox/stateful-ticket-lifecycle' },
                 { label: '9. Mass assignment without WITH CHECK', slug: 'examples/inbox/mass-assignment-without-with-check' },
                 { label: '10. Missing DELETE policy', slug: 'examples/inbox/missing-delete-policy' },
+                { label: '11. Scoring the suite (mutation)', slug: 'examples/inbox/mutation-scoring' },
               ],
             },
           ],
@@ -69,6 +70,7 @@ export default defineConfig({
             { label: 'SqlProof Class', slug: 'api/sqlproof-class' },
             { label: 'CheckOptions', slug: 'api/check-options' },
             { label: 'TableCustomization', slug: 'api/table-customization' },
+            { label: 'Mutation Testing', slug: 'api/mutation-testing' },
           ],
         },
         {
@@ -76,6 +78,7 @@ export default defineConfig({
           items: [
             { label: 'FK Distribution Strategies', slug: 'guides/fk-distributions' },
             { label: 'Custom Generators', slug: 'guides/custom-generators' },
+            { label: 'Mutation Testing', slug: 'guides/mutation-testing' },
             { label: 'CI/CD Integration', slug: 'guides/ci-cd' },
             { label: 'Local Development', slug: 'guides/local-dev' },
             { label: 'Security & Credentials', slug: 'guides/security' },
