@@ -18,7 +18,9 @@
       {
         "tab": "Guides",
         "groups": [
-          { "group": "Get Started", "pages": ["index", "supabase-quickstart", "getting-started"] }
+          { "group": "Get Started", "pages": ["index", "supabase-quickstart", "getting-started"] },
+          { "group": "Supabase", "pages": ["guides/supabase", "guides/supabase-rls-bug-classes"] },
+          { "group": "Power-User Guides", "pages": ["guides/fk-distributions", "guides/custom-generators", "guides/mutation-testing", "guides/ci-cd", "guides/local-dev", "guides/security", "guides/vs-pgtap"] }
         ]
       }
     ]

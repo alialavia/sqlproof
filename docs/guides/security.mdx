@@ -28,7 +28,7 @@ from sqlproof import SqlProof
 proof = SqlProof.from_connection_string(os.environ["DATABASE_URL"])
 ```
 
-Keep `.env` files out of git.
+<Warning>Keep `.env` files out of git.</Warning>
 
 ## Minimal Database Role
 
@@ -40,4 +40,4 @@ GRANT CONNECT ON DATABASE testdb TO sqlproof_test;
 GRANT CREATE ON DATABASE testdb TO sqlproof_test;
 ```
 
-Do not grant `SUPERUSER` or point SqlProof at production credentials.
+<Warning>Do not grant `SUPERUSER` or point SqlProof at production credentials.</Warning>

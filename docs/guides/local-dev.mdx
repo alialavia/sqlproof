@@ -20,7 +20,7 @@ testcontainers extra:
 pip install "sqlproof[testcontainers]"
 ```
 
-Docker must be running when using testcontainers.
+<Note>Docker must be running when using testcontainers.</Note>
 
 ## Local Postgres
 
@@ -37,8 +37,9 @@ from sqlproof import SqlProof
 proof = SqlProof.from_connection_string(os.environ["DATABASE_URL"])
 ```
 
-Use a dedicated development or CI database. Never run generated-data tests against
-production.
+Use a dedicated development or CI database.
+
+<Warning>Never run generated-data tests against production.</Warning>
 
 ## Pytest
 

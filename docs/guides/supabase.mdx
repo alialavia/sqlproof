@@ -14,12 +14,9 @@ Supabase/PostgREST conventions, not Postgres features.
 You have two paths depending on whether your test environment can reach
 Supabase's admin API:
 
-### Direct SQL insert (preferred locally)
+<CodeGroup>
 
-When you're running against a local Supabase or any DB connection that has
-write access to `auth.users`:
-
-```python
+```python Direct SQL insert (preferred locally)
 from sqlproof.contrib.supabase import seed_test_users_directly
 
 user_ids = seed_test_users_directly(db, count=5)
@@ -28,15 +25,13 @@ user_ids = seed_test_users_directly(db, count=5)
 # Idempotent: re-running won't duplicate.
 ```
 
-### Admin API (preferred in CI when service-role key is available)
-
-When you have `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` set:
-
-```python
+```python Admin API (preferred in CI)
 from sqlproof.contrib.supabase import seed_supabase_test_users
 
 seed_supabase_test_users(db=object(), count=5)  # `db` arg unused for admin API
 ```
+
+</CodeGroup>
 
 Both helpers use the same email pattern, so a test that samples from
 `auth.users WHERE email LIKE 'sqlproof_%@test.invalid'` works regardless of
@@ -116,7 +111,7 @@ Order: `{"sub": user_id, "role": role, **extra_claims}`. Pass `role` in
 
 The combo earns its keep on RLS regression tests, where bugs surface
 across membership churn rather than a single permission check. See the
-[stateful testing guide](/api/state-machine/) for an end-to-end example
+[stateful testing guide](/api/state-machine) for an end-to-end example
 covering `get_member_project_ids` / `get_editor_project_ids` against
 `project_members` mutations.
 

@@ -20,7 +20,7 @@ shares the writer's blind spots, but a mutant either gets killed or it
 doesn't. It's the objective check on test quality that review cannot
 provide.
 
-API details live in the [mutation testing reference](/api/mutation-testing/).
+API details live in the [mutation testing reference](/api/mutation-testing).
 
 ## The execution model
 
@@ -47,9 +47,9 @@ Two consequences worth internalizing:
 
 ## Setup: a dedicated template database
 
-Don't use your live dev database as the template — Supabase local dev
-(`supabase start`) keeps connections open to it, and you want a schema
-state you control. Create a template on the same server:
+<Warning>Don't use your live dev database as the template — Supabase local dev (`supabase start`) keeps connections open to it, and you want a schema state you control.</Warning>
+
+Create a template on the same server:
 
 ```bash
 psql "$SUPABASE_DB_URL" -c 'CREATE DATABASE proof_template'

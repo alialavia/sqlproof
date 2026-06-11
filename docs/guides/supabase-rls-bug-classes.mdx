@@ -3,9 +3,9 @@ title: Supabase RLS bug classes — reference
 description: A compact catalog of common Supabase RLS bug shapes and the SqlProof properties that catch each one.
 ---
 
-This page catalogs the RLS bug classes that don't get full case studies in the [Inbox sample](/examples/inbox/). One paragraph per bug, one short SqlProof property snippet, plus an audit-style snippet for the schema-level ones.
+This page catalogs the RLS bug classes that don't get full case studies in the [Inbox sample](/examples/inbox). One paragraph per bug, one short SqlProof property snippet, plus an audit-style snippet for the schema-level ones.
 
-For the fuller, recipe-style treatment of the most-impactful RLS bugs (tenant scoping in `SECURITY DEFINER` RPCs, uncorrelated `EXISTS`, missing `WITH CHECK`, missing DELETE policies, internal-vs-public message gating), see the [Inbox sample recipes](/examples/inbox/).
+For the fuller, recipe-style treatment of the most-impactful RLS bugs (tenant scoping in `SECURITY DEFINER` RPCs, uncorrelated `EXISTS`, missing `WITH CHECK`, missing DELETE policies, internal-vs-public message gating), see the [Inbox sample recipes](/examples/inbox).
 
 ## Over-permissive policy (`USING (true)`)
 
@@ -73,7 +73,9 @@ The Inbox sample's Recipe 2 includes a comment about this pattern — the recurs
 
 These are introspection queries, not invariants — run them once per CI build to enforce shop-wide RLS hygiene.
 
-### Every public table has RLS enabled
+<AccordionGroup>
+
+<Accordion title="Every public table has RLS enabled">
 
 ```python
 def test_every_public_table_has_rls(db):
@@ -85,7 +87,9 @@ def test_every_public_table_has_rls(db):
     assert rows == [], f"tables without RLS: {[r['relname'] for r in rows]}"
 ```
 
-### Every policy specifies a `TO` clause
+</Accordion>
+
+<Accordion title="Every policy specifies a TO clause">
 
 ```python
 def test_every_policy_targets_a_role(db):
@@ -97,7 +101,9 @@ def test_every_policy_targets_a_role(db):
     assert rows == []
 ```
 
-### Every `SECURITY DEFINER` function pins `search_path`
+</Accordion>
+
+<Accordion title="Every SECURITY DEFINER function pins search_path">
 
 ```python
 def test_security_definer_functions_lock_search_path(db):
@@ -111,6 +117,10 @@ def test_security_definer_functions_lock_search_path(db):
     """)
     assert rows == []
 ```
+
+</Accordion>
+
+</AccordionGroup>
 
 When SqlProof ships [issue #77](https://github.com/alialavia/sqlproof/issues/77) (planned `sqlproof.contrib.supabase.audit` module), these snippets will become one-liners like `assert_rls_enabled(db, "tickets")` and `tables_without_rls(db) == set()`.
 
