@@ -383,22 +383,17 @@ If you have an existing pgTAP suite for `compute_order_total` and want
 to add SqlProof, you don't have to throw the pgTAP tests away. Three
 practical patterns we've seen work:
 
-<Steps>
-  <Step title="Keep pgTAP for the boundary cases">
-    Fixed-value assertions that document specific behavior decisions ("yes, we round half-to-
-    even on JPY", "yes, unknown promos are silently ignored"). pgTAP
-    is excellent prose-form for "this is the exact answer for this
-    exact input."
-  </Step>
-  <Step title="Add SqlProof for the invariants">
-    Monotonicity, idempotency, bounded-output, equivalence. Shorter to write, catches more.
-  </Step>
-  <Step title="Use SqlProof to generate the next pgTAP fixture">
-    When SqlProof's shrinker reports a counterexample, port it into a pgTAP
-    `is(...)` line so the regression has a permanent example test next
-    to its property test.
-  </Step>
-</Steps>
+1. **Keep pgTAP for the boundary cases** — fixed-value assertions
+   that document specific behavior decisions ("yes, we round half-to-
+   even on JPY", "yes, unknown promos are silently ignored"). pgTAP
+   is excellent prose-form for "this is the exact answer for this
+   exact input."
+2. **Add SqlProof for the invariants** — monotonicity, idempotency,
+   bounded-output, equivalence. Shorter to write, catches more.
+3. **Use SqlProof to *generate the next pgTAP fixture*.** When
+   SqlProof's shrinker reports a counterexample, port it into a pgTAP
+   `is(...)` line so the regression has a permanent example test next
+   to its property test.
 
 Both suites coexist easily in the same project. The ripenn example
 in this repo demonstrates the pattern (`supabase/tests/*.test.sql`
