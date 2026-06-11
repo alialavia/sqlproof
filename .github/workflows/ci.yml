@@ -58,16 +58,13 @@ jobs:
           # and add as repo secret CODECOV_TOKEN.
           token: ${{ secrets.CODECOV_TOKEN }}
 
-  website:
+  docs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
         with:
           node-version: 20
-          cache: npm
-          cache-dependency-path: website/package-lock.json
-      - run: npm ci
-        working-directory: website
-      - run: npm run build
-        working-directory: website
+      - run: npm i -g mint
+      - run: mint broken-links
+        working-directory: docs

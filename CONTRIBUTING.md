@@ -110,7 +110,7 @@ period.
 
 Optional, no enforced allowlist. Common scopes in this repo: `core`,
 `plugin`, `contrib`, `runner`, `generator`, `client`, `schema`, `example`,
-`website`, `deps`.
+`docs`, `deps`.
 
 ### Enforcement
 
@@ -301,7 +301,7 @@ following on `main` in GitHub repo settings:
 - **Require a pull request before merging** (no direct pushes to `main`).
 - **Require status checks to pass before merging:**
   - `python (3.11)`, `python (3.12)`, `python (3.13)`
-  - `website`
+  - `docs`
   - `pr-title` (the PR title linter)
 - **Require branches to be up to date before merging.**
 - **Require linear history.**
