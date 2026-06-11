@@ -1,6 +1,66 @@
 ---
-title: "SqlProof"
-description: "Property-based testing for PostgreSQL"
+title: "Find SQL bugs before your users do"
+description: "Property-based testing for PostgreSQL. Generates random valid datasets that respect your schema — then tries to break your queries."
+mode: "custom"
 ---
 
-Placeholder — replaced in the homepage task.
+# Find SQL bugs before your users do
+
+Property-based testing for PostgreSQL. SqlProof generates random valid
+datasets that respect your schema — then tries to break your queries.
+
+```bash
+pip install sqlproof
+```
+
+Your queries work on your fixtures. Do they work on real data? Hand-crafted
+test data misses edge cases. SqlProof generates thousands of valid random
+datasets and finds the minimal counterexample that breaks your invariants.
+
+<CardGroup cols={2}>
+  <Card title="Test your Supabase project in 60s" icon="bolt" href="/supabase-quickstart">
+    Install, point at your DB, ask your AI agent to write the tests.
+  </Card>
+  <Card title="Getting Started" icon="rocket" href="/getting-started">
+    General setup for any PostgreSQL project.
+  </Card>
+  <Card title="Examples" icon="flask" href="/examples/property-patterns">
+    Five property patterns, walkthroughs, and a full Supabase sample app.
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/sqlproof-class">
+    SqlProof class, CheckOptions, customization, mutation testing.
+  </Card>
+</CardGroup>
+
+## Why SqlProof
+
+<CardGroup cols={2}>
+  <Card title="Schema-aware generation">
+    Respects foreign keys, CHECK constraints, UNIQUE, NOT NULL, and enum types automatically. No invalid data, no constraint violations.
+  </Card>
+  <Card title="Minimal counterexamples">
+    When a property fails, Hypothesis shrinks the dataset to the smallest possible example — so you fix the bug, not hunt for it.
+  </Card>
+  <Card title="Zero infrastructure">
+    Spins up a disposable Postgres via testcontainers. No external DB needed. Each run gets its own isolated schema — fast and clean.
+  </Card>
+  <Card title="Works with your test runner">
+    Drop it into pytest. Decorate a test with `@sqlproof(...)` or call `proof.check()` directly. No new runner to learn.
+  </Card>
+</CardGroup>
+
+## See it in action
+
+```python test_orders.py
+from sqlproof import SqlProof, sqlproof
+
+proof = SqlProof.from_schema_file('./schema.sql')
+
+@sqlproof(proof, sizes={ 'customers': 10, 'orders': 50 }, runs=50)
+def test_order_totals_non_negative(db):
+    rows = db.query('SELECT total FROM orders')
+    assert all(row['total'] >= 0 for row in rows)
+
+# On failure, SqlProof writes a minimal counterexample JSON.
+# Reproduce with: pytest ... --sqlproof-seed=1708891234
+```
