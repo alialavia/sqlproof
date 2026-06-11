@@ -1,0 +1,26 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "SqlProof",
+  "colors": {
+    "primary": "#16a34a",
+    "light": "#22c55e",
+    "dark": "#15803d"
+  },
+  "favicon": "/favicon.svg",
+  "navbar": {
+    "links": [
+      { "label": "GitHub", "icon": "github", "href": "https://github.com/alialavia/sqlproof" }
+    ]
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Guides",
+        "groups": [
+          { "group": "Get Started", "pages": ["index"] }
+        ]
+      }
+    ]
+  }
+}
