@@ -24,6 +24,13 @@
         ]
       },
       {
+        "tab": "Examples",
+        "groups": [
+          { "group": "Test Patterns", "pages": ["examples/property-patterns", "examples/testing-sql-functions", "examples/data-generation"] },
+          { "group": "Walkthroughs", "pages": ["examples/orders"] }
+        ]
+      },
+      {
         "tab": "API Reference",
         "groups": [
           { "group": "API Reference", "pages": ["api/sqlproof-class", "api/check-options", "api/table-customization", "api/state-machine", "api/mutation-testing"] }
