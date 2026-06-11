@@ -22,6 +22,12 @@
           { "group": "Supabase", "pages": ["guides/supabase", "guides/supabase-rls-bug-classes"] },
           { "group": "Power-User Guides", "pages": ["guides/fk-distributions", "guides/custom-generators", "guides/mutation-testing", "guides/ci-cd", "guides/local-dev", "guides/security", "guides/vs-pgtap"] }
         ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          { "group": "API Reference", "pages": ["api/sqlproof-class", "api/check-options", "api/table-customization", "api/state-machine", "api/mutation-testing"] }
+        ]
       }
     ]
   }

@@ -88,8 +88,9 @@ Subclass and define rules and invariants. Important attributes:
   non-empty dict, every example starts with that data already inserted.
 
 Override `on_setup(self) -> None` to seed example-specific fixtures (auth
-users, projects, JWT claims). Don't override `__init__` or `teardown` —
-SqlProof manages those.
+users, projects, JWT claims).
+
+<Warning>Don't override `__init__` or `teardown` — SqlProof manages those.</Warning>
 
 #### `self.enter(cm)`
 
@@ -123,9 +124,9 @@ def test_x(proof):
     )
 ```
 
-Direct instantiation (`MembershipMachine()`) without `run_state_machine`
+<Note>Direct instantiation (`MembershipMachine()`) without `run_state_machine`
 raises `SqlProofUsageError` — this is intentional, so the failure mode is
-self-explanatory.
+self-explanatory.</Note>
 
 ## When to reach for a state machine
 
@@ -147,7 +148,7 @@ example would catch the bug.
 
 ## See also
 
-- [SqlProof class API](/api/sqlproof-class/) — `client_for_dataset`,
+- [SqlProof class API](/api/sqlproof-class) — `client_for_dataset`,
   `dataset_strategy`, and the rest of the proof surface.
-- [Supabase contrib](/guides/supabase/) — `as_supabase_user` for RLS
+- [Supabase contrib](/guides/supabase) — `as_supabase_user` for RLS
   testing in tandem with state machines.

@@ -29,7 +29,7 @@ proof = SqlProof.from_config(
 )
 ```
 
-Exactly one of `schema_file` or `connection_string` must be provided.
+<Note>Exactly one of `schema_file` or `connection_string` must be provided.</Note>
 
 ## Decorator Usage
 
@@ -103,7 +103,7 @@ proof = SqlProof.from_connection_string(
 )
 ```
 
-See the [Supabase guide](/guides/supabase/) for a full walkthrough.
+See the [Supabase guide](/guides/supabase) for a full walkthrough.
 
 ## Stateful tests
 
@@ -126,7 +126,7 @@ def test_x(proof: SqlProof):
     proof.run_state_machine(MyMachine)
 ```
 
-See the [stateful testing API](/api/state-machine/) for details.
+See the [stateful testing API](/api/state-machine) for details.
 
 ## Cleanup
 

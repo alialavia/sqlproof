@@ -9,7 +9,7 @@ database, and reports every mutant the suite failed to kill. A surviving
 mutant is a behavior your tests do not constrain.
 
 For the workflow — why, when, and how to wire it into CI — see the
-[mutation testing guide](/guides/mutation-testing/). This page is the API
+[mutation testing guide](/guides/mutation-testing). This page is the API
 reference.
 
 ```python
@@ -35,13 +35,15 @@ result.assert_no_survivors()
 ### `Replace(old, new)`
 
 Replace exactly one occurrence of `old` with `new` in the target
-function's body. Application fails loudly if `old` is absent or appears
-more than once — a mutant that didn't apply must never count as killed.
+function's body.
+
+<Note>Application fails loudly if `old` is absent or appears more than once — a mutant that didn't apply must never count as killed.</Note>
 
 ### `Drop(pattern)`
 
-Delete exactly one occurrence of `pattern` from the body. Same
-absent/ambiguous rules as `Replace`.
+Delete exactly one occurrence of `pattern` from the body.
+
+<Note>Same absent/ambiguous rules as `Replace`.</Note>
 
 ### `MutationSet.for_function(name, ops)`
 
@@ -69,10 +71,10 @@ Replace(
 )
 ```
 
-`expect_survives=True` requires a `reason=`; a `reason=` without
+<Note>`expect_survives=True` requires a `reason=`; a `reason=` without
 `expect_survives=True` is rejected. If a declared survivor is later
 *killed*, the outcome is `unexpected_kill` — good news (your tests now
-cover it); delete the stale declaration.
+cover it); delete the stale declaration.</Note>
 
 ### Validation happens before any database work
 
@@ -130,8 +132,9 @@ def run_mutation_tests(
 
 For each mutant, the runner clones the template, applies the mutated
 `CREATE OR REPLACE FUNCTION` DDL, runs pytest with `env_var` pointing at
-the clone, and drops the clone (`WITH (FORCE)`). There is no restore
-path by design — the template is never touched.
+the clone, and drops the clone (`WITH (FORCE)`).
+
+<Note>There is no restore path by design — the template is never touched.</Note>
 
 ## `MutationResult`
 
@@ -176,6 +179,7 @@ tuples, and `result.to_dict()` serializes the full report.
 
 ## Current limitations
 
+<Warning>
 - **Function bodies only.** `MutationSet.for_policy(...)` for RLS
   policies is planned but not in v1 — mutate the helper *functions* your
   policies call (`is_admin_in_org`-style predicates) in the meantime.
@@ -185,3 +189,4 @@ tuples, and `result.to_dict()` serializes the full report.
 - Interrupted runs can leave `sqlproof_mutant_*` databases behind.
   Rerunning the same set self-heals; orphans from *edited* mutants need
   a manual `DROP DATABASE IF EXISTS sqlproof_mutant_<id>`.
+</Warning>
