@@ -53,7 +53,9 @@ def test_viewer_cannot_self_promote_to_admin(supabase_proof, data):
 
 **The key idea**: assert the *post-state*, not the return value. The UPDATE may raise (with the fix) or quietly apply (without). The only evidence of whether the bug is present is in the row.
 
-Note: `db.savepoint()` is used around the UPDATE so that if the WITH CHECK raises a policy-violation error, the transaction stays open for the post-state read. Without it the aborted transaction would prevent the verification query from running.
+<Note>
+`db.savepoint()` is used around the UPDATE so that if the WITH CHECK raises a policy-violation error, the transaction stays open for the post-state read. Without it the aborted transaction would prevent the verification query from running.
+</Note>
 
 ## The counterexample
 
@@ -77,4 +79,4 @@ WITH CHECK (
 
 This is enum-stable: any future role added to the `member_role` enum is automatically denied without updating this policy. Role *promotions* must go through a `SECURITY DEFINER` admin function instead — that's the standard Supabase pattern.
 
-See also [Missing DELETE policy](missing-delete-policy) — the sibling write-side RLS bug.
+See also [Missing DELETE policy](/examples/inbox/missing-delete-policy) — the sibling write-side RLS bug.

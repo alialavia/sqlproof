@@ -1,0 +1,89 @@
+---
+title: The Inbox sample
+description: A multi-tenant Supabase support inbox with ten recipes covering RLS, pgvector, triggers, aggregation, equivalence-pattern refactors, and stateful tests.
+---
+
+A multi-tenant customer-support inbox: organizations, agents, customers, tickets, messages, KB articles, and pgvector embeddings for similarity search. Every recipe page on this section pairs a buggy implementation with a SqlProof property that catches it — and a fix migration you can apply to watch the property go green.
+
+## Schema
+
+```
+organizations
+  └── org_members ─→ auth.users
+  └── tickets
+        ├── customers
+        ├── messages
+        │   └── message_embeddings  (vector(384))
+        ├── ticket_events
+        └── ticket_tags ─→ tags
+  └── kb_articles
+        └── kb_article_embeddings   (vector(384))
+```
+
+Ten tables. Source: [examples/inbox/schema/001_initial.sql](https://github.com/alialavia/sqlproof/blob/main/examples/inbox/schema/001_initial.sql).
+
+## Run it
+
+```bash
+pip install sqlproof psycopg
+supabase start
+export SUPABASE_DB_URL='postgresql://postgres:postgres@127.0.0.1:54322/postgres'
+psql "$SUPABASE_DB_URL" -f examples/inbox/schema/001_initial.sql
+pytest examples/inbox/tests -v    # 9 failures + 2 skipped
+```
+
+Apply any fix migration to watch one recipe go green:
+
+```bash
+psql "$SUPABASE_DB_URL" -f examples/inbox/schema/003_fix_tickets_rls.sql
+pytest examples/inbox/tests/test_tickets_rls.py -v
+```
+
+## Recipes
+
+<CardGroup cols={2}>
+  <Card title="Vector search leaks across tenants" href="/examples/inbox/tenant-scoped-vector-search">
+    `SECURITY DEFINER` similarity-search RPC missing `org_id` filter
+  </Card>
+  <Card title="Correlated RLS subqueries" href="/examples/inbox/correlated-rls-subqueries">
+    `EXISTS` subquery doesn't correlate to parent row
+  </Card>
+  <Card title="Non-idempotent status trigger" href="/examples/inbox/idempotent-status-triggers">
+    Trigger fires on every edit, not just on transitions
+  </Card>
+  <Card title="LEFT JOIN collapsed by WHERE" href="/examples/inbox/outer-joins-and-where">
+    Dashboard drops zero-bucket status rows
+  </Card>
+  <Card title="Internal messages leak to customers" href="/examples/inbox/internal-message-rls">
+    Policy doesn't gate `is_internal = true` on customer path
+  </Card>
+  <Card title="Pagination breaks on tied scores" href="/examples/inbox/stable-vector-pagination">
+    `ORDER BY score` has no tiebreaker (+ JOIN fanout when articles have multiple embedding chunks)
+  </Card>
+  <Card title="Equivalent query optimization" href="/examples/inbox/equivalent-query-optimization">
+    INNER JOIN drops zero-ticket agents that v1's correlated-subquery shape preserves
+  </Card>
+  <Card title="Stateful ticket lifecycle" href="/examples/inbox/stateful-ticket-lifecycle">
+    `reopen_ticket` doesn't clear `resolved_at`
+  </Card>
+  <Card title="Mass assignment without WITH CHECK" href="/examples/inbox/mass-assignment-without-with-check">
+    UPDATE policy lets members change any column of their own row
+  </Card>
+  <Card title="Overly permissive DELETE policy" href="/examples/inbox/missing-delete-policy">
+    DELETE policy with `USING (true)` lets viewers eject admins
+  </Card>
+  <Card title="Scoring the suite with mutation testing" href="/examples/inbox/mutation-scoring">
+    re-introduces each recipe's bug as a mutant and proves the property suite kills it — the objective check that the tests above still constrain anything.
+  </Card>
+</CardGroup>
+
+For smaller RLS bug classes that don't justify a full case study (over-permissive `USING (true)`, UPDATE-without-SELECT silent fail, `security_invoker` view bypass, `user_metadata` trust, infinite policy recursion, plus schema-level audits like "RLS enabled on every public table"), see the [Supabase RLS bug classes](/guides/supabase-rls-bug-classes) reference page.
+
+## Caveats
+
+<Warning>
+The buggy code in this sample is intentional. **Do not deploy this schema as-is**.
+</Warning>
+
+- Embeddings in tests are random — these recipes test schema-level invariants, not retrieval quality. Plugging in a real embedding model is a separate concern.
+- Recipes 1 and 6 depend on a pgvector parser workaround (`vector_strategy(384)` in `tests/_helpers.py`) until [SqlProof issue #69](https://github.com/alialavia/sqlproof/issues/69) lands.

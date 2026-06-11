@@ -90,4 +90,4 @@ Rule of thumb:
 - **Single update** changes a row from invalid to invalid? → `@given` catches it on the first example.
 - **Sequence** of updates leaves a row in a logically-impossible state? → state machine.
 
-State machines are slower (each example replays N rules), so don't reach for them when a single-shot property would do — see [recipe 3](idempotent-status-triggers) for the single-shot variant.
+State machines are slower (each example replays N rules), so don't reach for them when a single-shot property would do — see [recipe 3](/examples/inbox/idempotent-status-triggers) for the single-shot variant.

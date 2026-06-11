@@ -62,7 +62,9 @@ with supabase_proof.client_for_dataset(dataset) as db:
 
 Same idea as recipe 9: assert the *post-state* of a malicious write, not the return value. Wrap the operation in `db.savepoint()` so a policy violation doesn't poison the outer transaction.
 
+<Note>
 **Note on SELECT policy interaction**: In raw Postgres, a DELETE policy's USING clause is combined with the table's SELECT policies when filtering target rows. This means `USING (true)` is only exploitable when the attacker can also *see* the target row via the SELECT policy. The inbox schema ships a co-member visibility SELECT policy (`is_member_in_org` SECURITY DEFINER helper) alongside the buggy DELETE policy, making the attack observable in property tests.
+</Note>
 
 ## The counterexample
 
@@ -99,4 +101,4 @@ CREATE POLICY "members manage their own row delete" ON org_members
 
 This allows members to remove themselves (self-leave) and admins to remove any member, while blocking viewers from ejecting other members.
 
-See also [Mass assignment without WITH CHECK](mass-assignment-without-with-check) — the same blind spot, different operation.
+See also [Mass assignment without WITH CHECK](/examples/inbox/mass-assignment-without-with-check) — the same blind spot, different operation.

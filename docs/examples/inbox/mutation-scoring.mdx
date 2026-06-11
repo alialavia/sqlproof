@@ -63,12 +63,14 @@ is never touched.
 
 ## Run it
 
+<Warning>
 The harness needs a server where it can create and drop databases and
 where the template has zero open connections — use a dedicated test
 container (CI service or local Docker), not `supabase start`, whose
 services hold connections. The baseline matters too: **all fixes
 applied, suite green** — against the buggy schema every mutant would
 look "killed" by tests that fail anyway.
+</Warning>
 
 ```bash
 # Supabase-shaped Postgres test container (same image as CI)
@@ -159,5 +161,5 @@ them testable, reusable, *and* mutatable.
   `SQLPROOF_TEMPLATE_URL` is unset, so plain `pytest examples/inbox/tests`
   behaves as before.
 
-Workflow guide: [mutation testing](/guides/mutation-testing/) · API:
-[mutation testing reference](/api/mutation-testing/)
+Workflow guide: [mutation testing](/guides/mutation-testing) · API:
+[mutation testing reference](/api/mutation-testing)

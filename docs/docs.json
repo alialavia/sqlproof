@@ -27,7 +27,8 @@
         "tab": "Examples",
         "groups": [
           { "group": "Test Patterns", "pages": ["examples/property-patterns", "examples/testing-sql-functions", "examples/data-generation"] },
-          { "group": "Walkthroughs", "pages": ["examples/orders"] }
+          { "group": "Walkthroughs", "pages": ["examples/orders"] },
+          { "group": "Inbox Sample (Supabase)", "pages": ["examples/inbox", "examples/inbox/tenant-scoped-vector-search", "examples/inbox/correlated-rls-subqueries", "examples/inbox/idempotent-status-triggers", "examples/inbox/outer-joins-and-where", "examples/inbox/internal-message-rls", "examples/inbox/stable-vector-pagination", "examples/inbox/equivalent-query-optimization", "examples/inbox/stateful-ticket-lifecycle", "examples/inbox/mass-assignment-without-with-check", "examples/inbox/missing-delete-policy", "examples/inbox/mutation-scoring"] }
         ]
       },
       {
