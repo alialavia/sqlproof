@@ -78,9 +78,10 @@ def _outcome_from_dict(payload: dict[str, Any]) -> MutantOutcome:
         mutant_id=str(payload["mutant_id"]),
         target=str(payload["target"]),
         description=str(payload["description"]),
-        status=cast(Status, payload["status"]),
+        status=cast(Status, str(payload["status"])),
         pytest_exit_code=payload["pytest_exit_code"],
         hypothesis_seed=payload["hypothesis_seed"],
         detail=payload["detail"],
+        # .get: artifacts written before duration_s existed won't carry the key
         duration_s=payload.get("duration_s"),
     )
