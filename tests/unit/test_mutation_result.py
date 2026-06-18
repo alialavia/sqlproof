@@ -105,3 +105,30 @@ def test_to_dict_is_json_serializable() -> None:
 
     result = MutationResult(outcomes=(_outcome("killed"), _outcome("survived")))
     assert json.loads(json.dumps(result.to_dict()))["outcomes"][1]["status"] == "survived"
+
+
+def test_outcome_carries_duration_when_provided() -> None:
+    outcome = outcome_for_exit_code(
+        mutant_id="abc",
+        target="f",
+        description="f: drop 'x'",
+        expect_survives=False,
+        exit_code=1,
+        hypothesis_seed=7,
+        detail=None,
+        duration_s=3.5,
+    )
+    assert outcome.duration_s == 3.5
+
+
+def test_outcome_duration_defaults_to_none() -> None:
+    outcome = outcome_for_exit_code(
+        mutant_id="abc",
+        target="f",
+        description="f: drop 'x'",
+        expect_survives=False,
+        exit_code=1,
+        hypothesis_seed=7,
+        detail=None,
+    )
+    assert outcome.duration_s is None
