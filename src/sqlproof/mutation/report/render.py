@@ -24,6 +24,7 @@ _CSS = """
   code { background:#0d1117; border:1px solid var(--border); border-radius:4px;
          padding:2px 6px; font-size:12px; }
   .drift { color:#d29922; }
+  .err { color:var(--bad); font-weight:600; }
   .empty { text-align:center; color:var(--muted); padding:60px 0; }
 """
 
@@ -68,7 +69,9 @@ def _chart_section(report: ReportData) -> str:
     scored = [r for r in report.runs if r.score is not None]
     if not scored:
         return "<h2>Mutation score over time</h2><p class=muted>No scored runs yet.</p>"
-    points: list[tuple[str, float]] = [(r.started_at, s) for r in scored if (s := r.score) is not None]
+    points: list[tuple[str, float]] = [
+        (r.started_at, s) for r in scored if (s := r.score) is not None
+    ]
     width, height, pad = 720, 220, 30
     n = len(points)
 
@@ -141,13 +144,14 @@ def _runlog_section(report: ReportData) -> str:
         score = "—" if r.score is None else f"{r.score * 100:.0f}%"
         sha = html.escape(r.git_sha or "—") + ("*" if r.git_dirty else "")
         drift = " <span class=drift>(schema changed)</span>" if r.schema_changed else ""
+        err_cell = f"<td class=err>{r.errored}</td>" if r.errored > 0 else "<td class=muted>0</td>"
         rows.append(
             f"<tr><td>{html.escape(r.started_at)}{drift}</td><td>{sha}</td>"
-            f"<td>{score}</td><td>{r.duration_s:.1f}s</td></tr>"
+            f"<td>{score}</td><td>{r.duration_s:.1f}s</td>{err_cell}</tr>"
         )
     return (
         "<h2>Run log</h2><table>"
-        "<tr><th>Started</th><th>Commit</th><th>Score</th><th>Duration</th></tr>"
+        "<tr><th>Started</th><th>Commit</th><th>Score</th><th>Duration</th><th>Errors</th></tr>"
         f"{''.join(reversed(rows))}</table>"
     )
 
