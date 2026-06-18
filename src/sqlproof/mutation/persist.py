@@ -21,7 +21,7 @@ def save_run(artifact: RunArtifact, *, artifact_dir: Path) -> Path:
     """Write *artifact* as one JSON file under *artifact_dir* and return the path.
 
     The directory is created if missing. The filename is
-    ``<started_at>-<run_id[:6]>.json`` with ':' replaced by '-', so a
+    ``<started_at>-<run_id>.json`` with ':' replaced by '-', so a
     lexical sort of the directory equals chronological order. The directory
     is append-only: this never rewrites an existing run.
     """
