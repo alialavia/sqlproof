@@ -9,7 +9,7 @@ import time
 import warnings
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import LiteralString, cast
 
@@ -266,7 +266,7 @@ def run_mutation_tests(
         max_workers=max_workers,
         timeout_s=timeout_s,
     )
-    started = datetime.now(timezone.utc)
+    started = datetime.now(UTC)
     # Capture git state before the run so the artifact records the code that
     # was under test, not whatever the working tree looks like after a long run.
     git_sha, git_dirty = capture_git_info() if artifact_dir is not None else (None, False)

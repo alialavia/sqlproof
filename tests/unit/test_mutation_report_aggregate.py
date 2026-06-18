@@ -125,8 +125,10 @@ def test_build_report_repro_command_includes_args_and_seed(tmp_path) -> None:
 
 
 def test_build_report_flags_schema_drift(tmp_path) -> None:
-    p1 = _write(tmp_path, "aaaaaaaa", "2026-06-11T10:00:00Z", outcomes=[_outcome("k1", "f", "killed")])
-    p2 = _write(tmp_path, "bbbbbbbb", "2026-06-12T10:00:00Z", outcomes=[_outcome("k1", "f", "killed")])
+    _write(tmp_path, "aaaaaaaa", "2026-06-11T10:00:00Z", outcomes=[_outcome("k1", "f", "killed")])
+    p2 = _write(
+        tmp_path, "bbbbbbbb", "2026-06-12T10:00:00Z", outcomes=[_outcome("k1", "f", "killed")]
+    )
     payload = json.loads(p2.read_text(encoding="utf-8"))
     payload["schema_fingerprint"] = "sha256:DIFFERENT"
     p2.write_text(json.dumps(payload), encoding="utf-8")

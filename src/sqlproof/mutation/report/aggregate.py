@@ -38,7 +38,13 @@ def load_runs(runs_dir: Path) -> LoadResult:
             runs.append(RunArtifact.from_json_dict(payload))
         # All reachable from from_json_dict on syntactically valid but malformed
         # JSON; skip-not-raise keeps one bad artifact from killing the report.
-        except (json.JSONDecodeError, UnsupportedSchemaVersion, KeyError, ValueError, TypeError) as exc:
+        except (
+            json.JSONDecodeError,
+            UnsupportedSchemaVersion,
+            KeyError,
+            ValueError,
+            TypeError,
+        ) as exc:
             skipped.append(SkippedFile(path=path, reason=f"{type(exc).__name__}: {exc}"))
     runs.sort(key=lambda r: r.started_at)
     return LoadResult(runs=runs, skipped=skipped)
