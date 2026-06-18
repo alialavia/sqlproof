@@ -6,6 +6,7 @@ import subprocess
 import sys
 import threading
 import time
+import warnings
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -268,23 +269,31 @@ def run_mutation_tests(
     started = datetime.now(timezone.utc)
     monotonic_start = time.monotonic()
     result = runner.run(prepared)
+    run_duration_s = time.monotonic() - monotonic_start
     if artifact_dir is not None:
-        git_sha, git_dirty = capture_git_info()
         try:
-            fingerprint: str | None = compute_fingerprint(parse_schema_sql(schema_sql))
-        except Exception:
-            fingerprint = None
-        artifact = RunArtifact(
-            run_id=new_run_id(),
-            started_at=started.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            duration_s=time.monotonic() - monotonic_start,
-            sqlproof_version=__version__,
-            git_sha=git_sha,
-            git_dirty=git_dirty,
-            hypothesis_seed=hypothesis_seed,
-            schema_fingerprint=fingerprint,
-            pytest_args=tuple(pytest_args),
-            outcomes=result.outcomes,
-        )
-        save_run(artifact, artifact_dir=Path(artifact_dir))
+            git_sha, git_dirty = capture_git_info()
+            try:
+                fingerprint: str | None = compute_fingerprint(parse_schema_sql(schema_sql))
+            except Exception:
+                fingerprint = None
+            artifact = RunArtifact(
+                run_id=new_run_id(),
+                started_at=started.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                duration_s=run_duration_s,
+                sqlproof_version=__version__,
+                git_sha=git_sha,
+                git_dirty=git_dirty,
+                hypothesis_seed=hypothesis_seed,
+                schema_fingerprint=fingerprint,
+                pytest_args=tuple(pytest_args),
+                outcomes=result.outcomes,
+            )
+            save_run(artifact, artifact_dir=Path(artifact_dir))
+        except OSError as exc:
+            warnings.warn(
+                f"mutation run completed but artifact could not be written to "
+                f"{artifact_dir}: {exc}",
+                stacklevel=2,
+            )
     return result
