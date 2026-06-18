@@ -267,12 +267,14 @@ def run_mutation_tests(
         timeout_s=timeout_s,
     )
     started = datetime.now(timezone.utc)
+    # Capture git state before the run so the artifact records the code that
+    # was under test, not whatever the working tree looks like after a long run.
+    git_sha, git_dirty = capture_git_info() if artifact_dir is not None else (None, False)
     monotonic_start = time.monotonic()
     result = runner.run(prepared)
     run_duration_s = time.monotonic() - monotonic_start
     if artifact_dir is not None:
         try:
-            git_sha, git_dirty = capture_git_info()
             try:
                 fingerprint: str | None = compute_fingerprint(parse_schema_sql(schema_sql))
             except Exception:
