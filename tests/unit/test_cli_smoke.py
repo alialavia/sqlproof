@@ -75,8 +75,6 @@ def test_mutation_report_on_empty_dir_writes_no_runs_page(tmp_path) -> None:
 
 
 def test_mutation_report_renders_existing_runs(tmp_path) -> None:
-    import json
-
     from sqlproof.mutation.artifact import RunArtifact
     from sqlproof.mutation.result import MutantOutcome
 

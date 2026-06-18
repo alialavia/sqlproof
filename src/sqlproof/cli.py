@@ -178,6 +178,8 @@ def _mutation_report(runs_dir: Path, output: Path, *, open_browser: bool) -> int
     for skipped in load_result.skipped:
         print(f"warning: skipped {skipped.path}: {skipped.reason}", file=sys.stderr)
     html_text = render_html(build_report(load_result))
+    if output.parent != Path(""):
+        output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(html_text, encoding="utf-8")
     print(f"wrote {output} ({len(load_result.runs)} run(s))")
     if open_browser:
