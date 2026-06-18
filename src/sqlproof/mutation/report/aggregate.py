@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 from sqlproof.mutation.artifact import RunArtifact, UnsupportedSchemaVersion
+from sqlproof.mutation.result import MutantOutcome
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,7 +96,7 @@ _NUMERATOR = frozenset({"killed", "unexpected_kill"})
 _DENOMINATOR = frozenset({"killed", "unexpected_kill", "survived"})
 
 
-def _score(outcomes) -> float | None:  # type: ignore[no-untyped-def]
+def _score(outcomes: Iterable[MutantOutcome]) -> float | None:
     denominator = sum(1 for o in outcomes if o.status in _DENOMINATOR)
     if denominator == 0:
         return None
@@ -102,10 +104,10 @@ def _score(outcomes) -> float | None:  # type: ignore[no-untyped-def]
     return numerator / denominator
 
 
-def _repro_command(pytest_args, seed, mutant_id) -> str:  # type: ignore[no-untyped-def]
+def _repro_command(pytest_args: Sequence[str], seed: int | None, mutant_id: str) -> str:
     args = " ".join(pytest_args)
     seed_flag = f" --hypothesis-seed={seed}" if seed is not None else ""
-    return f"pytest {args}{seed_flag}  # mutant {mutant_id}"
+    return f"pytest {args}{seed_flag} # mutant {mutant_id}"
 
 
 def build_report(load_result: LoadResult) -> ReportData:
@@ -123,7 +125,7 @@ def build_report(load_result: LoadResult) -> ReportData:
                 git_sha=run.git_sha,
                 git_dirty=run.git_dirty,
                 duration_s=run.duration_s,
-                killed=sum(1 for o in run.outcomes if o.status in ("killed", "unexpected_kill")),
+                killed=sum(1 for o in run.outcomes if o.status in _NUMERATOR),
                 survived=sum(1 for o in run.outcomes if o.status == _SURVIVED),
                 errored=sum(1 for o in run.outcomes if o.status == "error"),
                 score=_score(run.outcomes),
@@ -143,7 +145,7 @@ def build_report(load_result: LoadResult) -> ReportData:
     )
 
 
-def _build_targets(runs) -> list[TargetSummary]:  # type: ignore[no-untyped-def]
+def _build_targets(runs: list[RunArtifact]) -> list[TargetSummary]:
     names = sorted({o.target for run in runs for o in run.outcomes})
     summaries: list[TargetSummary] = []
     for name in names:
@@ -174,7 +176,7 @@ def _build_targets(runs) -> list[TargetSummary]:  # type: ignore[no-untyped-def]
     return summaries
 
 
-def _build_latest_survivors(runs) -> list[SurvivorEntry]:  # type: ignore[no-untyped-def]
+def _build_latest_survivors(runs: list[RunArtifact]) -> list[SurvivorEntry]:
     if not runs:
         return []
     latest = runs[-1]
