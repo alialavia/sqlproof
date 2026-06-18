@@ -3,6 +3,8 @@ dist/
 *.js.map
 .env
 .superpowers/
+# Local mutation run artifacts (commit deliberately if you want shared history)
+.sqlproof/
 .worktrees/
 website/.astro/
 __pycache__/
