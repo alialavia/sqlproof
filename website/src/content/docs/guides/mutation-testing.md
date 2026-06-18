@@ -199,6 +199,45 @@ pytest tests/test_billing.py --hypothesis-seed=<seed from the report>
 against a database with the mutated function applied — or just pass
 `hypothesis_seed=<seed>` to `run_mutation_tests` and rerun the set.
 
+## Persisting runs & the dashboard
+
+A single run prints survivors and asserts the gate, but the interesting
+signal is **mutation score over time** — is your suite getting stronger?
+Pass `artifact_dir=` to persist each run as a JSON artifact:
+
+```python
+run_mutation_tests(
+    mutations,
+    schema_file="supabase/schemas/schema.sql",
+    database_url=os.environ["SQLPROOF_TEMPLATE_URL"],
+    pytest_args=["tests/test_billing.py", "-q"],
+    artifact_dir=".sqlproof/mutation-runs",   # one JSON file per run
+)
+```
+
+Each artifact records the per-mutant outcomes, the resolved Hypothesis
+seed, the schema fingerprint, and the git sha the run was started on. The
+directory is append-only and defaults into `.sqlproof/` (gitignored —
+commit it deliberately if you want shared history).
+
+Then render a self-contained HTML dashboard from the accumulated runs:
+
+```bash
+sqlproof mutation report --runs-dir .sqlproof/mutation-runs --open
+```
+
+The report is one offline HTML file (no server, no CDN): a score-over-time
+chart annotated where the schema fingerprint changed, a per-target
+breakdown, the latest run's survivors — each with a **NEW** badge for
+first-seen survivors and a copy-pasteable repro command — and a run log.
+Survivors are tracked across runs by their formatting-stable mutant id, so
+a survivor that reappears isn't re-flagged as new. Corrupt or
+unknown-version artifacts are skipped with a warning rather than failing
+the report, and an empty directory still produces a valid "no runs" page.
+
+`--output` controls the file path (default `mutation-report.html`);
+`--open` launches it in your browser.
+
 ## Troubleshooting
 
 | Symptom | Cause |
