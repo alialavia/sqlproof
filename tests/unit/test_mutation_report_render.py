@@ -96,3 +96,40 @@ def test_render_lists_skipped_files() -> None:
     report.skipped.append(SkippedFile(path=Path("broken.json"), reason="JSONDecodeError: x"))
     html = render_html(report)
     assert "broken.json" in html
+
+
+def test_render_drift_line_stays_within_plot_with_unscored_runs() -> None:
+    import re
+
+    def run(run_id, started_at, score, schema_changed):  # type: ignore[no-untyped-def]
+        return RunSummary(
+            run_id=run_id,
+            started_at=started_at,
+            git_sha="abc1234",
+            git_dirty=False,
+            duration_s=1.0,
+            killed=1 if score else 0,
+            survived=0,
+            errored=0 if score else 1,
+            score=score,
+            schema_fingerprint="sha256:x",
+            schema_changed=schema_changed,
+        )
+
+    report = ReportData(
+        runs=[
+            run("a", "2026-06-11T10:00:00Z", 1.0, False),
+            run("b", "2026-06-12T10:00:00Z", None, False),   # unscored — not a chart point
+            run("c", "2026-06-13T10:00:00Z", 0.5, True),     # scored + schema changed
+        ],
+        targets=[],
+        latest_survivors=[],
+        skipped=[],
+    )
+    html = render_html(report)
+    # There are 2 scored points → x spans [30, 690] in a 720-wide chart.
+    # The drift line's x must be the SECOND point's x (690), not an out-of-bounds value.
+    xs = [float(m) for m in re.findall(r'<line x1="([\d.]+)"', html)]
+    assert xs, "expected a drift line"
+    assert all(x <= 720 for x in xs), f"drift x out of bounds: {xs}"
+    assert any(abs(x - 690.0) < 1.0 for x in xs), f"drift not at 2nd point: {xs}"

@@ -53,7 +53,7 @@ def _page(body: str, report: ReportData) -> str:
     # Escape '</' inside the JSON so a "</script>" in data can't end the tag.
     blob = blob.replace("</", "<\\/")
     return (
-        "<!doctype html>\n<html lang=en><head><meta charset=utf-8>"
+        '<!doctype html>\n<html lang="en"><head><meta charset=utf-8>'
         "<meta name=viewport content='width=device-width,initial-scale=1'>"
         "<title>SqlProof Mutation Report</title>"
         f"<style>{_CSS}</style></head><body>"
@@ -65,14 +65,15 @@ def _page(body: str, report: ReportData) -> str:
 
 
 def _chart_section(report: ReportData) -> str:
-    points = [(r.started_at, r.score) for r in report.runs if r.score is not None]
-    if not points:
+    scored = [r for r in report.runs if r.score is not None]
+    if not scored:
         return "<h2>Mutation score over time</h2><p class=muted>No scored runs yet.</p>"
+    points: list[tuple[str, float]] = [(r.started_at, s) for r in scored if (s := r.score) is not None]
     width, height, pad = 720, 220, 30
     n = len(points)
 
     def x(i: int) -> float:
-        return pad if n == 1 else pad + i * (width - 2 * pad) / (n - 1)
+        return width / 2 if n == 1 else pad + i * (width - 2 * pad) / (n - 1)
 
     def y(score: float) -> float:
         return height - pad - score * (height - 2 * pad)
@@ -85,8 +86,8 @@ def _chart_section(report: ReportData) -> str:
     drift = "".join(
         f'<line x1="{x(i):.1f}" y1="{pad}" x2="{x(i):.1f}" y2="{height - pad}"'
         ' stroke="var(--drift,#d29922)" stroke-dasharray="3 3"/>'
-        for i, r in enumerate(report.runs)
-        if r.schema_changed and r.score is not None
+        for i, r in enumerate(scored)
+        if r.schema_changed
     )
     latest = f"{points[-1][1] * 100:.0f}%"
     return (
