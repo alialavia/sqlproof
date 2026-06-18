@@ -28,10 +28,14 @@ def load_runs(runs_dir: Path) -> LoadResult:
     skipped: list[SkippedFile] = []
     if not runs_dir.is_dir():
         return LoadResult(runs=[], skipped=[])
+    # sorted() makes the skipped-file order deterministic (glob order is
+    # filesystem-dependent); runs themselves are re-sorted by started_at below.
     for path in sorted(runs_dir.glob("*.json")):
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
             runs.append(RunArtifact.from_json_dict(payload))
+        # All reachable from from_json_dict on syntactically valid but malformed
+        # JSON; skip-not-raise keeps one bad artifact from killing the report.
         except (json.JSONDecodeError, UnsupportedSchemaVersion, KeyError, ValueError, TypeError) as exc:
             skipped.append(SkippedFile(path=path, reason=f"{type(exc).__name__}: {exc}"))
     runs.sort(key=lambda r: r.started_at)
