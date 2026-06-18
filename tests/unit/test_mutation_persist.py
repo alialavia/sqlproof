@@ -84,3 +84,25 @@ def test_capture_git_info_returns_none_outside_repo(monkeypatch) -> None:
 
     monkeypatch.setattr(persist, "_git", lambda args: None)
     assert persist.capture_git_info() == (None, False)
+
+
+def test_git_returns_none_when_subprocess_raises(monkeypatch) -> None:
+    from sqlproof.mutation import persist
+
+    def boom(*args, **kwargs):  # type: ignore[no-untyped-def]
+        raise OSError("git not found")
+
+    monkeypatch.setattr(persist.subprocess, "run", boom)
+    assert persist._git(["rev-parse", "HEAD"]) is None
+
+
+def test_git_returns_none_on_nonzero_exit(monkeypatch) -> None:
+    import subprocess as _sp
+
+    from sqlproof.mutation import persist
+
+    def fail(*args, **kwargs):  # type: ignore[no-untyped-def]
+        return _sp.CompletedProcess(args=args, returncode=128, stdout="", stderr="fatal")
+
+    monkeypatch.setattr(persist.subprocess, "run", fail)
+    assert persist._git(["rev-parse", "HEAD"]) is None

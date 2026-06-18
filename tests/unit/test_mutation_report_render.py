@@ -98,6 +98,31 @@ def test_render_lists_skipped_files() -> None:
     assert "broken.json" in html
 
 
+def test_render_runs_present_but_none_scored() -> None:
+    report = ReportData(
+        runs=[
+            RunSummary(
+                run_id="a",
+                started_at="2026-06-11T10:00:00Z",
+                git_sha=None,
+                git_dirty=False,
+                duration_s=1.0,
+                killed=0,
+                survived=0,
+                errored=1,
+                score=None,
+                schema_fingerprint=None,
+                schema_changed=False,
+            )
+        ],
+        targets=[],
+        latest_survivors=[],
+        skipped=[],
+    )
+    html = render_html(report)
+    assert "No scored runs yet" in html
+
+
 def test_render_drift_line_stays_within_plot_with_unscored_runs() -> None:
     import re
 

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import subprocess
-from pathlib import Path
 
 import pytest
 
@@ -360,6 +359,61 @@ def test_run_mutation_tests_returns_result_even_if_save_fails(tmp_path, monkeypa
         )
     # The mutation result must survive the save failure.
     assert result.outcomes[0].status == "killed"
+
+
+def test_run_mutation_tests_degrades_fingerprint_on_error(tmp_path, monkeypatch) -> None:
+    import json
+
+    from sqlproof.mutation import runner as runner_module
+    from sqlproof.mutation.model import Mutant, MutationSet, Replace
+    from sqlproof.mutation.result import MutantOutcome, MutationResult
+
+    schema_file = tmp_path / "schema.sql"
+    schema_file.write_text(
+        "CREATE FUNCTION f() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$;",
+        encoding="utf-8",
+    )
+
+    def fake_run(self, prepared):  # type: ignore[no-untyped-def]
+        return MutationResult(
+            outcomes=tuple(
+                MutantOutcome(
+                    mutant_id=p.mutant_id,
+                    target=p.mutant.target_name,
+                    description=p.mutant.describe(),
+                    status="killed",
+                    pytest_exit_code=1,
+                    hypothesis_seed=self.hypothesis_seed,
+                    detail=None,
+                    duration_s=0.1,
+                )
+                for p in prepared
+            )
+        )
+
+    def boom(_schema):  # type: ignore[no-untyped-def]
+        raise ValueError("fingerprint exploded")
+
+    monkeypatch.setattr(runner_module.LocalMutationRunner, "run", fake_run)
+    monkeypatch.setattr(runner_module, "compute_fingerprint", boom)
+
+    mutations = MutationSet(
+        mutants=(Mutant(target_kind="function", target_name="f", ops=(Replace("1", "2"),)),)
+    )
+    runs_dir = tmp_path / "runs"
+    runner_module.run_mutation_tests(
+        mutations,
+        schema_file=schema_file,
+        database_url="postgresql://localhost/base",
+        pytest_args=["tests/"],
+        artifact_dir=runs_dir,
+    )
+    from sqlproof.mutation.artifact import RunArtifact
+
+    artifact = RunArtifact.from_json_dict(
+        json.loads(next(runs_dir.glob("*.json")).read_text(encoding="utf-8"))
+    )
+    assert artifact.schema_fingerprint is None
 
 
 def test_run_mutation_tests_skips_artifact_when_no_dir(tmp_path, monkeypatch) -> None:
