@@ -23,6 +23,7 @@ class MutantOutcome:
     pytest_exit_code: int | None
     hypothesis_seed: int | None
     detail: str | None
+    duration_s: float | None = None
 
 
 def outcome_for_exit_code(
@@ -34,6 +35,7 @@ def outcome_for_exit_code(
     exit_code: int,
     hypothesis_seed: int | None,
     detail: str | None,
+    duration_s: float | None = None,
 ) -> MutantOutcome:
     """pytest exit codes: 0 all passed, 1 tests failed, 2 interrupted,
     3 internal error, 4 usage error, 5 no tests collected. Only 0 and 1
@@ -52,6 +54,7 @@ def outcome_for_exit_code(
         pytest_exit_code=exit_code,
         hypothesis_seed=hypothesis_seed,
         detail=detail,
+        duration_s=duration_s,
     )
 
 

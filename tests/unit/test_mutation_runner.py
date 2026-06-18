@@ -6,6 +6,7 @@ import pytest
 
 from sqlproof.exceptions import SqlProofMutationError
 from sqlproof.mutation.apply import PreparedMutant
+from sqlproof.mutation.artifact import RunArtifact
 from sqlproof.mutation.model import Mutant, Replace
 from sqlproof.mutation.runner import LocalMutationRunner, _resolve_seed
 
@@ -234,3 +235,209 @@ def test_long_output_is_truncated_to_last_2000_chars() -> None:
     detail = result.outcomes[0].detail or ""
     assert len(detail) == 2000
     assert detail == "x" * 2000
+
+
+def test_outcome_records_duration() -> None:
+    runner = FakeRunner({"m1": 1})
+    result = runner.run([_prepared("m1")])
+    duration = result.outcomes[0].duration_s
+    assert duration is not None
+    assert duration >= 0.0
+
+
+def test_error_outcome_also_records_duration() -> None:
+    class ExplodingRunner(FakeRunner):
+        def _run_pytest(self, clone_dsn: str) -> tuple[int, str]:
+            raise OSError("boom")
+
+    runner = ExplodingRunner({"m1": 0})
+    result = runner.run([_prepared("m1")])
+    assert result.outcomes[0].status == "error"
+    assert result.outcomes[0].duration_s is not None
+
+
+def test_run_mutation_tests_writes_artifact_when_dir_given(tmp_path, monkeypatch) -> None:
+    import json
+
+    from sqlproof.mutation import runner as runner_module
+    from sqlproof.mutation.model import Mutant, MutationSet, Replace
+    from sqlproof.mutation.result import MutantOutcome, MutationResult
+
+    schema_file = tmp_path / "schema.sql"
+    schema_file.write_text(
+        "CREATE FUNCTION f() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$;",
+        encoding="utf-8",
+    )
+
+    def fake_run(self, prepared):  # type: ignore[no-untyped-def]
+        return MutationResult(
+            outcomes=tuple(
+                MutantOutcome(
+                    mutant_id=p.mutant_id,
+                    target=p.mutant.target_name,
+                    description=p.mutant.describe(),
+                    status="killed",
+                    pytest_exit_code=1,
+                    hypothesis_seed=self.hypothesis_seed,
+                    detail=None,
+                    duration_s=0.1,
+                )
+                for p in prepared
+            )
+        )
+
+    monkeypatch.setattr(runner_module.LocalMutationRunner, "run", fake_run)
+
+    mutations = MutationSet(
+        mutants=(Mutant(target_kind="function", target_name="f", ops=(Replace("1", "2"),)),)
+    )
+    runs_dir = tmp_path / "runs"
+    result = runner_module.run_mutation_tests(
+        mutations,
+        schema_file=schema_file,
+        database_url="postgresql://localhost/base",
+        pytest_args=["tests/"],
+        hypothesis_seed=42,
+        artifact_dir=runs_dir,
+    )
+    assert result.outcomes[0].status == "killed"
+    files = list(runs_dir.glob("*.json"))
+    assert len(files) == 1
+    artifact = RunArtifact.from_json_dict(json.loads(files[0].read_text(encoding="utf-8")))
+    assert artifact.hypothesis_seed == 42
+    assert artifact.pytest_args == ("tests/",)
+    assert artifact.schema_fingerprint is not None
+    assert artifact.outcomes[0].mutant_id == result.outcomes[0].mutant_id
+
+
+def test_run_mutation_tests_returns_result_even_if_save_fails(tmp_path, monkeypatch) -> None:
+    import pytest
+
+    from sqlproof.mutation import runner as runner_module
+    from sqlproof.mutation.model import Mutant, MutationSet, Replace
+    from sqlproof.mutation.result import MutantOutcome, MutationResult
+
+    schema_file = tmp_path / "schema.sql"
+    schema_file.write_text(
+        "CREATE FUNCTION f() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$;",
+        encoding="utf-8",
+    )
+
+    def fake_run(self, prepared):  # type: ignore[no-untyped-def]
+        return MutationResult(
+            outcomes=tuple(
+                MutantOutcome(
+                    mutant_id=p.mutant_id,
+                    target=p.mutant.target_name,
+                    description=p.mutant.describe(),
+                    status="killed",
+                    pytest_exit_code=1,
+                    hypothesis_seed=self.hypothesis_seed,
+                    detail=None,
+                    duration_s=0.1,
+                )
+                for p in prepared
+            )
+        )
+
+    def boom(artifact, *, artifact_dir):  # type: ignore[no-untyped-def]
+        raise OSError("disk full")
+
+    monkeypatch.setattr(runner_module.LocalMutationRunner, "run", fake_run)
+    monkeypatch.setattr(runner_module, "save_run", boom)
+
+    mutations = MutationSet(
+        mutants=(Mutant(target_kind="function", target_name="f", ops=(Replace("1", "2"),)),)
+    )
+    with pytest.warns(UserWarning, match="artifact could not be written"):
+        result = runner_module.run_mutation_tests(
+            mutations,
+            schema_file=schema_file,
+            database_url="postgresql://localhost/base",
+            pytest_args=["tests/"],
+            artifact_dir=tmp_path / "runs",
+        )
+    # The mutation result must survive the save failure.
+    assert result.outcomes[0].status == "killed"
+
+
+def test_run_mutation_tests_degrades_fingerprint_on_error(tmp_path, monkeypatch) -> None:
+    import json
+
+    from sqlproof.mutation import runner as runner_module
+    from sqlproof.mutation.model import Mutant, MutationSet, Replace
+    from sqlproof.mutation.result import MutantOutcome, MutationResult
+
+    schema_file = tmp_path / "schema.sql"
+    schema_file.write_text(
+        "CREATE FUNCTION f() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$;",
+        encoding="utf-8",
+    )
+
+    def fake_run(self, prepared):  # type: ignore[no-untyped-def]
+        return MutationResult(
+            outcomes=tuple(
+                MutantOutcome(
+                    mutant_id=p.mutant_id,
+                    target=p.mutant.target_name,
+                    description=p.mutant.describe(),
+                    status="killed",
+                    pytest_exit_code=1,
+                    hypothesis_seed=self.hypothesis_seed,
+                    detail=None,
+                    duration_s=0.1,
+                )
+                for p in prepared
+            )
+        )
+
+    def boom(_schema):  # type: ignore[no-untyped-def]
+        raise ValueError("fingerprint exploded")
+
+    monkeypatch.setattr(runner_module.LocalMutationRunner, "run", fake_run)
+    monkeypatch.setattr(runner_module, "compute_fingerprint", boom)
+
+    mutations = MutationSet(
+        mutants=(Mutant(target_kind="function", target_name="f", ops=(Replace("1", "2"),)),)
+    )
+    runs_dir = tmp_path / "runs"
+    runner_module.run_mutation_tests(
+        mutations,
+        schema_file=schema_file,
+        database_url="postgresql://localhost/base",
+        pytest_args=["tests/"],
+        artifact_dir=runs_dir,
+    )
+    from sqlproof.mutation.artifact import RunArtifact
+
+    artifact = RunArtifact.from_json_dict(
+        json.loads(next(runs_dir.glob("*.json")).read_text(encoding="utf-8"))
+    )
+    assert artifact.schema_fingerprint is None
+
+
+def test_run_mutation_tests_skips_artifact_when_no_dir(tmp_path, monkeypatch) -> None:
+    from sqlproof.mutation import runner as runner_module
+    from sqlproof.mutation.model import Mutant, MutationSet, Replace
+    from sqlproof.mutation.result import MutationResult
+
+    schema_file = tmp_path / "schema.sql"
+    schema_file.write_text(
+        "CREATE FUNCTION f() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$;",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        runner_module.LocalMutationRunner,
+        "run",
+        lambda self, prepared: MutationResult(outcomes=()),
+    )
+    mutations = MutationSet(
+        mutants=(Mutant(target_kind="function", target_name="f", ops=(Replace("1", "2"),)),)
+    )
+    runner_module.run_mutation_tests(
+        mutations,
+        schema_file=schema_file,
+        database_url="postgresql://localhost/base",
+        pytest_args=["tests/"],
+    )
+    assert not list(tmp_path.glob("**/*.json"))

@@ -44,6 +44,15 @@ def main(argv: list[str] | None = None) -> int:
 
     subcommands.add_parser("clean-orphans")
 
+    mutation = subcommands.add_parser("mutation")
+    mutation_sub = mutation.add_subparsers(dest="mutation_command", required=True)
+    mutation_report = mutation_sub.add_parser("report")
+    mutation_report.add_argument(
+        "--runs-dir", type=Path, default=Path(".sqlproof/mutation-runs")
+    )
+    mutation_report.add_argument("--output", type=Path, default=Path("mutation-report.html"))
+    mutation_report.add_argument("--open", action="store_true", dest="open_browser")
+
     args = parser.parse_args(argv)
     if args.command == "version":
         print(f"sqlproof {__version__}")
@@ -92,6 +101,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "clean-orphans":
         print("No orphaned SqlProof containers found.")
         return 0
+    if args.command == "mutation":
+        if args.mutation_command == "report":
+            return _mutation_report(args.runs_dir, args.output, open_browser=args.open_browser)
+        return 1
     return 1
 
 
@@ -156,6 +169,24 @@ def _counterexample_report(payload: dict[str, object]) -> dict[str, object]:
         "failure": payload.get("failure", {}),
         "shape": shape,
     }
+
+
+def _mutation_report(runs_dir: Path, output: Path, *, open_browser: bool) -> int:
+    from sqlproof.mutation.report import build_report, load_runs, render_html
+
+    load_result = load_runs(runs_dir)
+    for skipped in load_result.skipped:
+        print(f"warning: skipped {skipped.path}: {skipped.reason}", file=sys.stderr)
+    html_text = render_html(build_report(load_result))
+    if output.parent != Path(""):
+        output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(html_text, encoding="utf-8")
+    print(f"wrote {output} ({len(load_result.runs)} run(s))")
+    if open_browser:
+        import webbrowser
+
+        webbrowser.open(output.resolve().as_uri())
+    return 0
 
 
 if __name__ == "__main__":  # pragma: no cover

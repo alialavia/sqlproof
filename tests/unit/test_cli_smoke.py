@@ -63,3 +63,50 @@ def test_cli_outputs_structured_introspection_and_counterexample_report(tmp_path
 
     assert main(["report", str(counterexample)]) == 0
     assert "event_name" in capsys.readouterr().out
+
+
+def test_mutation_report_on_empty_dir_writes_no_runs_page(tmp_path) -> None:
+    output = tmp_path / "report.html"
+    runs_dir = tmp_path / "runs"
+    assert main(["mutation", "report", "--runs-dir", str(runs_dir), "--output", str(output)]) == 0
+    html = output.read_text(encoding="utf-8")
+    assert html.lstrip().lower().startswith("<!doctype html")
+    assert "no runs found" in html.lower()
+
+
+def test_mutation_report_renders_existing_runs(tmp_path) -> None:
+    from sqlproof.mutation.artifact import RunArtifact
+    from sqlproof.mutation.result import MutantOutcome
+
+    runs_dir = tmp_path / "runs"
+    runs_dir.mkdir()
+    artifact = RunArtifact(
+        run_id="aaaaaaaa",
+        started_at="2026-06-11T10:00:00Z",
+        duration_s=5.0,
+        sqlproof_version="0.9.0",
+        git_sha="abc1234",
+        git_dirty=False,
+        hypothesis_seed=42,
+        schema_fingerprint="sha256:s1",
+        pytest_args=("tests/",),
+        outcomes=(
+            MutantOutcome(
+                mutant_id="s1",
+                target="billing.f",
+                description="drop FILTER",
+                status="survived",
+                pytest_exit_code=0,
+                hypothesis_seed=42,
+                detail=None,
+                duration_s=0.5,
+            ),
+        ),
+    )
+    (runs_dir / "run.json").write_text(json.dumps(artifact.to_json_dict()), encoding="utf-8")
+
+    output = tmp_path / "report.html"
+    assert main(["mutation", "report", "--runs-dir", str(runs_dir), "--output", str(output)]) == 0
+    html = output.read_text(encoding="utf-8")
+    assert "billing.f" in html
+    assert "--hypothesis-seed=42" in html
