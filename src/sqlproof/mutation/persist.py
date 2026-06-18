@@ -27,11 +27,11 @@ def save_run(artifact: RunArtifact, *, artifact_dir: Path) -> Path:
     """
     artifact_dir.mkdir(parents=True, exist_ok=True)
     stamp = artifact.started_at.translate(_FILENAME_SAFE)
-    path = artifact_dir / f"{stamp}-{artifact.run_id[:6]}.json"
-    path.write_text(
-        json.dumps(artifact.to_json_dict(), indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
+    path = artifact_dir / f"{stamp}-{artifact.run_id}.json"
+    # Exclusive create ('x'): honor the append-only contract — never silently
+    # overwrite an existing run. A genuine collision raises FileExistsError.
+    with path.open("x", encoding="utf-8") as handle:
+        handle.write(json.dumps(artifact.to_json_dict(), indent=2, sort_keys=True))
     return path
 
 
