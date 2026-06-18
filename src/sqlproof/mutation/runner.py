@@ -8,16 +8,22 @@ import threading
 import time
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import LiteralString, cast
 
 import psycopg
 from psycopg import conninfo, sql
 
+from sqlproof._version import __version__
 from sqlproof.exceptions import SqlProofMutationError
 from sqlproof.mutation.apply import PreparedMutant, prepare_mutants
+from sqlproof.mutation.artifact import RunArtifact
 from sqlproof.mutation.model import MutationSet
+from sqlproof.mutation.persist import capture_git_info, new_run_id, save_run
 from sqlproof.mutation.result import MutantOutcome, MutationResult, outcome_for_exit_code
+from sqlproof.schema.fingerprint import compute as compute_fingerprint
+from sqlproof.schema.parse_sql import parse_schema_sql
 
 _OUTPUT_TAIL = 2000
 
@@ -199,6 +205,7 @@ def run_mutation_tests(
     maintenance_db: str = "postgres",
     hypothesis_seed: int | None = None,
     max_workers: int = 1,
+    artifact_dir: str | Path | None = None,
     timeout_s: float | None = 600.0,
 ) -> MutationResult:
     """Prepare every mutant (all authoring errors raise here, before any
@@ -233,6 +240,12 @@ def run_mutation_tests(
     raises :class:`subprocess.TimeoutExpired`, which flows through to an
     ``"error"`` outcome.
 
+    `artifact_dir`, when given, persists this run as a JSON artifact under
+    that directory (created if missing) via :func:`save_run`, capturing the
+    resolved seed, schema fingerprint, git sha/dirty flag, and per-mutant
+    outcomes. When ``None`` (the default) nothing is written. Point
+    ``sqlproof mutation report`` at the same directory to visualize history.
+
     .. note:: **PYTEST_ADDOPTS**
         The pytest child process inherits the parent environment. If
         ``PYTEST_ADDOPTS`` is set (e.g. by CI to add ``--tb=short`` or
@@ -252,4 +265,26 @@ def run_mutation_tests(
         max_workers=max_workers,
         timeout_s=timeout_s,
     )
-    return runner.run(prepared)
+    started = datetime.now(timezone.utc)
+    monotonic_start = time.monotonic()
+    result = runner.run(prepared)
+    if artifact_dir is not None:
+        git_sha, git_dirty = capture_git_info()
+        try:
+            fingerprint: str | None = compute_fingerprint(parse_schema_sql(schema_sql))
+        except Exception:
+            fingerprint = None
+        artifact = RunArtifact(
+            run_id=new_run_id(),
+            started_at=started.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            duration_s=time.monotonic() - monotonic_start,
+            sqlproof_version=__version__,
+            git_sha=git_sha,
+            git_dirty=git_dirty,
+            hypothesis_seed=hypothesis_seed,
+            schema_fingerprint=fingerprint,
+            pytest_args=tuple(pytest_args),
+            outcomes=result.outcomes,
+        )
+        save_run(artifact, artifact_dir=Path(artifact_dir))
+    return result
