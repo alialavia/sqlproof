@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 
 from sqlproof.mutation.artifact import RunArtifact
-from sqlproof.mutation.report.aggregate import load_runs
+from sqlproof.mutation.report.aggregate import build_report, load_runs
 from sqlproof.mutation.result import MutantOutcome
 
 
@@ -55,3 +55,90 @@ def test_load_runs_on_missing_dir_returns_empty(tmp_path) -> None:
     loaded = load_runs(tmp_path / "does-not-exist")
     assert loaded.runs == []
     assert loaded.skipped == []
+
+
+def _outcome(mutant_id, target, status):  # type: ignore[no-untyped-def]
+    return MutantOutcome(
+        mutant_id=mutant_id,
+        target=target,
+        description=f"{target}: mutate {mutant_id}",
+        status=status,
+        pytest_exit_code=1 if status in ("killed", "unexpected_kill") else 0,
+        hypothesis_seed=42,
+        detail=None,
+        duration_s=0.5,
+    )
+
+
+def test_build_report_computes_score_excluding_errors_and_expected(tmp_path) -> None:
+    _write(
+        tmp_path,
+        "aaaaaaaa",
+        "2026-06-11T10:00:00Z",
+        outcomes=[
+            _outcome("k1", "f", "killed"),
+            _outcome("s1", "f", "survived"),
+            _outcome("e1", "f", "error"),
+            _outcome("x1", "f", "expected_survivor"),
+        ],
+    )
+    report = build_report(load_runs(tmp_path))
+    run = report.runs[0]
+    assert run.killed == 1
+    assert run.survived == 1
+    assert run.errored == 1
+    assert run.score == 0.5  # 1 / (1 + 1)
+
+
+def test_build_report_score_is_none_when_denominator_zero(tmp_path) -> None:
+    _write(
+        tmp_path,
+        "aaaaaaaa",
+        "2026-06-11T10:00:00Z",
+        outcomes=[_outcome("e1", "f", "error"), _outcome("x1", "f", "expected_survivor")],
+    )
+    report = build_report(load_runs(tmp_path))
+    assert report.runs[0].score is None
+
+
+def test_build_report_classifies_new_vs_known_survivors(tmp_path) -> None:
+    _write(tmp_path, "aaaaaaaa", "2026-06-11T10:00:00Z", outcomes=[_outcome("s1", "f", "survived")])
+    _write(
+        tmp_path,
+        "bbbbbbbb",
+        "2026-06-12T10:00:00Z",
+        outcomes=[_outcome("s1", "f", "survived"), _outcome("s2", "f", "survived")],
+    )
+    report = build_report(load_runs(tmp_path))
+    by_id = {s.mutant_id: s for s in report.latest_survivors}
+    assert by_id["s1"].is_new is False  # seen in the earlier run
+    assert by_id["s2"].is_new is True   # first appearance
+
+
+def test_build_report_repro_command_includes_args_and_seed(tmp_path) -> None:
+    _write(tmp_path, "aaaaaaaa", "2026-06-11T10:00:00Z", outcomes=[_outcome("s1", "f", "survived")])
+    report = build_report(load_runs(tmp_path))
+    cmd = report.latest_survivors[0].repro_command
+    assert "pytest tests/" in cmd
+    assert "--hypothesis-seed=42" in cmd
+    assert "s1" in cmd
+
+
+def test_build_report_flags_schema_drift(tmp_path) -> None:
+    p1 = _write(tmp_path, "aaaaaaaa", "2026-06-11T10:00:00Z", outcomes=[_outcome("k1", "f", "killed")])
+    p2 = _write(tmp_path, "bbbbbbbb", "2026-06-12T10:00:00Z", outcomes=[_outcome("k1", "f", "killed")])
+    payload = json.loads(p2.read_text(encoding="utf-8"))
+    payload["schema_fingerprint"] = "sha256:DIFFERENT"
+    p2.write_text(json.dumps(payload), encoding="utf-8")
+    report = build_report(load_runs(tmp_path))
+    assert report.runs[0].schema_changed is False  # first run
+    assert report.runs[1].schema_changed is True   # fingerprint changed
+
+
+def test_build_report_per_target_history(tmp_path) -> None:
+    _write(tmp_path, "aaaaaaaa", "2026-06-11T10:00:00Z", outcomes=[_outcome("k1", "f", "killed")])
+    _write(tmp_path, "bbbbbbbb", "2026-06-12T10:00:00Z", outcomes=[_outcome("k1", "f", "survived")])
+    report = build_report(load_runs(tmp_path))
+    target = next(t for t in report.targets if t.target == "f")
+    assert [point.score for point in target.history] == [1.0, 0.0]
+    assert target.latest_score == 0.0
