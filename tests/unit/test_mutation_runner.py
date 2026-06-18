@@ -234,3 +234,22 @@ def test_long_output_is_truncated_to_last_2000_chars() -> None:
     detail = result.outcomes[0].detail or ""
     assert len(detail) == 2000
     assert detail == "x" * 2000
+
+
+def test_outcome_records_duration() -> None:
+    runner = FakeRunner({"m1": 1})
+    result = runner.run([_prepared("m1")])
+    duration = result.outcomes[0].duration_s
+    assert duration is not None
+    assert duration >= 0.0
+
+
+def test_error_outcome_also_records_duration() -> None:
+    class ExplodingRunner(FakeRunner):
+        def _run_pytest(self, clone_dsn: str) -> tuple[int, str]:
+            raise OSError("boom")
+
+    runner = ExplodingRunner({"m1": 0})
+    result = runner.run([_prepared("m1")])
+    assert result.outcomes[0].status == "error"
+    assert result.outcomes[0].duration_s is not None

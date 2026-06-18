@@ -5,6 +5,7 @@ import secrets
 import subprocess
 import sys
 import threading
+import time
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -86,6 +87,7 @@ class LocalMutationRunner:
 
     def _run_one(self, prepared: PreparedMutant) -> MutantOutcome:
         clone_name = f"sqlproof_mutant_{prepared.mutant_id}"
+        start = time.monotonic()
         try:
             clone_dsn = self._create_clone(clone_name)
             try:
@@ -105,6 +107,7 @@ class LocalMutationRunner:
                 pytest_exit_code=None,
                 hypothesis_seed=self.hypothesis_seed,
                 detail=detail,
+                duration_s=time.monotonic() - start,
             )
         return outcome_for_exit_code(
             mutant_id=prepared.mutant_id,
@@ -114,6 +117,7 @@ class LocalMutationRunner:
             exit_code=exit_code,
             hypothesis_seed=self.hypothesis_seed,
             detail=None if exit_code == 1 else output[-_OUTPUT_TAIL:],
+            duration_s=time.monotonic() - start,
         )
 
     # -- side-effecting seams (overridden in unit tests) ---------------
