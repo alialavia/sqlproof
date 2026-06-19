@@ -5,6 +5,13 @@ All notable changes to SqlProof will be documented here. The format is based on
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While SqlProof
 remains in `0.x`, minor versions may include breaking changes.
 
+## [0.10.0](https://github.com/alialavia/sqlproof/compare/v0.9.0...v0.10.0) (2026-06-19)
+
+
+### Added
+
+* **mutation:** baseline check + RLS/Supabase docs ([#97](https://github.com/alialavia/sqlproof/issues/97)) ([2e5e7b3](https://github.com/alialavia/sqlproof/commit/2e5e7b3dc75d409c2a029955164e5f9de187116c))
+
 ## [0.9.0](https://github.com/alialavia/sqlproof/compare/v0.8.0...v0.9.0) (2026-06-10)
 
 
