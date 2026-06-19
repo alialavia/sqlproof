@@ -298,6 +298,7 @@ def test_run_mutation_tests_writes_artifact_when_dir_given(tmp_path, monkeypatch
         database_url="postgresql://localhost/base",
         pytest_args=["tests/"],
         hypothesis_seed=42,
+        verify_baseline=False,
         artifact_dir=runs_dir,
     )
     assert result.outcomes[0].status == "killed"
@@ -355,6 +356,7 @@ def test_run_mutation_tests_returns_result_even_if_save_fails(tmp_path, monkeypa
             schema_file=schema_file,
             database_url="postgresql://localhost/base",
             pytest_args=["tests/"],
+            verify_baseline=False,
             artifact_dir=tmp_path / "runs",
         )
     # The mutation result must survive the save failure.
@@ -406,6 +408,7 @@ def test_run_mutation_tests_degrades_fingerprint_on_error(tmp_path, monkeypatch)
         schema_file=schema_file,
         database_url="postgresql://localhost/base",
         pytest_args=["tests/"],
+        verify_baseline=False,
         artifact_dir=runs_dir,
     )
     from sqlproof.mutation.artifact import RunArtifact
@@ -439,5 +442,119 @@ def test_run_mutation_tests_skips_artifact_when_no_dir(tmp_path, monkeypatch) ->
         schema_file=schema_file,
         database_url="postgresql://localhost/base",
         pytest_args=["tests/"],
+        verify_baseline=False,
     )
     assert not list(tmp_path.glob("**/*.json"))
+
+
+# ---------------------------------------------------------------------------
+# Baseline verification: a red baseline would make every mutant look "killed"
+# ---------------------------------------------------------------------------
+
+
+def test_run_baseline_clones_runs_unmutated_and_drops() -> None:
+    class BaselineRunner(FakeRunner):
+        def _run_pytest(self, clone_dsn: str) -> tuple[int, str]:
+            self.calls.append(("pytest", clone_dsn))
+            return 0, "baseline ok"
+
+    runner = BaselineRunner({})
+    assert runner.run_baseline() == (0, "baseline ok")
+    # clone -> pytest -> drop, with no "apply" (the baseline is unmutated)
+    assert [kind for kind, _ in runner.calls] == ["create", "pytest", "drop"]
+    assert ("create", "sqlproof_baseline") in runner.calls
+    assert ("drop", "sqlproof_baseline") in runner.calls
+
+
+def _schema_with_f(tmp_path) -> object:  # type: ignore[no-untyped-def]
+    schema_file = tmp_path / "schema.sql"
+    schema_file.write_text(
+        "CREATE FUNCTION f() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$;",
+        encoding="utf-8",
+    )
+    return schema_file
+
+
+def _one_mutation():  # type: ignore[no-untyped-def]
+    from sqlproof.mutation.model import Mutant, MutationSet, Replace
+
+    return MutationSet(
+        mutants=(Mutant(target_kind="function", target_name="f", ops=(Replace("1", "2"),)),)
+    )
+
+
+def test_run_mutation_tests_raises_on_red_baseline(tmp_path, monkeypatch) -> None:
+    from sqlproof.exceptions import SqlProofMutationError
+    from sqlproof.mutation import runner as runner_module
+
+    monkeypatch.setattr(
+        runner_module.LocalMutationRunner, "run_baseline", lambda self: (1, "E   assert 0")
+    )
+
+    def must_not_run(self, prepared):  # type: ignore[no-untyped-def]
+        raise AssertionError("mutants must not run when the baseline is red")
+
+    monkeypatch.setattr(runner_module.LocalMutationRunner, "run", must_not_run)
+
+    with pytest.raises(SqlProofMutationError, match="baseline suite is not green"):
+        runner_module.run_mutation_tests(
+            _one_mutation(),
+            schema_file=_schema_with_f(tmp_path),
+            database_url="postgresql://localhost/base",
+            pytest_args=["tests/"],
+        )
+
+
+def test_run_mutation_tests_skips_baseline_when_disabled(tmp_path, monkeypatch) -> None:
+    from sqlproof.mutation import runner as runner_module
+    from sqlproof.mutation.result import MutationResult
+
+    def fail_baseline(self):  # type: ignore[no-untyped-def]
+        raise AssertionError("baseline must not run when verify_baseline=False")
+
+    monkeypatch.setattr(runner_module.LocalMutationRunner, "run_baseline", fail_baseline)
+    monkeypatch.setattr(
+        runner_module.LocalMutationRunner,
+        "run",
+        lambda self, prepared: MutationResult(outcomes=()),
+    )
+    runner_module.run_mutation_tests(
+        _one_mutation(),
+        schema_file=_schema_with_f(tmp_path),
+        database_url="postgresql://localhost/base",
+        pytest_args=["tests/"],
+        verify_baseline=False,
+    )
+
+
+def test_run_mutation_tests_proceeds_on_green_baseline(tmp_path, monkeypatch) -> None:
+    from sqlproof.mutation import runner as runner_module
+    from sqlproof.mutation.result import MutantOutcome, MutationResult
+
+    monkeypatch.setattr(runner_module.LocalMutationRunner, "run_baseline", lambda self: (0, ""))
+
+    def fake_run(self, prepared):  # type: ignore[no-untyped-def]
+        return MutationResult(
+            outcomes=tuple(
+                MutantOutcome(
+                    mutant_id=p.mutant_id,
+                    target=p.mutant.target_name,
+                    description=p.mutant.describe(),
+                    status="killed",
+                    pytest_exit_code=1,
+                    hypothesis_seed=self.hypothesis_seed,
+                    detail=None,
+                    duration_s=0.1,
+                )
+                for p in prepared
+            )
+        )
+
+    monkeypatch.setattr(runner_module.LocalMutationRunner, "run", fake_run)
+    result = runner_module.run_mutation_tests(
+        _one_mutation(),
+        schema_file=_schema_with_f(tmp_path),
+        database_url="postgresql://localhost/base",
+        pytest_args=["tests/"],
+    )
+    assert result.outcomes[0].status == "killed"

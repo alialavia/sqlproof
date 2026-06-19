@@ -7,7 +7,7 @@ from sqlproof._version import __version__
 if TYPE_CHECKING:
     from sqlproof.config import ExternalTableSpec, SqlProofConfig
     from sqlproof.core import SqlProof
-    from sqlproof.mutation.model import Drop, MutationSet, Replace
+    from sqlproof.mutation.model import Drop, Mutant, MutationSet, Replace
     from sqlproof.mutation.result import MutantOutcome, MutationResult
     from sqlproof.mutation.runner import run_mutation_tests
     from sqlproof.runners import sqlproof
@@ -17,6 +17,7 @@ __all__ = [
     "DriftReport",
     "Drop",
     "ExternalTableSpec",
+    "Mutant",
     "MutantOutcome",
     "MutationResult",
     "MutationSet",
@@ -52,7 +53,7 @@ def __getattr__(name: str) -> object:
         from sqlproof import surface
 
         return getattr(surface, name)
-    if name in {"MutationSet", "Replace", "Drop"}:
+    if name in {"MutationSet", "Mutant", "Replace", "Drop"}:
         from sqlproof.mutation import model
 
         return getattr(model, name)

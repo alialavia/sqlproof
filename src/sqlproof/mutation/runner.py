@@ -92,6 +92,22 @@ class LocalMutationRunner:
                 outcomes = list(pool.map(self._run_one, prepared))
         return MutationResult(outcomes=tuple(outcomes))
 
+    def run_baseline(self) -> tuple[int, str]:
+        """Run the unmutated suite against a fresh clone to confirm the
+        baseline is green. Returns ``(pytest_exit_code, output)``.
+
+        A non-zero exit means the suite fails *before* any mutation is
+        applied, so every mutant would look ``killed`` and the score would be
+        a meaningless false 100%. No mutated DDL is applied — the clone is an
+        exact copy of the template.
+        """
+        clone_name = "sqlproof_baseline"
+        clone_dsn = self._create_clone(clone_name)
+        try:
+            return self._run_pytest(clone_dsn)
+        finally:
+            self._drop_clone(clone_name)
+
     def _run_one(self, prepared: PreparedMutant) -> MutantOutcome:
         clone_name = f"sqlproof_mutant_{prepared.mutant_id}"
         start = time.monotonic()
@@ -206,6 +222,7 @@ def run_mutation_tests(
     maintenance_db: str = "postgres",
     hypothesis_seed: int | None = None,
     max_workers: int = 1,
+    verify_baseline: bool = True,
     artifact_dir: str | Path | None = None,
     timeout_s: float | None = 600.0,
 ) -> MutationResult:
@@ -241,6 +258,15 @@ def run_mutation_tests(
     raises :class:`subprocess.TimeoutExpired`, which flows through to an
     ``"error"`` outcome.
 
+    `verify_baseline` (default ``True``) runs the unmutated suite against a
+    fresh clone *before* any mutant and raises
+    :class:`~sqlproof.exceptions.SqlProofMutationError` if it is not green.
+    A red baseline (e.g. a template missing ``GRANT``s so RLS tests fail with
+    "permission denied", or any pre-existing suite failure) would make every
+    mutant look ``killed`` and report a meaningless false 100%; this check
+    fails loudly instead. Pass ``False`` to skip the extra clone+run once you
+    have independently confirmed the baseline.
+
     `artifact_dir`, when given, persists this run as a JSON artifact under
     that directory (created if missing) via :func:`save_run`, capturing the
     resolved seed, schema fingerprint, git sha/dirty flag, and per-mutant
@@ -266,6 +292,17 @@ def run_mutation_tests(
         max_workers=max_workers,
         timeout_s=timeout_s,
     )
+    if verify_baseline:
+        baseline_exit, baseline_output = runner.run_baseline()
+        if baseline_exit != 0:
+            msg = (
+                "baseline suite is not green on an unmutated clone "
+                f"(pytest exit {baseline_exit}) — mutation results would be "
+                "meaningless until it passes. Check the suite and the template "
+                "(a common cause: missing GRANTs make RLS tests fail before "
+                f"any mutation).\n{baseline_output[-_OUTPUT_TAIL:]}"
+            )
+            raise SqlProofMutationError(msg)
     started = datetime.now(UTC)
     # Capture git state before the run so the artifact records the code that
     # was under test, not whatever the working tree looks like after a long run.
