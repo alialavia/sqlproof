@@ -227,19 +227,86 @@ tests improved — delete the stale `expect_survives`.
 
 Property suites are slow and mutation multiplies them by the mutant
 count. Run mutation in a nightly lane (or on demand before a risky
-refactor), not on every PR:
+refactor), **not on every PR**. SqlProof ships no CI integration of its
+own — there's nothing magic to enable; you wire the harness into your
+app's CI like any other test. Here is a complete, copy-pasteable workflow:
 
 ```yaml
-# .github/workflows/nightly.yml (excerpt)
-- name: Build template database
-  run: |
-    psql "$BASE_URL" -c 'CREATE DATABASE proof_template'
-    psql "${BASE_URL%/*}/proof_template" -f supabase/schemas/schema.sql
-- name: Mutation run
-  env:
-    SQLPROOF_TEMPLATE_URL: ${{ env.BASE_URL_TEMPLATE }}
-  run: pytest -m mutation -v
+# .github/workflows/mutation.yml
+name: Mutation (nightly)
+
+on:
+  schedule:
+    - cron: "0 3 * * *"   # nightly
+  workflow_dispatch: {}    # ...and on demand
+
+jobs:
+  mutation:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        # Supabase-shaped image: ships the auth schema, plpgsql_check,
+        # pgvector, etc. Match whatever your app's schema needs.
+        image: supabase/postgres:15.8.1.040
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 10s --health-timeout 5s --health-retries 15
+    env:
+      ADMIN_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+      SQLPROOF_TEMPLATE_URL: postgresql://postgres:postgres@127.0.0.1:5432/proof_template
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync   # installs sqlproof + your SQL test suite
+
+      - name: Build the template (keep GRANTs — see Setup)
+        run: |
+          psql "$ADMIN_URL" -c 'CREATE DATABASE proof_template'
+          psql "$SQLPROOF_TEMPLATE_URL" -f supabase/schemas/schema.sql
+
+      - name: Run the mutation suite (gate)
+        # The marked meta-test calls run_mutation_tests(...).assert_no_survivors()
+        # with artifact_dir=".sqlproof/mutation-runs", so a survivor fails the job.
+        run: uv run pytest -m mutation -v
+
+      - name: Build the dashboard
+        if: always()   # render even when the gate failed — that's when you want it
+        run: uv run sqlproof mutation report
+          --runs-dir .sqlproof/mutation-runs --output mutation-report.html
+
+      - name: Upload the dashboard
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation-report
+          path: mutation-report.html
 ```
+
+The meta-test itself is the marker-gated one from
+[A mutation run, marker-gated](#a-mutation-run-marker-gated) — just give
+it `artifact_dir=".sqlproof/mutation-runs"` so the report step has data.
+
+### Seeing the results — three levels
+
+1. **Pass / fail gate.** `assert_no_survivors()` makes the job red the
+   moment a mutant survives (a billing or RLS behavior lost its test). This
+   is the everyday signal and needs nothing beyond the workflow above. The
+   default `verify_baseline=True` also fails the job loudly if the template
+   itself is misconfigured, rather than reporting a false green.
+2. **The dashboard, per run.** The uploaded `mutation-report.html` is a
+   self-contained file you download from the Actions run summary — score,
+   per-target breakdown, survivors with repro commands. `if: always()`
+   ensures it's produced even when the gate fails.
+3. **Score over time.** CI runners are ephemeral, so a trend needs the
+   run artifacts to persist across nights. Options, simplest first:
+   upload-artifact (you get the latest dashboard, no history);
+   `actions/cache` keyed on the runs dir (keeps the trend, occasionally
+   evicted); or commit the JSON artifacts to a dedicated branch (durable
+   history). This cross-run persistence is the piece a hosted tier exists
+   to take over.
 
 To cut per-mutant cost, register a capped Hypothesis profile in the
 suite (`max_examples=25` or so) and select it via `pytest_args` — a
