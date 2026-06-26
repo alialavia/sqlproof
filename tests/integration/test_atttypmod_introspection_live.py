@@ -57,9 +57,8 @@ def test_varchar_modifiers_round_trip(schema_and_dsn) -> None:
     from sqlproof.schema.introspect import introspect_schema
 
     dsn, schema_name = schema_and_dsn
-    with psycopg.connect(dsn) as conn:
-        with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
-            schema = introspect_schema(cur, schema=schema_name)
+    with psycopg.connect(dsn) as conn, conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+        schema = introspect_schema(cur, schema=schema_name)
     col = schema.table("modifier_types", schema=schema_name).column("name")
     assert col.type.name == "varchar"
     assert col.type.modifiers == (50,)
@@ -69,9 +68,8 @@ def test_char_modifiers_round_trip(schema_and_dsn) -> None:
     from sqlproof.schema.introspect import introspect_schema
 
     dsn, schema_name = schema_and_dsn
-    with psycopg.connect(dsn) as conn:
-        with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
-            schema = introspect_schema(cur, schema=schema_name)
+    with psycopg.connect(dsn) as conn, conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+        schema = introspect_schema(cur, schema=schema_name)
     col = schema.table("modifier_types", schema=schema_name).column("code")
     assert col.type.name == "bpchar"
     assert col.type.modifiers == (10,)
@@ -81,9 +79,8 @@ def test_numeric_modifiers_round_trip(schema_and_dsn) -> None:
     from sqlproof.schema.introspect import introspect_schema
 
     dsn, schema_name = schema_and_dsn
-    with psycopg.connect(dsn) as conn:
-        with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
-            schema = introspect_schema(cur, schema=schema_name)
+    with psycopg.connect(dsn) as conn, conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+        schema = introspect_schema(cur, schema=schema_name)
     col = schema.table("modifier_types", schema=schema_name).column("price")
     assert col.type.name == "numeric"
     assert col.type.modifiers == (6, 2)
