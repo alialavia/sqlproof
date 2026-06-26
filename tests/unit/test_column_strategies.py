@@ -84,6 +84,16 @@ def test_numeric_strategy_respects_scale_modifier(data) -> None:
 
 @NON_NULL_KW
 @given(data=st.data())
+def test_numeric_strategy_respects_precision_modifier(data) -> None:
+    # numeric(6,2): max abs value is 9999.99 (4 integer digits + 2 decimal)
+    pg = _scalar("numeric", modifiers=(6, 2))
+    value = data.draw(strategy_for_type(pg))
+    assert isinstance(value, Decimal)
+    assert abs(value) <= Decimal("9999.99")
+
+
+@NON_NULL_KW
+@given(data=st.data())
 def test_real_strategy_yields_finite_floats(data) -> None:
     value = data.draw(strategy_for_type(_scalar("real")))
     assert isinstance(value, float)
