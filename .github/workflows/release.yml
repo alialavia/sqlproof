@@ -35,7 +35,7 @@ jobs:
     env:
       SQLPROOF_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # For workflow_dispatch, check out the tag the operator passed
           # as input. For push events, default behavior checks out the
