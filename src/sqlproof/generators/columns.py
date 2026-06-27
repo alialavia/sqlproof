@@ -79,7 +79,7 @@ def strategy_for_type(pg_type: PgType) -> SearchStrategy[Any]:
     if name in {"varchar", "character varying"}:
         max_size = pg_type.modifiers[0] if pg_type.modifiers else 255
         return _postgres_text(max_size=max_size)
-    if name in {"char", "character"}:
+    if name in {"char", "character", "bpchar"}:
         size = pg_type.modifiers[0] if pg_type.modifiers else 1
         return _postgres_text(min_size=size, max_size=size)
     if name == "uuid":

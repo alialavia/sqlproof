@@ -139,6 +139,16 @@ def test_char_strategy_pads_to_fixed_length(data) -> None:
 
 @NON_NULL_KW
 @given(data=st.data())
+def test_bpchar_strategy_respects_length_modifier(data) -> None:
+    # bpchar is the internal pg_catalog name for char(n); must match the same strategy
+    pg = _scalar("bpchar", modifiers=(10,))
+    value = data.draw(strategy_for_type(pg))
+    assert isinstance(value, str)
+    assert len(value) == 10
+
+
+@NON_NULL_KW
+@given(data=st.data())
 def test_uuid_strategy_yields_parseable_uuid_strings(data) -> None:
     value = data.draw(strategy_for_type(_scalar("uuid")))
     assert isinstance(value, str)

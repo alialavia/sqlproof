@@ -140,7 +140,8 @@ def _underlying_type_name(column: Column) -> str:
 
 def _direct_length_strategy(column: Column, op: str, value: int) -> SearchStrategy[str] | None:
     name = _underlying_type_name(column)
-    if name not in {"text", "citext", "varchar", "character varying", "char", "character"}:
+    if name not in {"text", "citext", "varchar", "character varying", "char", "character",
+                    "bpchar"}:
         return None
     min_size = 0
     max_size = column.type.modifiers[0] if column.type.modifiers else 255
