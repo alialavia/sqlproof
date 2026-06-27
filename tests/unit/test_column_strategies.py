@@ -84,6 +84,16 @@ def test_numeric_strategy_respects_scale_modifier(data) -> None:
 
 @NON_NULL_KW
 @given(data=st.data())
+def test_numeric_strategy_respects_precision_modifier(data) -> None:
+    # numeric(6,2): max abs value is 9999.99 (4 integer digits + 2 decimal)
+    pg = _scalar("numeric", modifiers=(6, 2))
+    value = data.draw(strategy_for_type(pg))
+    assert isinstance(value, Decimal)
+    assert abs(value) <= Decimal("9999.99")
+
+
+@NON_NULL_KW
+@given(data=st.data())
 def test_real_strategy_yields_finite_floats(data) -> None:
     value = data.draw(strategy_for_type(_scalar("real")))
     assert isinstance(value, float)
@@ -125,6 +135,16 @@ def test_char_strategy_pads_to_fixed_length(data) -> None:
     value = data.draw(strategy_for_type(pg))
     assert isinstance(value, str)
     assert len(value) == 4
+
+
+@NON_NULL_KW
+@given(data=st.data())
+def test_bpchar_strategy_respects_length_modifier(data) -> None:
+    # bpchar is the internal pg_catalog name for char(n); must match the same strategy
+    pg = _scalar("bpchar", modifiers=(10,))
+    value = data.draw(strategy_for_type(pg))
+    assert isinstance(value, str)
+    assert len(value) == 10
 
 
 @NON_NULL_KW

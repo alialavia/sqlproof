@@ -55,11 +55,16 @@ def strategy_for_type(pg_type: PgType) -> SearchStrategy[Any]:
     if name in {"bigint", "int8", "bigserial"}:
         return st.integers(-(2**63), 2**63 - 1)
     if name in {"numeric", "decimal"}:
-        places = pg_type.modifiers[1] if len(pg_type.modifiers) > 1 else 2
+        if len(pg_type.modifiers) >= 2:
+            precision, scale = pg_type.modifiers[0], pg_type.modifiers[1]
+            max_abs = Decimal(10) ** (precision - scale) - Decimal(10) ** (-scale)
+        else:
+            scale = 2
+            max_abs = Decimal("1000000")
         return st.decimals(
-            min_value=Decimal("-1000000"),
-            max_value=Decimal("1000000"),
-            places=places,
+            min_value=-max_abs,
+            max_value=max_abs,
+            places=scale,
             allow_nan=False,
             allow_infinity=False,
         )
@@ -74,7 +79,7 @@ def strategy_for_type(pg_type: PgType) -> SearchStrategy[Any]:
     if name in {"varchar", "character varying"}:
         max_size = pg_type.modifiers[0] if pg_type.modifiers else 255
         return _postgres_text(max_size=max_size)
-    if name in {"char", "character"}:
+    if name in {"char", "character", "bpchar"}:
         size = pg_type.modifiers[0] if pg_type.modifiers else 1
         return _postgres_text(min_size=size, max_size=size)
     if name == "uuid":
