@@ -124,3 +124,74 @@ def test_load_is_linear_enough_to_reach_scale(conn):
     start = time.perf_counter()
     load_dataset(conn, schema, {"customers": 500, "orders": 50_000}, seed=1)
     assert time.perf_counter() - start < 60
+
+
+DOCS_SCHEMA_SQL = """
+CREATE TABLE docs (
+  id bigint PRIMARY KEY,
+  payload jsonb,
+  meta json
+);
+"""
+
+
+def test_nullable_json_columns_load_as_real_sql_null_not_json_null(conn):
+    """Regression for a bug the review caught: `_adapt_insert_value`
+    used to wrap every value in `Jsonb`/`Json`, including `None`,
+    which psycopg serializes to the jsonb/json *scalar* `null` -- a
+    real, non-NULL value for which `IS NULL` is false. Every row
+    where the generator drew `None` for a nullable json/jsonb column
+    was silently landing as `'null'::jsonb`/`'null'::json` instead of
+    SQL `NULL`.
+
+    Must assert with `IS NULL` / `::text` in SQL, not by reading the
+    value back into Python: psycopg deserializes both a real SQL
+    `NULL` and the jsonb scalar `null` to Python `None` on the way
+    out, so comparing Python values round-trips right past the bug --
+    which is exactly how it went unnoticed the first time.
+    """
+    conn.execute(DOCS_SCHEMA_SQL)
+    schema = parse_schema_sql(DOCS_SCHEMA_SQL, schema="bulk_test")
+    load_dataset(conn, schema, {"docs": 500}, seed=1, null_frac=0.5)
+
+    payload_null_literal = conn.execute(
+        "SELECT count(*) FROM bulk_test.docs "
+        "WHERE payload IS NOT NULL AND payload::text = 'null'"
+    ).fetchone()[0]
+    meta_null_literal = conn.execute(
+        "SELECT count(*) FROM bulk_test.docs "
+        "WHERE meta IS NOT NULL AND meta::text = 'null'"
+    ).fetchone()[0]
+    assert payload_null_literal == 0
+    assert meta_null_literal == 0
+
+    # null_frac=0.5 over 500 rows: some real SQL NULLs must actually
+    # appear, or this test would trivially pass by never exercising
+    # the None branch at all.
+    payload_sql_nulls = conn.execute(
+        "SELECT count(*) FROM bulk_test.docs WHERE payload IS NULL"
+    ).fetchone()[0]
+    meta_sql_nulls = conn.execute(
+        "SELECT count(*) FROM bulk_test.docs WHERE meta IS NULL"
+    ).fetchone()[0]
+    assert payload_sql_nulls > 0
+    assert meta_sql_nulls > 0
+
+
+def test_nonnull_json_columns_round_trip_real_objects(conn):
+    """Complement to the null-handling regression: with null_frac=0,
+    every row's jsonb/json value must be an actual object -- not
+    merely "not the literal 'null'" -- confirming the Jsonb/Json
+    wrapping still runs for real values after the None short-circuit."""
+    conn.execute(DOCS_SCHEMA_SQL)
+    schema = parse_schema_sql(DOCS_SCHEMA_SQL, schema="bulk_test")
+    load_dataset(conn, schema, {"docs": 50}, seed=1, null_frac=0.0)
+
+    payload_objects = conn.execute(
+        "SELECT count(*) FROM bulk_test.docs WHERE jsonb_typeof(payload) = 'object'"
+    ).fetchone()[0]
+    meta_objects = conn.execute(
+        "SELECT count(*) FROM bulk_test.docs WHERE json_typeof(meta) = 'object'"
+    ).fetchone()[0]
+    assert payload_objects == 50
+    assert meta_objects == 50
