@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Literal
 
 from sqlproof.exceptions import SqlProofSchemaError
@@ -48,6 +49,17 @@ def _int(lo: int, hi: int) -> Callable[[PgType], TypeSpec]:
 
 
 def _numeric(t: PgType) -> TypeSpec:
+    # `numeric(p, s)` admits values with at most `p - s` integer digits, so
+    # the largest legal magnitude is 10^(p-s) minus one unit in the last
+    # place. Without this cap the generator happily draws values Postgres
+    # rejects with "numeric field overflow" — see #85 / #91.
+    #
+    # A bare `numeric` declares no precision, so there is nothing to cap
+    # against and we fall back to a broad-but-bounded range.
+    if len(t.modifiers) >= 2:
+        precision, scale = t.modifiers[0], t.modifiers[1]
+        max_abs = Decimal(10) ** (precision - scale) - Decimal(10) ** (-scale)
+        return TypeSpec(kind="decimal", min_value=-max_abs, max_value=max_abs, places=scale)
     places = t.modifiers[1] if len(t.modifiers) > 1 else 2
     return TypeSpec(kind="decimal", min_value=-1_000_000, max_value=1_000_000, places=places)
 
@@ -102,6 +114,9 @@ TYPE_SPEC_BUILDERS: dict[str, Callable[[PgType], TypeSpec]] = {
     "character varying": _varchar,
     "char": _char,
     "character": _char,
+    # `bpchar` is the internal name Postgres reports for `char(n)` through
+    # introspection, so it must map to the same fixed-width builder.
+    "bpchar": _char,
     "uuid": lambda _t: TypeSpec(kind="uuid"),
     "timestamp": _timestamp,
     "timestamp without time zone": _timestamp,
