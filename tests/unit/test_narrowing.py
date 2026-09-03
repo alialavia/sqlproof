@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import random
+from decimal import Decimal
+
+from sqlproof.generators.bulk import sampler_for_spec
 from sqlproof.generators.narrowing import narrow_spec_for_checks
 from sqlproof.generators.typespec import spec_for_type
 from sqlproof.schema.model import CheckConstraint, Column, PgType
@@ -148,7 +152,8 @@ def test_any_array_narrows_to_enum():
         (CheckConstraint(expression="priority = ANY(ARRAY[1, 2, 3, 5, 8])"),),
     )
     assert spec.kind == "enum"
-    assert set(spec.enum_values) == {"1", "2", "3", "5", "8"}
+    assert set(spec.enum_values) == {1, 2, 3, 5, 8}
+    assert all(isinstance(v, int) for v in spec.enum_values)
 
 
 def test_in_set_strips_type_cast_and_unescapes_quotes():
@@ -225,12 +230,84 @@ def test_decimal_le_with_negative_fractional_literal_uses_floor_not_truncation()
     assert spec.max_value == -1
 
 
-def test_decimal_strict_gt_does_not_step_the_bound_by_one():
-    """Unlike the integer case, a decimal spec's strict `>` keeps the
-    rounded bound as-is -- there's no meaningful "next" decimal to
-    step to at this TypeSpec's whole-number granularity."""
+def test_decimal_strict_gt_steps_the_bound_like_integers_do():
+    """`min_value`/`max_value` are typed `int | None`, so an exclusive
+    decimal bound has no exact representation -- there's no int
+    "just above 1". Not stepping (the brief's original behaviour)
+    leaves `min_value == 1`, which is exactly the forbidden endpoint:
+    a decimal sampler quantising a continuous draw to `places` can and
+    does land exactly on a whole-number bound often enough to matter
+    (see `test_decimal_strict_bound_draws_never_hit_the_forbidden_endpoint`,
+    which caught this against the real sampler). Stepping by a whole 1,
+    the same as the integer case, over-narrows (losing 1.0001-1.9999)
+    but can never admit 1 itself."""
     col = _col("rate", "numeric", modifiers=(10, 4))
     spec = narrow_spec_for_checks(
         spec_for_type(col.type), col, (CheckConstraint(expression="rate > 1"),)
     )
-    assert spec.min_value == 1
+    assert spec.min_value == 2
+
+
+def test_decimal_strict_lt_steps_the_bound_like_integers_do():
+    col = _col("rate", "numeric", modifiers=(10, 4))
+    spec = narrow_spec_for_checks(
+        spec_for_type(col.type), col, (CheckConstraint(expression="rate < 5"),)
+    )
+    assert spec.max_value == 4
+
+
+def test_decimal_strict_bound_draws_never_hit_the_forbidden_endpoint():
+    """Regression for the actual bug: run the real `bulk.py` decimal
+    sampler (not just inspect the narrowed spec) against a `rate > 1`
+    CHECK and confirm none of many draws round-trips to exactly
+    `Decimal("1.0000")`. Before the fix, `min_value` stayed at 1 and
+    this failed roughly 1 in 10,000 draws (quantising a continuous
+    draw near the boundary snaps it onto the boundary)."""
+    col = _col("rate", "numeric", modifiers=(10, 4))
+    spec = narrow_spec_for_checks(
+        spec_for_type(col.type), col, (CheckConstraint(expression="rate > 1"),)
+    )
+    rng = random.Random(20260903)
+    sampler = sampler_for_spec(spec, rng)
+    draws = [sampler() for _ in range(20_000)]
+    assert Decimal("1.0000") not in draws
+
+
+def test_integer_in_set_yields_ints_not_strings():
+    """`qty IN (1, 2, 3)` on an INTEGER column must produce `int`
+    values, not the strings a naive literal parse would give -- both
+    interpreters hand `enum_values` straight to a sampler with no
+    coercion, and a Python `str` fed to an integer column fails at
+    insert time."""
+    col = _col("priority", "integer")
+    spec = narrow_spec_for_checks(
+        spec_for_type(col.type),
+        col,
+        (CheckConstraint(expression="priority IN (1, 2, 3)"),),
+    )
+    assert spec.enum_values == (1, 2, 3)
+    assert all(isinstance(v, int) and not isinstance(v, bool) for v in spec.enum_values)
+
+
+def test_decimal_in_set_yields_decimals_not_strings():
+    col = _col("rate", "numeric", modifiers=(10, 4))
+    spec = narrow_spec_for_checks(
+        spec_for_type(col.type),
+        col,
+        (CheckConstraint(expression="rate IN (1.5, 2.5)"),),
+    )
+    assert set(spec.enum_values) == {Decimal("1.5"), Decimal("2.5")}
+    assert all(isinstance(v, Decimal) for v in spec.enum_values)
+
+
+def test_text_in_set_still_yields_strings():
+    """The enum-value coercion must not disturb the already-passing
+    text case: a genuine Postgres enum's labels, and a text column's
+    IN-list, both legitimately stay `str`."""
+    col = _col("tier", "text")
+    spec = narrow_spec_for_checks(
+        spec_for_type(col.type),
+        col,
+        (CheckConstraint(expression="tier IN ('free', 'pro')"),),
+    )
+    assert all(isinstance(v, str) for v in spec.enum_values)

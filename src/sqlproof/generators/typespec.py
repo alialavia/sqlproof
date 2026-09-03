@@ -16,7 +16,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Literal
+from typing import Any, Literal
 
 from sqlproof.exceptions import SqlProofSchemaError
 from sqlproof.schema.model import Column, PgType
@@ -37,7 +37,13 @@ class TypeSpec:
     min_size: int | None = None
     max_size: int | None = None
     float_width: int | None = None
-    enum_values: tuple[str, ...] = ()
+    # A genuine Postgres enum's labels are always `str`. A CHECK-
+    # narrowed IN-list/ANY(ARRAY[...]) on a non-text column carries
+    # values coerced to that column's own kind instead (`int` for an
+    # integer column, `Decimal` for a decimal one) -- both interpreters
+    # hand these to a sampler with no further coercion, so the type
+    # here has to already match what the target column accepts.
+    enum_values: tuple[Any, ...] = ()
     dimension: int | None = None
     element: TypeSpec | None = None
     fields: tuple[tuple[str, TypeSpec], ...] = ()

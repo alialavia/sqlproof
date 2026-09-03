@@ -22,7 +22,8 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import replace
-from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
+from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal, InvalidOperation
+from typing import Any
 
 from sqlproof.generators.typespec import SpecKind, TypeSpec
 from sqlproof.schema.model import CheckConstraint, Column
@@ -61,7 +62,8 @@ def _narrow_one(spec: TypeSpec, column: Column, expression: str) -> TypeSpec:
 
     in_set = re.fullmatch(rf"{name}\s+IN\s*\((?P<values>.+)\)", body, re.IGNORECASE)
     if in_set is not None:
-        return TypeSpec(kind="enum", enum_values=_literals(in_set.group("values")))
+        values = _literals(in_set.group("values"), spec.kind)
+        return TypeSpec(kind="enum", enum_values=values)
 
     any_array = re.fullmatch(
         rf"\(?\s*{name}\s*=\s*ANY\s*\(\s*ARRAY\[(?P<values>.+)\]\s*\)\s*\)?",
@@ -69,7 +71,8 @@ def _narrow_one(spec: TypeSpec, column: Column, expression: str) -> TypeSpec:
         re.IGNORECASE,
     )
     if any_array is not None:
-        return TypeSpec(kind="enum", enum_values=_literals(any_array.group("values")))
+        values = _literals(any_array.group("values"), spec.kind)
+        return TypeSpec(kind="enum", enum_values=values)
 
     length = re.fullmatch(
         rf"(?:char_length|length)\s*\(\s*{name}\s*\)\s*"
@@ -98,8 +101,8 @@ def _normalize_check_expression(expression: str) -> str:
     return value
 
 
-def _literals(raw_values: str) -> tuple[str, ...]:
-    return tuple(_literal(v) for v in raw_values.split(","))
+def _literals(raw_values: str, kind: SpecKind) -> tuple[Any, ...]:
+    return tuple(_coerce(_literal(v), kind) for v in raw_values.split(","))
 
 
 def _literal(raw: str) -> str:
@@ -107,6 +110,31 @@ def _literal(raw: str) -> str:
     if len(token) >= 2 and token.startswith("'") and token.endswith("'"):
         return token[1:-1].replace("''", "'")
     return token
+
+
+def _coerce(literal: str, kind: SpecKind) -> Any:
+    # `enum_values` is what a sampler draws from verbatim (no coercion
+    # downstream in either interpreter) and gets handed straight to
+    # COPY/INSERT, so a value narrowed off an integer or decimal
+    # column has to already be the right Python type -- a bare string
+    # "1" inserted into an integer column fails there, not here. A
+    # genuine Postgres enum's labels (spec.kind == "enum" before this
+    # narrowing runs) are untouched, since those are legitimately
+    # strings. If a literal doesn't actually parse as the target kind
+    # (a malformed or unexpected CHECK), fall back to the raw string
+    # rather than raising -- best-effort, matching the rest of this
+    # module.
+    if kind == "integer":
+        try:
+            return int(literal)
+        except ValueError:
+            return literal
+    if kind == "decimal":
+        try:
+            return Decimal(literal)
+        except InvalidOperation:
+            return literal
+    return literal
 
 
 def _narrow_length(spec: TypeSpec, op: str, n: int) -> TypeSpec:
@@ -141,30 +169,33 @@ def _tighten(
 def _narrow_bound(spec: TypeSpec, op: str, value: Decimal) -> TypeSpec:
     assert spec.min_value is not None and spec.max_value is not None
     if op in (">=", ">"):
-        lo = _lower_bound(value, op, spec.kind)
+        lo = _lower_bound(value, op)
         return replace(spec, min_value=max(spec.min_value, lo))
-    hi = _upper_bound(value, op, spec.kind)
+    hi = _upper_bound(value, op)
     return replace(spec, max_value=min(spec.max_value, hi))
 
 
-def _lower_bound(value: Decimal, op: str, kind: SpecKind) -> int:
+def _lower_bound(value: Decimal, op: str) -> int:
     # Bounds on both integer and decimal specs are stored as plain
     # ints (a decimal spec's `min_value`/`max_value` are the whole-
     # number ends of its range; `places` only controls the precision
-    # of *drawn* values). A fractional CHECK literal therefore has to
-    # be rounded to an int -- rounding up for a lower bound is the
-    # only direction that can't admit a value the CHECK forbids.
-    #
-    # Integers step by one at a strict `>`; decimals keep the
-    # ceiling-rounded bound as-is and rely on the sampler's
-    # quantisation, which cannot land exactly on a whole-number bound
-    # often enough to matter (see `_upper_bound`).
-    if op == ">" and kind == "integer":
+    # of *drawn* values), so an exclusive bound can't be represented
+    # at its true, infinitesimally-offset position -- there is no
+    # in-between int. Stepping the rounded bound by a whole 1 for a
+    # strict `>`, on *both* kinds, over-narrows (`rate > 1` starts at
+    # 2, losing the real 1.0001-1.9999 that the CHECK does allow) but
+    # can never admit a value the CHECK forbids. Not stepping would do
+    # the reverse: a decimal sampler's quantisation reproduces whole
+    # numbers often enough that leaving the bound at the literal
+    # itself lets it draw the excluded endpoint outright. Over-
+    # narrowing costs coverage; under-narrowing produces data Postgres
+    # rejects -- take the safe side.
+    if op == ">":
         return int(value.to_integral_value(rounding=ROUND_FLOOR)) + 1
     return int(value.to_integral_value(rounding=ROUND_CEILING))
 
 
-def _upper_bound(value: Decimal, op: str, kind: SpecKind) -> int:
-    if op == "<" and kind == "integer":
+def _upper_bound(value: Decimal, op: str) -> int:
+    if op == "<":
         return int(value.to_integral_value(rounding=ROUND_CEILING)) - 1
     return int(value.to_integral_value(rounding=ROUND_FLOOR))
