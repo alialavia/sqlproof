@@ -31,20 +31,6 @@ def test_check_constrained_column_is_in_range_by_construction():
     assert all(r["qty"] >= 0 for r in rows)
 
 
-def test_composite_primary_key_raises_rather_than_generating_bad_data():
-    import pytest
-
-    from sqlproof.exceptions import SqlProofGenerationError
-
-    schema = parse_schema_sql(
-        "CREATE TABLE m (a bigint, b bigint, PRIMARY KEY (a, b));"
-    )
-    with pytest.raises(SqlProofGenerationError, match="composite primary key"):
-        list(bulk_table_rows(
-            schema.table("m"), count=5, rng=random.Random(1), parent_counts={},
-        ))
-
-
 def test_primary_keys_match_the_shared_assignment_function():
     schema = parse_schema_sql(SCHEMA)
     rows = list(

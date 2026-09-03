@@ -224,6 +224,53 @@ def parent_index_for(
     return rng.randrange(parent_count)
 
 
+def composite_key_values(
+    table: Table,
+    index: int,
+    parent_counts: Mapping[str, int] | None = None,
+) -> dict[str, Any]:
+    """Assign the `index`-th distinct composite key for `table`.
+
+    Mixed-radix decomposition of the row index. Where a key column is
+    also a foreign key, its radix is the parent's row count so the value
+    is always a live parent key; otherwise the radix is unbounded and the
+    column simply counts.
+
+    Collision-free by construction, so no seen-set and no retry loop --
+    which is what keeps this O(1) per row.
+    """
+    parent_counts = parent_counts or {}
+    remaining = index
+    values: dict[str, Any] = {}
+    # Least-significant column last, so the first key column varies slowest.
+    for name in reversed(table.primary_key):
+        column = table.column(name)
+        fk = _foreign_key_for_column(table, name)
+        radix = parent_counts.get(fk.referenced_table, 0) if fk is not None else 0
+        if radix > 0:
+            position = remaining % radix
+            remaining //= radix
+        else:
+            position = remaining
+            remaining = 0
+        values[name] = _unique_value(name, column.type.name, position)
+    return values
+
+
+def _composite_key_space(table: Table, parent_counts: Mapping[str, int]) -> int | None:
+    """Number of distinct composite keys available, or None if unbounded."""
+    space = 1
+    for name in table.primary_key:
+        fk = _foreign_key_for_column(table, name)
+        if fk is None:
+            return None  # a non-FK key column can count without limit
+        radix = parent_counts.get(fk.referenced_table, 0)
+        if radix <= 0:
+            return 0
+        space *= radix
+    return space
+
+
 def bulk_table_rows(
     table: Table,
     *,
@@ -240,19 +287,27 @@ def bulk_table_rows(
     `_unique_value` the Hypothesis path uses, so both paths produce
     identical keys. That is what lets a foreign key be satisfied by
     arithmetic -- the parent list never has to exist in memory.
-    """
-    if len(table.primary_key) > 1:
-        msg = (
-            f"Bulk generation does not yet support composite primary keys "
-            f"({table.name} has {table.primary_key}). Use the Hypothesis "
-            f"path, or see the composite-key task."
-        )
-        raise SqlProofGenerationError(msg)
 
-    single_pk = table.primary_key[0] if table.primary_key else None
+    Composite primary keys are assigned the same way, via
+    `composite_key_values`: a mixed-radix decomposition of the row
+    index rather than a single `_unique_value` call, so no seen-set is
+    needed to keep them collision-free.
+    """
+    composite_pk = len(table.primary_key) > 1
+    if composite_pk:
+        space = _composite_key_space(table, parent_counts)
+        if space is not None and space < count:
+            msg = (
+                f"Cannot generate {count} rows for {table.name}: only {space} "
+                f"distinct composite keys exist for primary key "
+                f"{table.primary_key} at the given parent sizes."
+            )
+            raise SqlProofGenerationError(msg)
+
+    single_pk = table.primary_key[0] if len(table.primary_key) == 1 else None
     samplers: dict[str, Callable[[], Any]] = {}
     for column in table.columns:
-        if column.name == single_pk or column.is_generated:
+        if column.name in table.primary_key or column.is_generated:
             continue
         if column.default is not None:
             continue
@@ -278,8 +333,12 @@ def bulk_table_rows(
 
     for index in range(count):
         row: dict[str, Any] = {}
+        key_values = composite_key_values(table, index, parent_counts) if composite_pk else {}
         for column in table.columns:
             name = column.name
+            if name in key_values:
+                row[name] = key_values[name]
+                continue
             if name == single_pk:
                 row[name] = _unique_value(name, column.type.name, index)
                 continue
