@@ -233,20 +233,52 @@ def composite_key_values(
 
     Mixed-radix decomposition of the row index. Where a key column is
     also a foreign key, its radix is the parent's row count so the value
-    is always a live parent key; otherwise the radix is unbounded and the
-    column simply counts.
+    is always a live parent key; a key column that is not a foreign key
+    has no natural radix, so it is unbounded and simply counts.
 
     Collision-free by construction, so no seen-set and no retry loop --
     which is what keeps this O(1) per row.
+
+    Bounded (FK-backed) columns are assigned their digit BEFORE the one
+    unbounded column, regardless of declaration order in the primary
+    key. This must be independent of declaration order: an unbounded
+    column always absorbs whatever remains, so if it were processed
+    before a bounded sibling, that sibling would be left with `0 %
+    radix == 0` on every row -- pinned to a single parent forever
+    (e.g. `PRIMARY KEY (org_id, seq)` with `org_id` a foreign key and
+    `seq` a plain counter: every row would get the same `org_id`).
+    Processing bounded columns first, unconditionally, is what keeps
+    the assignment correct no matter which order the columns were
+    declared in.
     """
     parent_counts = parent_counts or {}
+    fk_names: list[str] = []
+    unbounded_names: list[str] = []
+    for name in table.primary_key:
+        if _foreign_key_for_column(table, name) is not None:
+            fk_names.append(name)
+        else:
+            unbounded_names.append(name)
+    if len(unbounded_names) > 1:
+        msg = (
+            f"Cannot assign a composite primary key for {table.name}: "
+            f"columns {tuple(unbounded_names)} of primary key "
+            f"{table.primary_key} are not foreign keys, so none has a "
+            f"natural radix. At most one non-foreign-key column is "
+            f"supported in a composite primary key."
+        )
+        raise SqlProofGenerationError(msg)
+
     remaining = index
     values: dict[str, Any] = {}
-    # Least-significant column last, so the first key column varies slowest.
-    for name in reversed(table.primary_key):
+    # Order among the bounded columns themselves doesn't affect
+    # correctness (any consistent order stays collision-free) -- only
+    # last-vs-not-last relative to the unbounded column does.
+    for name in reversed(fk_names):
         column = table.column(name)
         fk = _foreign_key_for_column(table, name)
-        radix = parent_counts.get(fk.referenced_table, 0) if fk is not None else 0
+        assert fk is not None  # fk_names is exactly the FK-backed columns
+        radix = parent_counts.get(fk.referenced_table, 0)
         if radix > 0:
             position = remaining % radix
             remaining //= radix
@@ -254,6 +286,10 @@ def composite_key_values(
             position = remaining
             remaining = 0
         values[name] = _unique_value(name, column.type.name, position)
+    for name in unbounded_names:
+        column = table.column(name)
+        values[name] = _unique_value(name, column.type.name, remaining)
+        remaining = 0
     return values
 
 

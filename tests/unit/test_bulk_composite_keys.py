@@ -16,6 +16,25 @@ CREATE TABLE org_members (
 );
 """
 
+# A composite PK with exactly one FK-backed column and one plain
+# counter column -- the shape that exposed the declaration-order bug
+# (Fix round 1). Declared both ways so the fix can be checked for
+# order-independence: `org_events` has the FK column declared first,
+# `org_events_seq_first` has it declared last.
+MIXED_SCHEMA = """
+CREATE TABLE orgs (id bigint PRIMARY KEY);
+CREATE TABLE org_events (
+  org_id bigint NOT NULL REFERENCES orgs(id),
+  seq bigint NOT NULL,
+  PRIMARY KEY (org_id, seq)
+);
+CREATE TABLE org_events_seq_first (
+  org_id bigint NOT NULL REFERENCES orgs(id),
+  seq bigint NOT NULL,
+  PRIMARY KEY (seq, org_id)
+);
+"""
+
 
 def test_composite_keys_are_unique_across_rows():
     schema = parse_schema_sql(SCHEMA)
@@ -64,4 +83,59 @@ def test_requested_count_exceeding_the_key_space_raises():
         list(bulk_table_rows(
             schema.table("org_members"), count=50,
             rng=random.Random(1), parent_counts={"orgs": 3, "users": 3},
+        ))
+
+
+def test_fk_column_reaches_all_parents_when_declared_first():
+    """PRIMARY KEY (org_id, seq) -- the FK column declared first."""
+    schema = parse_schema_sql(MIXED_SCHEMA)
+    rows = list(
+        bulk_table_rows(
+            schema.table("org_events"), count=1000,
+            rng=random.Random(1), parent_counts={"orgs": 50},
+        )
+    )
+    assert len(rows) == 1000
+    assert {r["org_id"] for r in rows} == set(range(1, 51))
+    assert len({(r["org_id"], r["seq"]) for r in rows}) == 1000
+
+
+def test_fk_column_reaches_all_parents_when_declared_last():
+    """PRIMARY KEY (seq, org_id) -- the FK column declared last.
+
+    Before Fix round 1, the last-declared column absorbed the entire
+    row index and every earlier column was pinned to a single value.
+    Declaring org_id last used to pin it to parent #1 for the whole
+    table; the fix must make this order-independent.
+    """
+    schema = parse_schema_sql(MIXED_SCHEMA)
+    rows = list(
+        bulk_table_rows(
+            schema.table("org_events_seq_first"), count=1000,
+            rng=random.Random(1), parent_counts={"orgs": 50},
+        )
+    )
+    assert len(rows) == 1000
+    assert {r["org_id"] for r in rows} == set(range(1, 51))
+    assert len({(r["org_id"], r["seq"]) for r in rows}) == 1000
+
+
+def test_two_non_foreign_key_composite_columns_raises():
+    import pytest
+
+    from sqlproof.exceptions import SqlProofGenerationError
+
+    schema = parse_schema_sql(
+        "CREATE TABLE m (a bigint NOT NULL, b bigint NOT NULL, PRIMARY KEY (a, b));"
+    )
+    table = schema.table("m")
+    with pytest.raises(SqlProofGenerationError, match="not foreign keys"):
+        composite_key_values(table, 0)
+    # bulk_table_rows must fail the same way instead of silently
+    # misassigning -- the space check can't catch this case (neither
+    # column has a radix to bound), so it must surface once rows are
+    # actually requested.
+    with pytest.raises(SqlProofGenerationError, match="not foreign keys"):
+        list(bulk_table_rows(
+            table, count=5, rng=random.Random(1), parent_counts={},
         ))
