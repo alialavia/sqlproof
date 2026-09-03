@@ -44,15 +44,36 @@ _EPOCH_DATE = date(2000, 1, 1)
 def sampler_for_spec(spec: TypeSpec, rng: random.Random) -> Callable[[], Any]:
     kind = spec.kind
     if kind == "integer":
-        lo, hi = spec.min_value or 0, spec.max_value or 0
+        # An integer spec's bounds are always plain `int` -- only a
+        # decimal spec's can be `Decimal` (see typespec.py) -- so this
+        # cast is just narrowing the field's static type, not a
+        # runtime conversion of anything unusual.
+        lo = int(spec.min_value or 0)
+        hi = int(spec.max_value or 0)
         return lambda: rng.randint(lo, hi)
     if kind == "decimal":
-        lo, hi = spec.min_value or 0, spec.max_value or 0
+        # `min_value`/`max_value` may now be `Decimal` -- narrowing.py
+        # represents an exclusive bound (`rate > 1`) as one unit in
+        # the last place off the literal, e.g. `Decimal("1.0001")`,
+        # which an `int` can't hold. `random.uniform` needs floats
+        # (Decimal doesn't support arithmetic with the float `random()`
+        # returns), so convert once here -- but float(Decimal(...)) can
+        # round a hair outside the original bound, and the whole point
+        # of an exclusive bound is that it's respected exactly. Keep
+        # the precise Decimal bounds too, and clamp each quantised
+        # draw back into them.
+        lo_dec = Decimal(spec.min_value or 0)
+        hi_dec = Decimal(spec.max_value or 0)
+        lo_f = float(lo_dec)
+        hi_f = float(hi_dec)
         places = spec.places if spec.places is not None else 2
         quant = Decimal(1).scaleb(-places)
-        return lambda: (
-            Decimal(rng.uniform(lo, hi)).quantize(quant)
-        )
+
+        def draw_decimal() -> Decimal:
+            value = Decimal(rng.uniform(lo_f, hi_f)).quantize(quant)
+            return min(max(value, lo_dec), hi_dec)
+
+        return draw_decimal
     if kind == "float":
         return lambda: rng.uniform(-1e6, 1e6)
     if kind == "boolean":

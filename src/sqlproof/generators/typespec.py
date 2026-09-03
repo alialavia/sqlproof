@@ -31,8 +31,16 @@ SpecKind = Literal[
 @dataclass(frozen=True, slots=True)
 class TypeSpec:
     kind: SpecKind
-    min_value: int | None = None
-    max_value: int | None = None
+    # Plain `int` for an integer spec. A decimal spec's bounds are
+    # `int` too until narrowed by an exclusive CHECK (`rate > 1`) --
+    # narrowing.py then needs to represent a bound that sits one unit
+    # in the last place off a literal (e.g. `Decimal("1.0001")` at
+    # scale 4), which an `int` field cannot hold without rounding away
+    # the whole point of the narrowing. Both interpreters already
+    # accept a `Decimal` here (columns.py wraps in `Decimal(...)`
+    # regardless; bulk.py converts to `float` for `random.uniform`).
+    min_value: int | Decimal | None = None
+    max_value: int | Decimal | None = None
     places: int | None = None
     min_size: int | None = None
     max_size: int | None = None

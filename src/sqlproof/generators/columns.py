@@ -33,7 +33,10 @@ def strategy_for_type(pg_type: PgType) -> SearchStrategy[Any]:
 def strategy_for_spec(spec: TypeSpec) -> SearchStrategy[Any]:
     if spec.kind == "integer":
         assert spec.min_value is not None and spec.max_value is not None
-        return st.integers(spec.min_value, spec.max_value)
+        # An integer spec's bounds are always plain `int` -- only a
+        # decimal spec's can be `Decimal` (see typespec.py) -- so this
+        # cast just narrows the field's static type.
+        return st.integers(int(spec.min_value), int(spec.max_value))
     if spec.kind == "decimal":
         return st.decimals(
             min_value=Decimal(spec.min_value or 0),

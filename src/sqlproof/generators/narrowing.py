@@ -168,34 +168,62 @@ def _tighten(
 
 def _narrow_bound(spec: TypeSpec, op: str, value: Decimal) -> TypeSpec:
     assert spec.min_value is not None and spec.max_value is not None
+    if spec.kind == "integer":
+        return _narrow_integer_bound(spec, op, value)
+    return _narrow_decimal_bound(spec, op, value)
+
+
+def _narrow_integer_bound(spec: TypeSpec, op: str, value: Decimal) -> TypeSpec:
+    # An integer spec's bounds are, and must stay, plain `int` --
+    # there's no representable value between two consecutive integers,
+    # so an exclusive bound steps by a whole 1.
+    assert spec.min_value is not None and spec.max_value is not None
     if op in (">=", ">"):
-        lo = _lower_bound(value, op)
-        return replace(spec, min_value=max(spec.min_value, lo))
-    hi = _upper_bound(value, op)
-    return replace(spec, max_value=min(spec.max_value, hi))
+        int_lo = _int_lower_bound(value, op)
+        return replace(spec, min_value=max(int(spec.min_value), int_lo))
+    int_hi = _int_upper_bound(value, op)
+    return replace(spec, max_value=min(int(spec.max_value), int_hi))
 
 
-def _lower_bound(value: Decimal, op: str) -> int:
-    # Bounds on both integer and decimal specs are stored as plain
-    # ints (a decimal spec's `min_value`/`max_value` are the whole-
-    # number ends of its range; `places` only controls the precision
-    # of *drawn* values), so an exclusive bound can't be represented
-    # at its true, infinitesimally-offset position -- there is no
-    # in-between int. Stepping the rounded bound by a whole 1 for a
-    # strict `>`, on *both* kinds, over-narrows (`rate > 1` starts at
-    # 2, losing the real 1.0001-1.9999 that the CHECK does allow) but
-    # can never admit a value the CHECK forbids. Not stepping would do
-    # the reverse: a decimal sampler's quantisation reproduces whole
-    # numbers often enough that leaving the bound at the literal
-    # itself lets it draw the excluded endpoint outright. Over-
-    # narrowing costs coverage; under-narrowing produces data Postgres
-    # rejects -- take the safe side.
+def _narrow_decimal_bound(spec: TypeSpec, op: str, value: Decimal) -> TypeSpec:
+    # Unlike an integer spec, a decimal spec's `min_value`/`max_value`
+    # can hold a `Decimal` (see typespec.py), so a non-strict bound
+    # needs no rounding at all -- it's just the literal. A strict
+    # bound steps by one unit in the last place at the spec's own
+    # scale (`Decimal("1.0001")` at scale 4 for `rate > 1`), the
+    # smallest step that can't admit the literal itself. A whole-1
+    # step (the integer treatment) would over-narrow every strict
+    # decimal bound for no reason, and composing two of them close
+    # together (e.g. `1 < rate < 2`) would invert min/max into an
+    # empty range that nothing downstream checks for.
+    assert spec.min_value is not None and spec.max_value is not None
+    if op in (">=", ">"):
+        dec_lo = value if op == ">=" else value + _decimal_ulp(spec.places)
+        return replace(spec, min_value=max(Decimal(spec.min_value), dec_lo))
+    dec_hi = value if op == "<=" else value - _decimal_ulp(spec.places)
+    return replace(spec, max_value=min(Decimal(spec.max_value), dec_hi))
+
+
+def _int_lower_bound(value: Decimal, op: str) -> int:
     if op == ">":
         return int(value.to_integral_value(rounding=ROUND_FLOOR)) + 1
     return int(value.to_integral_value(rounding=ROUND_CEILING))
 
 
-def _upper_bound(value: Decimal, op: str) -> int:
+def _int_upper_bound(value: Decimal, op: str) -> int:
     if op == "<":
         return int(value.to_integral_value(rounding=ROUND_CEILING)) - 1
     return int(value.to_integral_value(rounding=ROUND_FLOOR))
+
+
+def _decimal_ulp(places: int | None) -> Decimal:
+    # One unit in the last place at the spec's declared scale -- the
+    # smallest step that moves a decimal bound strictly past the
+    # literal without overshooting it. `places` is normally set (the
+    # `numeric` builder in typespec.py defaults it to 2), but a
+    # defensively-constructed spec could carry no scale at all; with
+    # no unit to step by, fall back to the old whole-1 step for that
+    # case only -- over-narrow rather than guess a precision.
+    if places is None:
+        return Decimal(1)
+    return Decimal(1).scaleb(-places)
