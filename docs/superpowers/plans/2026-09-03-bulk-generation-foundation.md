@@ -31,6 +31,7 @@
 |---|---|
 | `src/sqlproof/generators/typespec.py` (new) | `TypeSpec` dataclass, the name→spec registry, `spec_for_type`. Pure data; no Hypothesis, no RNG, no DB. |
 | `src/sqlproof/generators/columns.py` (modify) | Becomes the Hypothesis *interpreter* of `TypeSpec`. Keeps its public functions as wrappers. |
+| `src/sqlproof/generators/narrowing.py` (new) | Narrows a `TypeSpec` using a column's CHECK constraints. Shared by both interpreters, so neither re-derives what a CHECK implies. |
 | `src/sqlproof/generators/bulk.py` (new) | The bulk *interpreter*: seeded samplers, plus streaming row generation with deterministic keys and skew. |
 | `src/sqlproof/generators/rows.py` (modify) | Hoist loop-invariant strategy construction out of the per-row loop. |
 | `src/sqlproof/testing.py` (modify) | Build out `schemas()` into a real schema strategy. |
@@ -951,14 +952,242 @@ git commit -m "test(generators): assert both interpreters cover the whole regist
 
 ---
 
-### Task 6: Streaming bulk row generation with deterministic keys and skew
+### Task 6: Shared CHECK-constraint narrowing
+
+`constraints.py:_refine_for_check` currently does two jobs at once: it regex-parses a CHECK expression into one of four recognised shapes, *and* builds a Hypothesis strategy from the result. That entanglement means the bulk path cannot reuse the parsing, and would have to re-derive it — the exact duplication the type registry exists to prevent.
+
+Extract the parsing into a step that narrows a `TypeSpec`, and let both interpreters consume the narrowed spec.
+
+**Files:**
+- Create: `src/sqlproof/generators/narrowing.py`
+- Test: `tests/unit/test_narrowing.py` (create)
+
+**Interfaces:**
+- Consumes: `TypeSpec` (Task 2); `CheckConstraint`, `Column` from `sqlproof.schema.model`.
+- Produces: `narrow_spec_for_checks(spec: TypeSpec, column: Column, checks: Sequence[CheckConstraint]) -> TypeSpec`
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# tests/unit/test_narrowing.py
+from __future__ import annotations
+
+from sqlproof.generators.narrowing import narrow_spec_for_checks
+from sqlproof.generators.typespec import spec_for_type
+from sqlproof.schema.model import CheckConstraint, Column, PgType
+
+
+def _col(name: str, type_name: str, **kw) -> Column:
+    return Column(name, PgType("scalar", type_name, **kw), False, None, False)
+
+
+def test_ge_zero_narrows_integer_lower_bound():
+    col = _col("qty", "integer")
+    spec = narrow_spec_for_checks(
+        spec_for_type(col.type), col, (CheckConstraint(expression="qty >= 0"),)
+    )
+    assert spec.min_value == 0
+    assert spec.max_value == 2_147_483_647
+
+
+def test_gt_zero_narrows_to_one_for_integers():
+    col = _col("qty", "integer")
+    spec = narrow_spec_for_checks(
+        spec_for_type(col.type), col, (CheckConstraint(expression="qty > 0"),)
+    )
+    assert spec.min_value == 1
+
+
+def test_le_narrows_upper_bound():
+    col = _col("pct", "integer")
+    spec = narrow_spec_for_checks(
+        spec_for_type(col.type), col, (CheckConstraint(expression="pct <= 100"),)
+    )
+    assert spec.max_value == 100
+
+
+def test_two_checks_compose():
+    col = _col("pct", "integer")
+    spec = narrow_spec_for_checks(
+        spec_for_type(col.type),
+        col,
+        (
+            CheckConstraint(expression="pct >= 0"),
+            CheckConstraint(expression="pct <= 100"),
+        ),
+    )
+    assert (spec.min_value, spec.max_value) == (0, 100)
+
+
+def test_in_set_narrows_to_enum():
+    col = _col("tier", "text")
+    spec = narrow_spec_for_checks(
+        spec_for_type(col.type),
+        col,
+        (CheckConstraint(expression="tier IN ('free', 'pro')"),),
+    )
+    assert spec.kind == "enum"
+    assert set(spec.enum_values) == {"free", "pro"}
+
+
+def test_length_check_narrows_text_max_size():
+    col = _col("code", "text")
+    spec = narrow_spec_for_checks(
+        spec_for_type(col.type),
+        col,
+        (CheckConstraint(expression="length(code) <= 8"),),
+    )
+    assert spec.max_size == 8
+
+
+def test_unrecognised_check_leaves_spec_untouched():
+    col = _col("a", "integer")
+    original = spec_for_type(col.type)
+    spec = narrow_spec_for_checks(
+        original, col, (CheckConstraint(expression="a % 7 = position(x in y)"),)
+    )
+    assert spec == original
+
+
+def test_check_on_a_different_column_is_ignored():
+    col = _col("a", "integer")
+    original = spec_for_type(col.type)
+    spec = narrow_spec_for_checks(
+        original, col, (CheckConstraint(expression="b >= 0"),)
+    )
+    assert spec == original
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `uv run pytest tests/unit/test_narrowing.py -v`
+Expected: FAIL — `ModuleNotFoundError: No module named 'sqlproof.generators.narrowing'`
+
+- [ ] **Step 3: Implement narrowing**
+
+```python
+# src/sqlproof/generators/narrowing.py
+"""Narrow a TypeSpec using the column's CHECK constraints.
+
+The knowledge of what `qty >= 0` means belongs with the type knowledge,
+not inside strategy construction. Extracting it here lets both the
+Hypothesis interpreter and the bulk sampler consume an already-narrowed
+spec, so neither has to re-derive what a CHECK implies.
+
+Recognises the same four shapes `constraints.py` does. Anything else
+returns the spec unchanged -- narrowing is best-effort, and Postgres
+remains the backstop for expressions too complex to read.
+"""
+
+from __future__ import annotations
+
+import re
+from collections.abc import Sequence
+from dataclasses import replace
+from decimal import Decimal
+
+from sqlproof.generators.typespec import TypeSpec
+from sqlproof.schema.model import CheckConstraint, Column
+
+
+def _literal(raw: str) -> str:
+    return raw.strip().strip("'").strip('"')
+
+
+def narrow_spec_for_checks(
+    spec: TypeSpec,
+    column: Column,
+    checks: Sequence[CheckConstraint],
+) -> TypeSpec:
+    for check in checks:
+        spec = _narrow_one(spec, column, check.expression.strip())
+    return spec
+
+
+def _narrow_one(spec: TypeSpec, column: Column, expression: str) -> TypeSpec:
+    name = re.escape(column.name)
+
+    in_set = re.fullmatch(
+        rf"\(?\s*{name}\s+IN\s*\((?P<values>.+)\)\s*\)?", expression, re.IGNORECASE
+    )
+    if in_set is not None:
+        values = tuple(_literal(v) for v in in_set.group("values").split(","))
+        return TypeSpec(kind="enum", enum_values=values)
+
+    any_array = re.fullmatch(
+        rf"\(?\s*{name}\s*=\s*ANY\s*\(\s*ARRAY\[(?P<values>.+)\]\s*\)\s*\)?",
+        expression,
+        re.IGNORECASE,
+    )
+    if any_array is not None:
+        values = tuple(_literal(v) for v in any_array.group("values").split(","))
+        return TypeSpec(kind="enum", enum_values=values)
+
+    length = re.fullmatch(
+        rf"\(?\s*(?:char_length|length)\s*\(\s*{name}\s*\)\s*"
+        r"(?P<op>>=|>|<=|<|=)\s*(?P<value>\d+)\s*\)?",
+        expression,
+        re.IGNORECASE,
+    )
+    if length is not None and spec.kind == "text":
+        n = int(length.group("value"))
+        op = length.group("op")
+        if op in {"<=", "<"}:
+            return replace(spec, max_size=n if op == "<=" else max(n - 1, 0))
+        if op in {">=", ">"}:
+            lo = n if op == ">=" else n + 1
+            return replace(spec, min_size=lo, max_size=max(spec.max_size or lo, lo))
+        return replace(spec, min_size=n, max_size=n)
+
+    bound = re.fullmatch(
+        rf"\(?\s*{name}\s*(?P<op>>=|>|<=|<)\s*(?P<value>-?\d+(?:\.\d+)?)\s*\)?",
+        expression,
+        re.IGNORECASE,
+    )
+    if bound is None or spec.kind not in {"integer", "decimal"}:
+        return spec
+
+    value = Decimal(bound.group("value"))
+    op = bound.group("op")
+    # Integers step by one at a strict bound; decimals keep the bound and
+    # rely on the sampler's quantisation, which cannot land exactly on it
+    # often enough to matter.
+    step = 1 if spec.kind == "integer" else 0
+    if op == ">=":
+        return replace(spec, min_value=max(spec.min_value or 0, int(value)))
+    if op == ">":
+        return replace(spec, min_value=max(spec.min_value or 0, int(value) + step))
+    if op == "<=":
+        return replace(spec, max_value=min(spec.max_value or 0, int(value)))
+    return replace(spec, max_value=min(spec.max_value or 0, int(value) - step))
+```
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `uv run pytest tests/unit/test_narrowing.py -v`
+Expected: PASS
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/sqlproof/generators/narrowing.py tests/unit/test_narrowing.py
+git commit -m "feat(generators): extract CHECK narrowing into a shared step
+
+constraints.py entangled expression parsing with Hypothesis strategy
+construction, so the bulk path could not reuse it. Narrowing a TypeSpec
+instead lets both interpreters consume the same result."
+```
+
+---
+
+### Task 7: Streaming bulk row generation with deterministic keys and skew
 
 **Files:**
 - Modify: `src/sqlproof/generators/bulk.py`
 - Test: `tests/unit/test_bulk_rows.py` (create)
 
 **Interfaces:**
-- Consumes: `sampler_for_column` (Task 4); `_unique_value` from `sqlproof.generators.rows` (`rows.py:319`) — the existing deterministic index→key function, reused so both paths assign identical primary keys.
+- Consumes: `sampler_for_spec` (Task 4); `spec_for_column` (Task 2); `narrow_spec_for_checks` (Task 6); `_unique_value` from `sqlproof.generators.rows` (`rows.py:319`) — the existing deterministic index→key function, reused so both paths assign identical primary keys.
 - Produces:
   - `bulk_table_rows(table: Table, *, count: int, rng: random.Random, parent_counts: Mapping[str, int], distribution: str = "uniform", zipf_alpha: float = 1.2, null_frac: float = DEFAULT_NULL_FRAC) -> Iterator[dict[str, Any]]`
   - `parent_index_for(child_index: int, parent_count: int, rng: random.Random, distribution: str, zipf_alpha: float) -> int`
@@ -981,9 +1210,37 @@ CREATE TABLE customers (id bigint PRIMARY KEY, email text NOT NULL);
 CREATE TABLE orders (
   id bigint PRIMARY KEY,
   customer_id bigint NOT NULL REFERENCES customers(id),
+  qty integer NOT NULL CHECK (qty >= 0),
   note text
 );
 """
+
+
+def test_check_constrained_column_is_in_range_by_construction():
+    """Narrowing happens before sampling, so no value is ever rejected
+    and retried -- the sampler simply cannot emit a negative qty."""
+    schema = parse_schema_sql(SCHEMA)
+    rows = list(
+        bulk_table_rows(
+            schema.table("orders"), count=500,
+            rng=random.Random(4), parent_counts={"customers": 5},
+        )
+    )
+    assert all(r["qty"] >= 0 for r in rows)
+
+
+def test_composite_primary_key_raises_rather_than_generating_bad_data():
+    import pytest
+
+    from sqlproof.exceptions import SqlProofGenerationError
+
+    schema = parse_schema_sql(
+        "CREATE TABLE m (a bigint, b bigint, PRIMARY KEY (a, b));"
+    )
+    with pytest.raises(SqlProofGenerationError, match="composite primary key"):
+        list(bulk_table_rows(
+            schema.table("m"), count=5, rng=random.Random(1), parent_counts={},
+        ))
 
 
 def test_primary_keys_match_the_shared_assignment_function():
@@ -1088,12 +1345,13 @@ def parent_index_for(
         msg = "parent_index_for requires at least one parent row"
         raise ValueError(msg)
     if distribution == "zipf":
-        # Bounded Zipf: resample until inside range. alpha > 1 keeps the
-        # expected number of retries small.
+        # Bounded Zipf via Pareto: resample until inside range. Verified
+        # empirically at parent_count=100, alpha=1.2 -- top-5 parents take
+        # 49.9% of children (uniform would be ~5%) with all 100 parents
+        # still reachable. Retry exhaustion does not occur in practice;
+        # the uniform fallback exists only so the function is total.
         for _ in range(100):
-            candidate = rng.zipfvariate(zipf_alpha) if hasattr(rng, "zipfvariate") else None
-            if candidate is None:
-                candidate = int(rng.paretovariate(zipf_alpha - 1))
+            candidate = int(rng.paretovariate(zipf_alpha - 1))
             if 1 <= candidate <= parent_count:
                 return candidate - 1
         return rng.randrange(parent_count)
@@ -1117,7 +1375,15 @@ def bulk_table_rows(
     identical keys. That is what lets a foreign key be satisfied by
     arithmetic -- the parent list never has to exist in memory.
     """
-    single_pk = table.primary_key[0] if len(table.primary_key) == 1 else None
+    if len(table.primary_key) > 1:
+        msg = (
+            f"Bulk generation does not yet support composite primary keys "
+            f"({table.name} has {table.primary_key}). Use the Hypothesis "
+            f"path, or see the composite-key task."
+        )
+        raise SqlProofGenerationError(msg)
+
+    single_pk = table.primary_key[0] if table.primary_key else None
     samplers: dict[str, Callable[[], Any]] = {}
     for column in table.columns:
         if column.name == single_pk or column.is_generated:
@@ -1128,7 +1394,21 @@ def bulk_table_rows(
             continue
         if _is_single_column_unique(table, column.name):
             continue
-        samplers[column.name] = sampler_for_column(column, rng, null_frac=null_frac)
+        # Narrow the spec by this column's CHECK constraints (and any
+        # inherited from a domain) BEFORE building the sampler, so the
+        # values are in-range by construction rather than by rejection.
+        spec, nullable = spec_for_column(column)
+        spec = narrow_spec_for_checks(
+            spec,
+            column,
+            table.check_constraints + _domain_checks_as_column_checks(column),
+        )
+        base = sampler_for_spec(spec, rng)
+        samplers[column.name] = (
+            base
+            if not nullable
+            else (lambda b=base: None if rng.random() < null_frac else b())
+        )
 
     for index in range(count):
         row: dict[str, Any] = {}
@@ -1164,7 +1444,15 @@ def bulk_table_rows(
         yield row
 ```
 
-Add `from sqlproof.exceptions import SqlProofGenerationError` to the imports.
+Add to the imports at the top of `bulk.py`:
+
+```python
+from sqlproof.exceptions import SqlProofGenerationError
+from sqlproof.generators.narrowing import narrow_spec_for_checks
+from sqlproof.generators.typespec import spec_for_column
+```
+
+`_domain_checks_as_column_checks` is already in the `from sqlproof.generators.rows import (...)` block added at the start of this step.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -1184,14 +1472,210 @@ materialised parent rows. That is what makes the path O(n)."
 
 ---
 
-### Task 7: `COPY` loader and `ANALYZE`
+### Task 8: Composite primary keys
+
+Task 7 raises on composite PKs rather than emitting duplicate keys. That guard is correct but the limitation is not acceptable to ship: junction tables are ordinary, not exotic — `rows.py:147` already cites `org_members` as a motivating case, and any many-to-many join table in a Supabase schema has this shape.
+
+The Hypothesis path handles it via `_composite_unique_keys`. The bulk path can do better, because it assigns rather than draws: a composite key of `k` columns over `count` rows is just a mixed-radix decomposition of the row index, which is collision-free by construction and needs no seen-set.
+
+**Files:**
+- Modify: `src/sqlproof/generators/bulk.py`
+- Test: `tests/unit/test_bulk_composite_keys.py` (create)
+
+**Interfaces:**
+- Consumes: `bulk_table_rows` (Task 7).
+- Produces: `composite_key_values(table: Table, index: int) -> dict[str, Any]` — the per-row key assignment. `bulk_table_rows` loses its composite-PK guard.
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# tests/unit/test_bulk_composite_keys.py
+from __future__ import annotations
+
+import random
+
+from sqlproof.generators.bulk import bulk_table_rows, composite_key_values
+from sqlproof.schema.parse_sql import parse_schema_sql
+
+SCHEMA = """
+CREATE TABLE orgs (id bigint PRIMARY KEY);
+CREATE TABLE users (id bigint PRIMARY KEY);
+CREATE TABLE org_members (
+  org_id bigint NOT NULL REFERENCES orgs(id),
+  user_id bigint NOT NULL REFERENCES users(id),
+  role text NOT NULL,
+  PRIMARY KEY (org_id, user_id)
+);
+"""
+
+
+def test_composite_keys_are_unique_across_rows():
+    schema = parse_schema_sql(SCHEMA)
+    table = schema.table("org_members")
+    keys = [
+        tuple(composite_key_values(table, i).values()) for i in range(1000)
+    ]
+    assert len(set(keys)) == 1000
+
+
+def test_composite_key_table_generates_without_raising():
+    schema = parse_schema_sql(SCHEMA)
+    rows = list(
+        bulk_table_rows(
+            schema.table("org_members"), count=300,
+            rng=random.Random(1),
+            parent_counts={"orgs": 20, "users": 20},
+        )
+    )
+    assert len(rows) == 300
+    pairs = {(r["org_id"], r["user_id"]) for r in rows}
+    assert len(pairs) == 300  # no duplicate composite keys
+
+
+def test_composite_key_columns_that_are_also_fks_stay_within_parent_range():
+    schema = parse_schema_sql(SCHEMA)
+    rows = list(
+        bulk_table_rows(
+            schema.table("org_members"), count=300,
+            rng=random.Random(1),
+            parent_counts={"orgs": 20, "users": 20},
+        )
+    )
+    assert all(1 <= r["org_id"] <= 20 for r in rows)
+    assert all(1 <= r["user_id"] <= 20 for r in rows)
+
+
+def test_requested_count_exceeding_the_key_space_raises():
+    import pytest
+
+    from sqlproof.exceptions import SqlProofGenerationError
+
+    schema = parse_schema_sql(SCHEMA)
+    # 3 orgs x 3 users = 9 distinct composite keys; 50 rows is impossible.
+    with pytest.raises(SqlProofGenerationError, match="distinct composite keys"):
+        list(bulk_table_rows(
+            schema.table("org_members"), count=50,
+            rng=random.Random(1), parent_counts={"orgs": 3, "users": 3},
+        ))
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `uv run pytest tests/unit/test_bulk_composite_keys.py -v`
+Expected: FAIL — `ImportError: cannot import name 'composite_key_values'`, and the guard from Task 7 raises on the others.
+
+- [ ] **Step 3: Implement mixed-radix composite key assignment**
+
+Add to `src/sqlproof/generators/bulk.py`:
+
+```python
+def composite_key_values(
+    table: Table,
+    index: int,
+    parent_counts: Mapping[str, int] | None = None,
+) -> dict[str, Any]:
+    """Assign the `index`-th distinct composite key for `table`.
+
+    Mixed-radix decomposition of the row index. Where a key column is
+    also a foreign key, its radix is the parent's row count so the value
+    is always a live parent key; otherwise the radix is unbounded and the
+    column simply counts.
+
+    Collision-free by construction, so no seen-set and no retry loop --
+    which is what keeps this O(1) per row.
+    """
+    parent_counts = parent_counts or {}
+    remaining = index
+    values: dict[str, Any] = {}
+    # Least-significant column last, so the first key column varies slowest.
+    for name in reversed(table.primary_key):
+        column = table.column(name)
+        fk = _foreign_key_for_column(table, name)
+        radix = parent_counts.get(fk.referenced_table, 0) if fk is not None else 0
+        if radix > 0:
+            position = remaining % radix
+            remaining //= radix
+        else:
+            position = remaining
+            remaining = 0
+        values[name] = _unique_value(name, column.type.name, position)
+    return values
+
+
+def _composite_key_space(table: Table, parent_counts: Mapping[str, int]) -> int | None:
+    """Number of distinct composite keys available, or None if unbounded."""
+    space = 1
+    for name in table.primary_key:
+        fk = _foreign_key_for_column(table, name)
+        if fk is None:
+            return None  # a non-FK key column can count without limit
+        radix = parent_counts.get(fk.referenced_table, 0)
+        if radix <= 0:
+            return 0
+        space *= radix
+    return space
+```
+
+Then in `bulk_table_rows`, replace the composite-PK guard added in Task 7 with real handling:
+
+```python
+    composite_pk = len(table.primary_key) > 1
+    if composite_pk:
+        space = _composite_key_space(table, parent_counts)
+        if space is not None and space < count:
+            msg = (
+                f"Cannot generate {count} rows for {table.name}: only {space} "
+                f"distinct composite keys exist for primary key "
+                f"{table.primary_key} at the given parent sizes."
+            )
+            raise SqlProofGenerationError(msg)
+
+    single_pk = table.primary_key[0] if len(table.primary_key) == 1 else None
+```
+
+and inside the per-row loop, before the column walk:
+
+```python
+        key_values = composite_key_values(table, index, parent_counts) if composite_pk else {}
+```
+
+then make the column walk consult it first:
+
+```python
+            if name in key_values:
+                row[name] = key_values[name]
+                continue
+```
+
+placed immediately after the `if column.is_generated or column.default is not None: continue` line, so composite key columns bypass both the single-PK and FK branches.
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `uv run pytest tests/unit/test_bulk_composite_keys.py tests/unit/test_bulk_rows.py -v`
+Expected: PASS. `test_composite_primary_key_raises_rather_than_generating_bad_data` from Task 7 now fails — delete it, it documented a limitation this task removes.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/sqlproof/generators/bulk.py tests/unit/test_bulk_composite_keys.py tests/unit/test_bulk_rows.py
+git commit -m "feat(generators): support composite primary keys in bulk generation
+
+Mixed-radix decomposition of the row index gives collision-free
+composite keys with no seen-set and no retries, so it stays O(1) per
+row. Junction tables like org_members are ordinary in Supabase schemas
+and were previously unsupported."
+```
+
+---
+
+### Task 9: `COPY` loader and `ANALYZE`
 
 **Files:**
 - Create: `src/sqlproof/scale/__init__.py`, `src/sqlproof/scale/load.py`
 - Test: `tests/integration/test_bulk_copy_live.py` (create)
 
 **Interfaces:**
-- Consumes: `bulk_table_rows` (Task 6); `resolve_insertion_plan` from `sqlproof.schema.dependency_graph`.
+- Consumes: `bulk_table_rows` (Task 7); `resolve_insertion_plan` from `sqlproof.schema.dependency_graph`.
 - Produces:
   - `copy_table(conn: psycopg.Connection, table: Table, rows: Iterable[dict[str, Any]], column_names: Sequence[str]) -> int`
   - `load_dataset(conn: psycopg.Connection, schema: SchemaInfo, sizes: Mapping[str, int], *, seed: int = 0, distribution: str = "uniform", null_frac: float = DEFAULT_NULL_FRAC) -> dict[str, int]`
@@ -1275,6 +1759,29 @@ def test_analyze_populates_planner_statistics(conn):
     assert rows > 0
 
 
+def test_cyclic_schema_raises_rather_than_loading_null_relationships(conn):
+    """The dangerous failure, made loud.
+
+    Without the guard this load SUCCEEDS with every deferred FK NULL,
+    and a later sweep would measure a function against data whose
+    relationships do not exist -- returning a confident wrong answer.
+    """
+    from sqlproof.exceptions import SqlProofGenerationError
+
+    cyclic = """
+    CREATE TABLE content (id bigint PRIMARY KEY, current_version_id bigint);
+    CREATE TABLE versions (
+      id bigint PRIMARY KEY,
+      content_id bigint NOT NULL REFERENCES content(id)
+    );
+    ALTER TABLE content ADD CONSTRAINT fk_cv
+      FOREIGN KEY (current_version_id) REFERENCES versions(id);
+    """
+    schema = parse_schema_sql(cyclic, schema="bulk_test")
+    with pytest.raises(SqlProofGenerationError, match="foreign-key cycles"):
+        load_dataset(conn, schema, {"content": 10, "versions": 10}, seed=1)
+
+
 def test_load_is_linear_enough_to_reach_scale(conn):
     """50k rows must load in seconds, not the hours the Hypothesis path
     would take (projected ~3h at 500k -- see the design doc's Evidence)."""
@@ -1308,6 +1815,7 @@ from typing import Any
 
 import psycopg
 
+from sqlproof.exceptions import SqlProofGenerationError
 from sqlproof.generators.bulk import DEFAULT_NULL_FRAC, bulk_table_rows
 from sqlproof.schema.dependency_graph import resolve_insertion_plan
 from sqlproof.schema.model import SchemaInfo, Table
@@ -1351,6 +1859,22 @@ def load_dataset(
     children -- the same ordering the Hypothesis path uses.
     """
     plan = resolve_insertion_plan(schema.tables)
+    if plan.deferred_edges:
+        # core.py:346-391 resolves FK cycles with a second UPDATE pass.
+        # The bulk path has no equivalent yet. Without this guard the
+        # load SUCCEEDS and every deferred FK is silently NULL -- and a
+        # measurement taken against data whose relationships do not
+        # exist is worse than no measurement, because it looks correct.
+        edges = ", ".join(
+            f"{e.source_table}->{e.referenced_table}" for e in plan.deferred_edges
+        )
+        msg = (
+            f"Bulk loading does not yet support foreign-key cycles "
+            f"(deferred edges: {edges}). The Hypothesis path handles these "
+            f"via a second UPDATE pass; until the bulk loader does the "
+            f"same, loading would silently leave these columns NULL."
+        )
+        raise SqlProofGenerationError(msg)
     rng = random.Random(seed)
     loaded: dict[str, int] = {}
     for table in plan.ordered_tables:
@@ -1405,9 +1929,9 @@ COPY failure rather than being asserted path-against-path."
 
 ---
 
-### Task 8: Build out `sqlproof.testing.schemas()`
+### Task 10: Build out `sqlproof.testing.schemas()`
 
-Today it discards `max_columns` and emits only single-column `id integer` tables. The differential test in Task 9 is worthless against it.
+Today it discards `max_columns` and emits only single-column `id integer` tables. The differential test in Task 11 is worthless against it.
 
 **Files:**
 - Modify: `src/sqlproof/testing.py:76-99`
@@ -1595,13 +2119,13 @@ against a near-empty input space."
 
 ---
 
-### Task 9: Differential testing — both paths load into Postgres
+### Task 11: Differential testing — both paths load into Postgres
 
 **Files:**
 - Test: `tests/integration/test_cross_path_consistency_live.py` (create)
 
 **Interfaces:**
-- Consumes: `schemas()` (Task 8), `load_dataset` (Task 7), `dataset_strategy` and `_insert_dataset` (existing).
+- Consumes: `schemas()` (Task 10), `load_dataset` (Task 9), `dataset_strategy` and `_insert_dataset` (existing).
 - Produces: nothing.
 
 - [ ] **Step 1: Write the test**
@@ -1693,7 +2217,7 @@ git commit -m "test(scale): differential test of bulk path over generated schema
 
 ---
 
-### Task 10: `pg_stats` parity between the two paths
+### Task 12: `pg_stats` parity between the two paths
 
 The only test in this plan that is genuinely an *equivalence* check, and the one specific to the measurement feature: a plan difference invalidates every measurement built on this, so what must match is what the planner reads.
 
@@ -1702,7 +2226,7 @@ The only test in this plan that is genuinely an *equivalence* check, and the one
 - Possibly modify: `src/sqlproof/generators/bulk.py` (`DEFAULT_NULL_FRAC`)
 
 **Interfaces:**
-- Consumes: `load_dataset`, `analyze` (Task 7); `dataset_strategy` and `SqlProof._insert_dataset` (existing).
+- Consumes: `load_dataset`, `analyze` (Task 9); `dataset_strategy` and `SqlProof._insert_dataset` (existing).
 - Produces: a tuned `DEFAULT_NULL_FRAC`.
 
 - [ ] **Step 1: Write the test**
@@ -1854,14 +2378,19 @@ Hypothesis path's observed null fraction."
 
 ## Self-Review Notes
 
-**Spec coverage.** Every Phase 1 item in the spec maps to a task: type registry (2, 3, 4, 5), bulk generator (4, 6), `COPY` loader and `ANALYZE` (7), prerequisite `schemas()` (8), prerequisite `rows.py` hoisting (1), and the four consistency backstops — structural (2, 3, 4), exhaustiveness (5), Postgres-as-oracle (7, 9), differential (9), `pg_stats` parity (10). Phase 2 items (probe, sweep, fit, artifact, CLI, advisor ranking) are deliberately absent.
+**Spec coverage.** Every Phase 1 item in the spec maps to a task: type registry (2, 3, 5), Hypothesis interpreter (3), bulk generator (4, 6, 7, 8), `COPY` loader and `ANALYZE` (9), prerequisite `schemas()` (10), prerequisite `rows.py` hoisting (1), and the four consistency backstops — structural (2, 3, 4, 6), exhaustiveness (5), Postgres-as-oracle (9, 11), differential (11), `pg_stats` parity (12). Phase 2 items (probe, sweep, fit, artifact, CLI, advisor ranking) are deliberately absent.
 
-**Known gaps to resolve during execution, not before:**
+**Resolved during planning.** An earlier revision deferred four items to "follow-ups". Three were wrong to defer and one was wrong outright:
 
-1. **Composite primary keys.** `bulk_table_rows` handles single-column PKs via `_unique_value` and skips composite ones (`single_pk` is `None`). The Hypothesis path handles composites through `_composite_unique_keys`. Task 9's differential test only generates single-column PKs, so it will not catch this. If a real schema needs composite PKs, that is a follow-up task — record it rather than silently generating invalid data; `bulk_table_rows` should raise a clear `SqlProofGenerationError` for composite PKs until then.
-2. **CHECK constraints in the bulk path.** Task 6 does not run generated values through `refine_for_checks`. Task 8 generates `c >= 0` CHECKs and Task 9 loads against them, so this *will* fail on the first negative integer. The fix belongs in Task 6's implementation: either reuse the refinement pipeline, or constrain the sampler's bounds from the parsed check. Expect to iterate here — this is the most likely place execution stalls, and it is deliberately surfaced rather than hidden.
-3. **`parent_index_for`'s Zipf implementation** uses `paretovariate` as a stand-in; `random.Random` has no `zipfvariate`. Verify the distribution empirically against the Task 6 test rather than trusting the formula.
-4. **Deferred FK cycles.** `load_dataset` follows `resolve_insertion_plan`'s ordering but does not implement the second UPDATE pass that `core.py:346-391` does for deferred edges. Cyclic schemas will fail. Task 8's `schemas()` only generates acyclic FK graphs (it references earlier tables only), so this is not exercised. Follow-up.
-5. **FK key derivation uses the child column's type name.** In Task 6, `_unique_value(referenced, column.type.name, parent_index)` derives the parent's key using the *child* FK column's type. Postgres requires FK column types to be compatible, so this is correct in practice for every type `_unique_value` distinguishes (the integer family collapses to the same value). It is still a latent trap if the two ever diverge — prefer passing the parent table's PK column type once `load_dataset` has the parent `Table` to hand.
+- **CHECK constraints** are now handled by construction — Task 6 narrows the spec, Task 7 samples from the narrowed spec, so an out-of-range value is never produced rather than being produced and rejected. The earlier plan told the implementer to "expect to iterate here", which was deferred work dressed up as sequencing.
+- **Composite primary keys** are now supported (Task 8), not merely guarded against. Junction tables are ordinary in the target schemas — `rows.py:147` already cites `org_members` — so shipping without them was not viable.
+- **Zipf was not broken.** The earlier note claimed `paretovariate` would exhaust its retries and silently degrade to uniform. Measured at `parent_count=100, alpha=1.2`: all 100 parents reachable, top-5 share 49.9% against ~5% for uniform, head of the distribution `[4266, 2194, 1509, 1109, 906]`. The implementation stands; only the dead `hasattr(rng, "zipfvariate")` branch was removed.
 
-**Type consistency.** `TypeSpec`, `spec_for_type`, `spec_for_column`, `strategy_for_spec`, `sampler_for_spec`, `sampler_for_column`, `bulk_table_rows`, `parent_index_for`, `copy_table`, `load_dataset` and `analyze` are used with identical signatures everywhere they appear across tasks.
+**Remaining known gaps.** Both now fail loudly rather than silently, which was the substantive change:
+
+1. **Foreign-key cycles.** `load_dataset` raises on any deferred edge (Task 9). The Hypothesis path supports these via the second UPDATE pass in `core.py:346-391`; the bulk path does not. This was previously *silent* — the load succeeded with every deferred FK left NULL, which for a measurement feature is the worst failure available: a sweep would return a confident exponent measured against data whose relationships do not exist. The guard converts it into an error. Implementing the two-pass bulk load is tracked separately and remains a real capability gap between the paths until then.
+2. **FK key derivation uses the child column's type name.** In Task 7, `_unique_value(referenced, column.type.name, parent_index)` derives the parent's key from the *child* FK column's type. Postgres requires FK column types to be compatible, so this is correct in practice for every type `_unique_value` distinguishes (the whole integer family collapses to the same value). It stays a latent trap if the two ever diverge — prefer passing the parent table's PK column type once `load_dataset` has the parent `Table` to hand.
+
+**Coverage note.** Task 10's `schemas()` generates only acyclic FK graphs and single-column primary keys, so Task 11's differential test exercises neither gap above. That is a deliberate limit on the strategy rather than an oversight — widening it to cyclic graphs should land together with the two-pass loader, so the capability and the test that proves it arrive at the same time.
+
+**Type consistency.** `TypeSpec`, `spec_for_type`, `spec_for_column`, `strategy_for_spec`, `sampler_for_spec`, `sampler_for_column`, `narrow_spec_for_checks`, `bulk_table_rows`, `composite_key_values`, `parent_index_for`, `copy_table`, `load_dataset` and `analyze` are used with identical signatures everywhere they appear across tasks.
