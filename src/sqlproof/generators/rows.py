@@ -65,15 +65,23 @@ def table_rows_strategy(
     # and the table's checks, never on the row index. Skip exactly the
     # columns the per-row loop below skips before it reaches
     # refine_for_checks: single-column primary key, generated columns,
-    # columns with a default, foreign-key columns, and
-    # single-column-unique columns (those are all generated via other,
-    # cheaper paths inline in the loop). Building this per row cost
-    # ~2x at n=40,000 (see the scale analysis design doc).
+    # columns with a `columns=` override, columns with a default,
+    # foreign-key columns, and single-column-unique columns (those are
+    # all generated via other, cheaper paths inline in the loop). The
+    # override skip matters beyond cost: strategy_for_column can RAISE
+    # for a schema-valid-but-underspecified type (e.g. an undimensioned
+    # `vector` column), and an override is exactly the caller's escape
+    # hatch for such a column — the per-row loop never reaches
+    # strategy_for_column for it, so the hoist must not either.
+    # Building this per row cost ~2x at n=40,000 (see the scale
+    # analysis design doc).
     refined_by_column: dict[str, SearchStrategy[Any]] = {}
     for column in table.columns:
         if column.name in table.primary_key and len(table.primary_key) == 1:
             continue
         if column.is_generated:
+            continue
+        if _column_override(columns, table, column.name) is not None:
             continue
         if column.default is not None:
             continue
