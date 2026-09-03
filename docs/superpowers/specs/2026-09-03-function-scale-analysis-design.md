@@ -69,6 +69,12 @@ This shapes scope, so it is recorded explicitly:
    sufficient to detect complexity — buffer counters accumulate across
    nested statements. `auto_explain` is needed only to *attribute* cost
    to a specific inner statement, and is deferred to a later phase.
+7. **Type knowledge lives in one registry**, with the Hypothesis and
+   bulk paths as thin interpreters of it. Divergence between the two
+   generators is the project's main risk, and this makes divergence in
+   type dispatch structurally impossible rather than merely tested for.
+   Consequence: refactoring `strategy_for_type` is the first build task,
+   not a later cleanup.
 
 ## Architecture
 
@@ -134,11 +140,30 @@ Unchanged, imported directly:
 
 ### What is new
 
-- **Seeded value producers.** A `random.Random(seed)`-driven producer per
-  Postgres type, mirroring the 22 branches of `strategy_for_type` (4 by type
-  kind — enum, domain, range, composite — and 18 by type name).
-  Same dispatch structure, different engine. Reproducible from a seed
-  without Hypothesis's replay machinery.
+- **A single type registry, consumed by both paths.** This is a design
+  decision, not a testing one, and it is what prevents divergence.
+  Today `strategy_for_type` does two jobs at once: it *holds the type
+  knowledge* (int8 spans ±2⁶³, `varchar(n)` caps at n, numeric carries
+  precision and scale) *and* emits a Hypothesis strategy. If the bulk
+  path re-implements that dispatch, the knowledge exists twice and will
+  drift. Instead the knowledge moves into one declarative registry and
+  both paths become thin interpreters of it:
+
+  ```python
+  TYPE_SPECS: dict[str, TypeSpec]            # single source of truth
+  strategy_for_spec(spec) -> SearchStrategy  # Hypothesis interpreter
+  sampler_for_spec(spec, rng) -> Callable    # bulk interpreter
+  ```
+
+  Adding a type becomes one row in one table. Neither path contains type
+  knowledge any more, so updating one and forgetting the other stops
+  being possible rather than merely being tested for. Refactoring
+  `strategy_for_type`'s 22 branches (4 by type kind — enum, domain,
+  range, composite — and 18 by type name) into this shape is the first
+  task of the build.
+- **Seeded value producers.** The bulk interpreter: a
+  `random.Random(seed)`-driven producer per type spec. Reproducible from
+  a seed without Hypothesis's replay machinery.
 - **`COPY ... FROM STDIN`** via psycopg's `cursor.copy()`, fed by a
   generator so n rows are never held in memory. Replaces the per-row
   `INSERT` in `core.py:345`.
@@ -153,19 +178,50 @@ Unchanged, imported directly:
 - **`ANALYZE` after load.** Non-optional. Without statistics the planner
   chooses badly and every measurement is meaningless.
 
-### The main risk
+### The main risk: divergence between the two paths
 
-The two paths must stay semantically consistent: a value the Hypothesis
-path considers valid must be valid in the bulk path, across 22 types,
-CHECK constraints, domains and uniqueness. Silent divergence is the bug
-class most likely to eat the schedule — a bulk dataset violating a
-constraint the search path respects, surfacing as a confusing `COPY`
-failure at 300K rows.
+Silent divergence is the bug class most likely to eat the schedule — a
+bulk dataset violating a constraint the search path respects, surfacing
+as a confusing `COPY` failure at 300K rows.
 
-**Mitigation, and it is on-brand:** property-test the two paths against
-each other. Generate the same table both ways, assert both satisfy the
-same constraint validator, and let Hypothesis hunt for the schema where
-they disagree. This is what the library exists to do.
+**The contract, stated precisely**, because "consistent" otherwise hides
+three different properties:
+
+1. **Validity** — both paths produce data Postgres accepts.
+2. **Type coverage** — both paths handle every type the other does.
+3. **Statistical shape** — both produce data the *planner* sees
+   similarly.
+
+And one thing that explicitly must **not** match: **exact values**. The
+bulk path should deliberately produce *less* adversarial data — hunting
+unicode edge cases at 500K rows is wasted work. "Same values" is the
+wrong contract and must not be tested for.
+
+**Defence in depth, strongest first:**
+
+- **Structural (the type registry above).** Divergence in type dispatch
+  becomes impossible rather than merely detectable. Everything below is
+  a backstop for what structure cannot cover.
+- **Exhaustiveness.** One test walks every `TYPE_SPECS` entry and asserts
+  both interpreters produce a value, so a missing branch fails in CI
+  rather than on a customer's schema.
+- **Postgres is the oracle, not the other path.** Never assert the two
+  paths agree with *each other* about validity — they can be identically
+  wrong. Assert each independently against a real database: generate,
+  load with every constraint enabled, let Postgres reject. "Valid" means
+  "Postgres accepted it."
+- **Differential testing over generated schemas.** Run both paths over
+  the same generated schema and require both to load. This needs
+  `sqlproof.testing.schemas()` built out first — see Prerequisites.
+- **Statistical parity, specific to this feature.** A plan difference
+  invalidates the entire measurement, so what must match is what the
+  planner *reads*. Load the same schema both ways at the same size,
+  `ANALYZE` both, and diff `pg_stats` — `null_frac`, `n_distinct` and
+  `correlation` on any column a query filters or joins on. If the bulk
+  path never produces NULLs where the Hypothesis path does, selectivity
+  shifts and the sweep may measure a plan users never run. `pg_stats` is
+  literally the planner's input, which makes it the right equivalence
+  oracle and a mechanically diffable one.
 
 ## Measurement
 
@@ -298,11 +354,14 @@ threshold, so it works as a CI gate.
   O(n log n) and O(n²) functions whose exponents must be recovered within
   tolerance. This is the regression net for the whole feature; a probe of
   it already recovered 1.994 and 1.011 (see Evidence).
-- **Cross-path equivalence** — the property test described under "main
-  risk": both generators satisfy the same constraint validator.
+- **Cross-path equivalence** — the four backstops enumerated under "the
+  main risk": registry exhaustiveness, per-path validation against
+  Postgres, differential testing over generated schemas, and `pg_stats`
+  parity. Note the last is the only one that is *equivalence* testing;
+  the others validate each path independently on purpose.
 - **Bulk generator** — per-type round-trip through `COPY` into a real
-  Postgres for all 22 type branches, since the failure mode is a value
-  Postgres rejects.
+  Postgres for every `TYPE_SPECS` entry, since the failure mode is a
+  value Postgres rejects.
 - **Determinism** — same seed produces byte-identical `COPY` output.
 
 ## Out of scope
@@ -317,7 +376,33 @@ threshold, so it works as a CI gate.
   build on this artifact, none of it here.
 - **Wall-clock as a growth signal.** Deliberately excluded; see Evidence.
 
-## Prerequisite: hoist loop-invariant strategy construction
+## Prerequisites
+
+Two pieces of existing code need work before or alongside the build.
+Both stand on their own merits.
+
+### 1. Build out `sqlproof.testing.schemas()`
+
+Today it is effectively a stub: it `del`s its own `max_columns`
+argument and every table it emits is identical — a single
+`id integer` primary key, with no foreign keys, CHECK constraints,
+unique constraints or nullable columns. It varies table *names* and
+nothing else.
+
+That matters here because the differential test above is worthless
+against it: it would never find a divergence, because it never generates
+the constructs where divergence happens. To serve as the cross-path
+oracle it needs varied column types drawn from `TYPE_SPECS`,
+nullability, CHECK constraints, FK graphs *including the cyclic ones*
+`dependency_graph.py` exists to resolve, and composite and partial
+unique constraints.
+
+This is a real work item, not a free mitigation, and it is worth doing
+regardless — `tests/meta/test_meta_properties.py` currently asserts
+meta-properties of the generator against schemas that exercise almost
+none of it.
+
+### 2. Hoist loop-invariant strategy construction
 
 Independent of this feature and worth its own issue. `rows.py` rebuilds
 loop-invariant objects on every row:
