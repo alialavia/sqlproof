@@ -61,6 +61,46 @@ def table_rows_strategy(
         for pu in table.partial_unique_constraints
     )
 
+    # Loop-invariant: the refined strategy depends only on the column
+    # and the table's checks, never on the row index. Skip exactly the
+    # columns the per-row loop below skips before it reaches
+    # refine_for_checks: single-column primary key, generated columns,
+    # columns with a default, foreign-key columns, and
+    # single-column-unique columns (those are all generated via other,
+    # cheaper paths inline in the loop). Building this per row cost
+    # ~2x at n=40,000 (see the scale analysis design doc).
+    refined_by_column: dict[str, SearchStrategy[Any]] = {}
+    for column in table.columns:
+        if column.name in table.primary_key and len(table.primary_key) == 1:
+            continue
+        if column.is_generated:
+            continue
+        if column.default is not None:
+            continue
+        if _foreign_key_for_column(table, column.name) is not None:
+            continue
+        if _is_single_column_unique(table, column.name):
+            continue
+        refined_by_column[column.name] = refine_for_checks(
+            column,
+            strategy_for_column(column),
+            table.check_constraints + _domain_checks_as_column_checks(column),
+        )
+
+    # Loop-invariant: one sampled_from per FK column, not per row.
+    # Constructing it per row is O(len(parents)) each time.
+    parent_strategy_by_column: dict[str, SearchStrategy[dict[str, Any]]] = {}
+    for column in table.columns:
+        fk = _foreign_key_for_column(table, column.name)
+        if fk is None:
+            continue
+        parent_key = _parent_rows_key(fk, parent_rows)
+        if parent_key is None:
+            continue
+        available = parent_rows[parent_key]
+        if available:
+            parent_strategy_by_column[column.name] = st.sampled_from(available)
+
     @st.composite
     def rows(draw: st.DrawFn) -> list[dict[str, Any]]:
         generated: list[dict[str, Any]] = []
@@ -101,13 +141,11 @@ def table_rows_strategy(
                     continue
                 fk = _foreign_key_for_column(table, column.name)
                 if fk is not None:
-                    parent_key = _parent_rows_key(fk, parent_rows)
-                    if parent_key is not None:
-                        parents = parent_rows[parent_key]
-                        if parents:
-                            parent = draw(st.sampled_from(parents))
-                            row[column.name] = parent[fk.referenced_columns[0]]
-                            continue
+                    parent_strategy = parent_strategy_by_column.get(column.name)
+                    if parent_strategy is not None:
+                        parent = draw(parent_strategy)
+                        row[column.name] = parent[fk.referenced_columns[0]]
+                        continue
                     if column.nullable:
                         row[column.name] = None
                         continue
@@ -120,11 +158,7 @@ def table_rows_strategy(
                 if _is_single_column_unique(table, column.name):
                     row[column.name] = _unique_value(column.name, column.type.name, index)
                     continue
-                strategy = refine_for_checks(
-                    column,
-                    strategy_for_column(column),
-                    table.check_constraints + _domain_checks_as_column_checks(column),
-                )
+                strategy = refined_by_column[column.name]
                 row[column.name] = draw(strategy)
 
             # Composite uniqueness check. SQL's standard UNIQUE
