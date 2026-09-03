@@ -125,7 +125,10 @@ def sampler_for_spec(spec: TypeSpec, rng: random.Random) -> Callable[[], Any]:
             (name, sampler_for_spec(sub, rng)) for name, sub in spec.fields
         )
         return lambda: {name: fn() for name, fn in field_samplers}
-    return sampler_for_spec(TypeSpec(kind="text", max_size=255), rng)
+    raise SqlProofGenerationError(
+        f"sampler_for_spec: unhandled SpecKind {kind!r}; "
+        "ensure typespec.py's KNOWN_TYPE_NAMES has a handler in this interpreter"
+    )
 
 
 def sampler_for_column(

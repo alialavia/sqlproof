@@ -7,6 +7,7 @@ from hypothesis import strategies as st
 from hypothesis.strategies import SearchStrategy
 from psycopg.types.range import Range
 
+from sqlproof.exceptions import SqlProofSchemaError
 from sqlproof.generators.typespec import TypeSpec, spec_for_type
 from sqlproof.schema.model import Column, PgType
 
@@ -130,7 +131,10 @@ def strategy_for_spec(spec: TypeSpec) -> SearchStrategy[Any]:
         return st.fixed_dictionaries(
             {name: strategy_for_spec(sub) for name, sub in spec.fields}
         )
-    return _postgres_text(max_size=255)
+    raise SqlProofSchemaError(
+        f"strategy_for_spec: unhandled SpecKind {spec.kind!r}; "
+        "ensure typespec.py's KNOWN_TYPE_NAMES has a handler in this interpreter"
+    )
 
 
 def _postgres_text(*, min_size: int = 0, max_size: int | None = None) -> SearchStrategy[str]:

@@ -58,3 +58,25 @@ def test_both_interpreters_handle_every_type_kind(pg_type):
     spec = spec_for_type(pg_type)
     assert strategy_for_spec(spec) is not None
     sampler_for_spec(spec, random.Random(0))()
+
+
+def test_interpreters_raise_on_unrecognized_kind():
+    """Verify the backstop: unknown kinds cause raises, not silent fallback to text.
+
+    A bogus kind is a programming error (SpecKind is a closed Literal). Both
+    interpreters must raise rather than silently falling back to text, or the
+    exhaustiveness assertions become meaningless.
+    """
+    from sqlproof.exceptions import SqlProofGenerationError, SqlProofSchemaError
+    from sqlproof.generators.typespec import TypeSpec
+
+    # Construct a TypeSpec with a bogus kind (bypass Literal check with type: ignore)
+    bad_spec = TypeSpec(kind="bogus")  # type: ignore
+
+    # strategy_for_spec must raise SqlProofSchemaError
+    with pytest.raises(SqlProofSchemaError, match="unhandled SpecKind"):
+        strategy_for_spec(bad_spec)
+
+    # sampler_for_spec must raise SqlProofGenerationError
+    with pytest.raises(SqlProofGenerationError, match="unhandled SpecKind"):
+        sampler_for_spec(bad_spec, random.Random(0))
