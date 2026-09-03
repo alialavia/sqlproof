@@ -280,10 +280,10 @@ def bulk_table_rows(
         row: dict[str, Any] = {}
         for column in table.columns:
             name = column.name
-            if column.is_generated or column.default is not None:
-                continue
             if name == single_pk:
                 row[name] = _unique_value(name, column.type.name, index)
+                continue
+            if column.is_generated or column.default is not None:
                 continue
             fk = _foreign_key_for_column(table, name)
             if fk is not None:

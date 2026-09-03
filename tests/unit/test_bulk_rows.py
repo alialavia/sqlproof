@@ -106,3 +106,84 @@ def test_zipf_distribution_concentrates_on_few_parents():
     )
     top_share = sum(c for _, c in counts.most_common(5)) / 5000
     assert top_share > 0.30  # heavy tenants exist, unlike uniform
+
+
+# --- Fix round 1: PK must be assigned regardless of is_generated/default ---
+#
+# rows.py's per-row loop checks the single-column PK unconditionally,
+# before is_generated/default -- a serial or DEFAULT-bearing PK column
+# still gets an explicit `_unique_value(...)`, since these paths are
+# never used to actually INSERT through Postgres's own default/identity
+# machinery; they assign a synthetic key so foreign keys elsewhere can
+# be satisfied by arithmetic. bulk.py's loop originally checked
+# is_generated/default FIRST, so a serial/DEFAULT PK column was silently
+# omitted from every row entirely.
+
+SERIAL_PK_SCHEMA = """
+CREATE TABLE items (
+  id serial PRIMARY KEY,
+  name text NOT NULL
+);
+"""
+
+DEFAULT_PK_SCHEMA = """
+CREATE TABLE customers (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  email text NOT NULL
+);
+CREATE TABLE orders (
+  id bigint PRIMARY KEY,
+  customer_id uuid NOT NULL REFERENCES customers(id),
+  qty integer NOT NULL CHECK (qty >= 0)
+);
+"""
+
+
+def test_serial_primary_key_is_still_assigned_from_unique_value():
+    schema = parse_schema_sql(SERIAL_PK_SCHEMA)
+    rows = list(
+        bulk_table_rows(
+            schema.table("items"), count=5,
+            rng=random.Random(1), parent_counts={},
+        )
+    )
+    assert [r["id"] for r in rows] == [
+        _unique_value("id", "serial", i) for i in range(5)
+    ]
+
+
+def test_default_bearing_primary_key_is_still_assigned_from_unique_value():
+    schema = parse_schema_sql(DEFAULT_PK_SCHEMA)
+    rows = list(
+        bulk_table_rows(
+            schema.table("customers"), count=5,
+            rng=random.Random(1), parent_counts={},
+        )
+    )
+    assert [r["id"] for r in rows] == [
+        _unique_value("id", "uuid", i) for i in range(5)
+    ]
+
+
+def test_child_fk_matches_parent_keys_when_parent_pk_has_a_default():
+    """End-to-end: generate the parent's own rows and confirm the
+    child's foreign-key values are drawn from the keys the parent rows
+    actually carry -- not from keys the parent *would* carry only if
+    its PK column were skipped."""
+    schema = parse_schema_sql(DEFAULT_PK_SCHEMA)
+    parent_rows = list(
+        bulk_table_rows(
+            schema.table("customers"), count=10,
+            rng=random.Random(1), parent_counts={},
+        )
+    )
+    parent_ids = {r["id"] for r in parent_rows}
+    assert len(parent_ids) == 10  # sanity: the parent rows do carry ids
+
+    child_rows = list(
+        bulk_table_rows(
+            schema.table("orders"), count=200,
+            rng=random.Random(2), parent_counts={"customers": 10},
+        )
+    )
+    assert all(r["customer_id"] in parent_ids for r in child_rows)
