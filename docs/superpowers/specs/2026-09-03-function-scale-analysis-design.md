@@ -376,6 +376,26 @@ threshold, so it works as a CI gate.
   build on this artifact, none of it here.
 - **Wall-clock as a growth signal.** Deliberately excluded; see Evidence.
 
+## Delivery phases
+
+Split into two, each planned and shipped separately.
+
+**Phase 1 — generation foundation.** The type registry refactor, the
+bulk generator, the `COPY` loader, the two prerequisites below, and the
+full cross-path consistency machinery. This is where the risk
+concentrates, so it ships and stabilises before anything is built on it.
+
+It also has standalone value independent of this feature: SqlProof gains
+the ability to generate and load large, valid, constraint-respecting
+datasets from a schema — useful for seeding development and staging
+databases whether or not scale analysis ever ships. Phase 1 is worth
+merging even if phase 2 is abandoned.
+
+**Phase 2 — measurement and sweep.** The probe, the sweep controller and
+fit, the run artifact, the `sqlproof scale` CLI, and splinter /
+`index_advisor` ranking. Every measurement decision in this spec belongs
+to phase 2 and is unblocked by phase 1 completing.
+
 ## Prerequisites
 
 Two pieces of existing code need work before or alongside the build.
