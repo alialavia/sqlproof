@@ -19,6 +19,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
+from sqlproof.exceptions import SqlProofGenerationError
 from sqlproof.generators.typespec import TypeSpec, spec_for_column
 from sqlproof.schema.model import Column
 
@@ -29,6 +30,13 @@ from sqlproof.schema.model import Column
 BULK_TEXT_ALPHABET = string.ascii_letters + string.digits + " _-."
 
 DEFAULT_NULL_FRAC = 0.1
+
+# Bound for the range sampler's distinct-pair retry loop (see
+# sampler_for_spec's "range" branch). A range over a base type whose
+# element domain has only one possible value (e.g. a single-value
+# enum) can never produce two distinct draws, so the loop must give up
+# loudly instead of spinning forever.
+_RANGE_RETRY_LIMIT = 100
 
 _EPOCH_DATE = date(2000, 1, 1)
 
@@ -90,14 +98,25 @@ def sampler_for_spec(spec: TypeSpec, rng: random.Random) -> Callable[[], Any]:
         return lambda: rng.choice(values)
     if kind == "range":
         assert spec.element is not None
-        element = sampler_for_spec(spec.element, rng)
+        element_spec = spec.element
+        element = sampler_for_spec(element_spec, rng)
 
         def draw_range() -> Any:
             from psycopg.types.range import Range
 
             a, b = element(), element()
+            attempts = 1
             while a == b:
+                if attempts >= _RANGE_RETRY_LIMIT:
+                    msg = (
+                        "Cannot generate a non-empty range: its element type "
+                        f"({_describe_spec(element_spec)}) has too small a "
+                        f"domain to draw two distinct values after "
+                        f"{_RANGE_RETRY_LIMIT} attempts."
+                    )
+                    raise SqlProofGenerationError(msg)
                 b = element()
+                attempts += 1
             return Range(min(a, b), max(a, b), "[)")
 
         return draw_range
@@ -124,3 +143,14 @@ def sampler_for_column(
     if not nullable:
         return base
     return lambda: None if rng.random() < null_frac else base()
+
+
+def _describe_spec(spec: TypeSpec) -> str:
+    # TypeSpec carries no source type name (e.g. the concrete Postgres
+    # range/enum name), so this describes the element's *shape*
+    # instead -- the actionable detail for a "domain too small"
+    # diagnostic. Enum gets its declared values spelled out since
+    # that's the common way a range ends up with a degenerate domain.
+    if spec.kind == "enum":
+        return f"enum{spec.enum_values!r}"
+    return spec.kind

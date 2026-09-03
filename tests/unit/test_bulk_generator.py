@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import random
+import signal
 from decimal import Decimal
 
+import pytest
+
+from sqlproof.exceptions import SqlProofGenerationError
 from sqlproof.generators.bulk import sampler_for_column, sampler_for_spec
 from sqlproof.generators.typespec import TypeSpec, spec_for_type
 from sqlproof.schema.model import Column, PgType
@@ -86,3 +90,26 @@ def test_sampler_for_column_override_spec_still_respects_column_nullability():
     observed = values.count(None) / len(values)
     assert 0.24 < observed < 0.36
     assert all(v is None or isinstance(v, bool) for v in values)
+
+
+def test_range_sampler_raises_instead_of_hanging_on_a_single_value_domain():
+    # Regression: a range whose element domain has exactly one
+    # possible value (e.g. a single-value enum) can never produce two
+    # distinct draws, so the retry loop must give up loudly rather
+    # than spin forever. A SIGALRM guard bounds this test itself so a
+    # future regression to an unbounded loop fails fast instead of
+    # hanging the suite.
+    spec = TypeSpec(kind="range", element=TypeSpec(kind="enum", enum_values=("only",)))
+    sample = sampler_for_spec(spec, random.Random(1))
+
+    def _on_alarm(signum: int, frame: object) -> None:
+        raise TimeoutError("range sampler did not raise within the timeout guard")
+
+    previous_handler = signal.signal(signal.SIGALRM, _on_alarm)
+    signal.alarm(5)
+    try:
+        with pytest.raises(SqlProofGenerationError):
+            sample()
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous_handler)
