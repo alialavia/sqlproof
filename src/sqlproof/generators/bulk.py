@@ -13,15 +13,28 @@ from __future__ import annotations
 
 import random
 import string
-from collections.abc import Callable
+from collections.abc import Callable, Iterator, Mapping
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
 from sqlproof.exceptions import SqlProofGenerationError
+from sqlproof.generators.narrowing import narrow_spec_for_checks
+
+# These four are private to rows.py, but they are the exact functions
+# that give the bulk path and the Hypothesis path identical primary
+# keys, foreign-key resolution, and CHECK narrowing -- re-deriving them
+# here would be the kind of drift this design exists to prevent, so we
+# reach across the module boundary deliberately rather than duplicate.
+from sqlproof.generators.rows import (
+    _domain_checks_as_column_checks,  # pyright: ignore[reportPrivateUsage]
+    _foreign_key_for_column,  # pyright: ignore[reportPrivateUsage]
+    _is_single_column_unique,  # pyright: ignore[reportPrivateUsage]
+    _unique_value,  # pyright: ignore[reportPrivateUsage]
+)
 from sqlproof.generators.typespec import TypeSpec, spec_for_column
-from sqlproof.schema.model import Column
+from sqlproof.schema.model import Column, Table
 
 # Excludes \x00 (Postgres rejects it in text) and stays inside ASCII,
 # which keeps COPY output compact. The Hypothesis path deliberately
@@ -178,3 +191,120 @@ def _describe_spec(spec: TypeSpec) -> str:
     if spec.kind == "enum":
         return f"enum{spec.enum_values!r}"
     return spec.kind
+
+
+def parent_index_for(
+    child_index: int,
+    parent_count: int,
+    rng: random.Random,
+    distribution: str,
+    zipf_alpha: float,
+) -> int:
+    """Pick a parent row index for a child row.
+
+    Uniform spreads children evenly. Zipf concentrates them on a few
+    parents, which is what production data actually looks like and what
+    makes a function slow -- one tenant owning a disproportionate share.
+    Uniform data systematically under-predicts.
+    """
+    if parent_count <= 0:
+        msg = "parent_index_for requires at least one parent row"
+        raise ValueError(msg)
+    if distribution == "zipf":
+        # Bounded Zipf via Pareto: resample until inside range. Verified
+        # empirically at parent_count=100, alpha=1.2 -- top-5 parents take
+        # 49.9% of children (uniform would be ~5%) with all 100 parents
+        # still reachable. Retry exhaustion does not occur in practice;
+        # the uniform fallback exists only so the function is total.
+        for _ in range(100):
+            candidate = int(rng.paretovariate(zipf_alpha - 1))
+            if 1 <= candidate <= parent_count:
+                return candidate - 1
+        return rng.randrange(parent_count)
+    return rng.randrange(parent_count)
+
+
+def bulk_table_rows(
+    table: Table,
+    *,
+    count: int,
+    rng: random.Random,
+    parent_counts: Mapping[str, int],
+    distribution: str = "uniform",
+    zipf_alpha: float = 1.2,
+    null_frac: float = DEFAULT_NULL_FRAC,
+) -> Iterator[dict[str, Any]]:
+    """Yield `count` valid rows for `table`, one at a time.
+
+    Primary keys are *assigned* from the row index via the same
+    `_unique_value` the Hypothesis path uses, so both paths produce
+    identical keys. That is what lets a foreign key be satisfied by
+    arithmetic -- the parent list never has to exist in memory.
+    """
+    if len(table.primary_key) > 1:
+        msg = (
+            f"Bulk generation does not yet support composite primary keys "
+            f"({table.name} has {table.primary_key}). Use the Hypothesis "
+            f"path, or see the composite-key task."
+        )
+        raise SqlProofGenerationError(msg)
+
+    single_pk = table.primary_key[0] if table.primary_key else None
+    samplers: dict[str, Callable[[], Any]] = {}
+    for column in table.columns:
+        if column.name == single_pk or column.is_generated:
+            continue
+        if column.default is not None:
+            continue
+        if _foreign_key_for_column(table, column.name) is not None:
+            continue
+        if _is_single_column_unique(table, column.name):
+            continue
+        # Narrow the spec by this column's CHECK constraints (and any
+        # inherited from a domain) BEFORE building the sampler, so the
+        # values are in-range by construction rather than by rejection.
+        # sampler_for_column already handles nullability -- passing it
+        # the narrowed spec (rather than re-deriving null-wrapping here)
+        # keeps null handling in exactly one place.
+        spec, _nullable = spec_for_column(column)
+        spec = narrow_spec_for_checks(
+            spec,
+            column,
+            table.check_constraints + _domain_checks_as_column_checks(column),
+        )
+        samplers[column.name] = sampler_for_column(
+            column, rng, null_frac=null_frac, spec=spec
+        )
+
+    for index in range(count):
+        row: dict[str, Any] = {}
+        for column in table.columns:
+            name = column.name
+            if column.is_generated or column.default is not None:
+                continue
+            if name == single_pk:
+                row[name] = _unique_value(name, column.type.name, index)
+                continue
+            fk = _foreign_key_for_column(table, name)
+            if fk is not None:
+                available = parent_counts.get(fk.referenced_table, 0)
+                if available <= 0:
+                    if column.nullable:
+                        row[name] = None
+                        continue
+                    msg = (
+                        f"Cannot generate {table.name}.{name}: required foreign "
+                        f"key has no parent rows for {fk.referenced_table}."
+                    )
+                    raise SqlProofGenerationError(msg)
+                parent_index = parent_index_for(
+                    index, available, rng, distribution, zipf_alpha
+                )
+                referenced = fk.referenced_columns[0]
+                row[name] = _unique_value(referenced, column.type.name, parent_index)
+                continue
+            if _is_single_column_unique(table, name):
+                row[name] = _unique_value(name, column.type.name, index)
+                continue
+            row[name] = samplers[name]()
+        yield row
