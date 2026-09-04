@@ -94,6 +94,20 @@ def test_numeric_strategy_respects_precision_modifier(data) -> None:
 
 @NON_NULL_KW
 @given(data=st.data())
+def test_numeric_strategy_without_modifiers_uses_default_bound(data) -> None:
+    # A bare `numeric` declares no precision, so there is nothing to cap
+    # against and the strategy falls back to +/-1,000,000 at scale 2.
+    # Reachable only when neither parse_schema_sql nor introspection
+    # supplied a modifier, but it is the branch that decides what an
+    # unconstrained numeric column generates.
+    value = data.draw(strategy_for_type(_scalar("numeric")))
+    assert isinstance(value, Decimal)
+    assert abs(value) <= Decimal("1000000")
+    assert -value.as_tuple().exponent <= 2
+
+
+@NON_NULL_KW
+@given(data=st.data())
 def test_real_strategy_yields_finite_floats(data) -> None:
     value = data.draw(strategy_for_type(_scalar("real")))
     assert isinstance(value, float)
