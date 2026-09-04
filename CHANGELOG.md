@@ -5,6 +5,13 @@ All notable changes to SqlProof will be documented here. The format is based on
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While SqlProof
 remains in `0.x`, minor versions may include breaking changes.
 
+## [0.11.0](https://github.com/alialavia/sqlproof/compare/v0.10.1...v0.11.0) (2026-09-04)
+
+
+### Added
+
+* **generators:** bulk generation foundation for scale analysis (Phase 1) ([#105](https://github.com/alialavia/sqlproof/issues/105)) ([dec8ae4](https://github.com/alialavia/sqlproof/commit/dec8ae47e59c50f85099baf2d3771a7f0ce4ebff))
+
 ## [0.10.1](https://github.com/alialavia/sqlproof/compare/v0.10.0...v0.10.1) (2026-09-04)
 
 
