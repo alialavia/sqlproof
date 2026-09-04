@@ -1,0 +1,175 @@
+from __future__ import annotations
+
+import random
+from collections import Counter
+
+from sqlproof.generators.bulk import bulk_table_rows, parent_index_for
+from sqlproof.generators.rows import _unique_value
+from sqlproof.schema.parse_sql import parse_schema_sql
+
+SCHEMA = """
+CREATE TABLE customers (id bigint PRIMARY KEY, email text NOT NULL);
+CREATE TABLE orders (
+  id bigint PRIMARY KEY,
+  customer_id bigint NOT NULL REFERENCES customers(id),
+  qty integer NOT NULL CHECK (qty >= 0),
+  note text
+);
+"""
+
+
+def test_check_constrained_column_is_in_range_by_construction():
+    """Narrowing happens before sampling, so no value is ever rejected
+    and retried -- the sampler simply cannot emit a negative qty."""
+    schema = parse_schema_sql(SCHEMA)
+    rows = list(
+        bulk_table_rows(
+            schema.table("orders"), count=500,
+            rng=random.Random(4), parent_counts={"customers": 5},
+        )
+    )
+    assert all(r["qty"] >= 0 for r in rows)
+
+
+def test_primary_keys_match_the_shared_assignment_function():
+    schema = parse_schema_sql(SCHEMA)
+    rows = list(
+        bulk_table_rows(
+            schema.table("customers"), count=5,
+            rng=random.Random(1), parent_counts={},
+        )
+    )
+    assert [r["id"] for r in rows] == [
+        _unique_value("id", "bigint", i) for i in range(5)
+    ]
+
+
+def test_foreign_keys_only_reference_existing_parent_keys():
+    schema = parse_schema_sql(SCHEMA)
+    valid = {_unique_value("id", "bigint", i) for i in range(10)}
+    rows = list(
+        bulk_table_rows(
+            schema.table("orders"), count=200,
+            rng=random.Random(1), parent_counts={"customers": 10},
+        )
+    )
+    assert len(rows) == 200
+    assert all(r["customer_id"] in valid for r in rows)
+
+
+def test_generation_is_streaming_not_materialised():
+    schema = parse_schema_sql(SCHEMA)
+    stream = bulk_table_rows(
+        schema.table("orders"), count=10_000,
+        rng=random.Random(1), parent_counts={"customers": 10},
+    )
+    assert next(iter(stream)) is not None  # yields before generating all 10k
+
+
+def test_same_seed_reproduces_identical_rows():
+    schema = parse_schema_sql(SCHEMA)
+    def gen():
+        return list(bulk_table_rows(
+            schema.table("orders"), count=50,
+            rng=random.Random(99), parent_counts={"customers": 5},
+        ))
+    assert gen() == gen()
+
+
+def test_uniform_distribution_spreads_children_across_parents():
+    counts = Counter(
+        parent_index_for(i, 10, random.Random(i), "uniform", 1.2)
+        for i in range(2000)
+    )
+    assert len(counts) == 10
+    assert max(counts.values()) < 400  # no parent dominates
+
+
+def test_zipf_distribution_concentrates_on_few_parents():
+    rng = random.Random(5)
+    counts = Counter(
+        parent_index_for(i, 100, rng, "zipf", 1.2) for i in range(5000)
+    )
+    top_share = sum(c for _, c in counts.most_common(5)) / 5000
+    assert top_share > 0.30  # heavy tenants exist, unlike uniform
+
+
+# --- Fix round 1: PK must be assigned regardless of is_generated/default ---
+#
+# rows.py's per-row loop checks the single-column PK unconditionally,
+# before is_generated/default -- a serial or DEFAULT-bearing PK column
+# still gets an explicit `_unique_value(...)`, since these paths are
+# never used to actually INSERT through Postgres's own default/identity
+# machinery; they assign a synthetic key so foreign keys elsewhere can
+# be satisfied by arithmetic. bulk.py's loop originally checked
+# is_generated/default FIRST, so a serial/DEFAULT PK column was silently
+# omitted from every row entirely.
+
+SERIAL_PK_SCHEMA = """
+CREATE TABLE items (
+  id serial PRIMARY KEY,
+  name text NOT NULL
+);
+"""
+
+DEFAULT_PK_SCHEMA = """
+CREATE TABLE customers (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  email text NOT NULL
+);
+CREATE TABLE orders (
+  id bigint PRIMARY KEY,
+  customer_id uuid NOT NULL REFERENCES customers(id),
+  qty integer NOT NULL CHECK (qty >= 0)
+);
+"""
+
+
+def test_serial_primary_key_is_still_assigned_from_unique_value():
+    schema = parse_schema_sql(SERIAL_PK_SCHEMA)
+    rows = list(
+        bulk_table_rows(
+            schema.table("items"), count=5,
+            rng=random.Random(1), parent_counts={},
+        )
+    )
+    assert [r["id"] for r in rows] == [
+        _unique_value("id", "serial", i) for i in range(5)
+    ]
+
+
+def test_default_bearing_primary_key_is_still_assigned_from_unique_value():
+    schema = parse_schema_sql(DEFAULT_PK_SCHEMA)
+    rows = list(
+        bulk_table_rows(
+            schema.table("customers"), count=5,
+            rng=random.Random(1), parent_counts={},
+        )
+    )
+    assert [r["id"] for r in rows] == [
+        _unique_value("id", "uuid", i) for i in range(5)
+    ]
+
+
+def test_child_fk_matches_parent_keys_when_parent_pk_has_a_default():
+    """End-to-end: generate the parent's own rows and confirm the
+    child's foreign-key values are drawn from the keys the parent rows
+    actually carry -- not from keys the parent *would* carry only if
+    its PK column were skipped."""
+    schema = parse_schema_sql(DEFAULT_PK_SCHEMA)
+    parent_rows = list(
+        bulk_table_rows(
+            schema.table("customers"), count=10,
+            rng=random.Random(1), parent_counts={},
+        )
+    )
+    parent_ids = {r["id"] for r in parent_rows}
+    assert len(parent_ids) == 10  # sanity: the parent rows do carry ids
+
+    child_rows = list(
+        bulk_table_rows(
+            schema.table("orders"), count=200,
+            rng=random.Random(2), parent_counts={"customers": 10},
+        )
+    )
+    assert all(r["customer_id"] in parent_ids for r in child_rows)

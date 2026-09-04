@@ -398,6 +398,13 @@ def _quote_identifier(identifier: str) -> str:
 
 
 def _adapt_insert_value(table: Table, column_name: str, value: Any) -> object:
+    # A Python `None` must stay `None` -- a wire-protocol NULL -- not be
+    # wrapped in Jsonb/Json, which would serialize it as the *jsonb
+    # scalar* `null` (`json.dumps(None)`): a real, non-NULL value for
+    # which `IS NULL` is false. Wrapping unconditionally silently wrote
+    # 'null'::jsonb wherever a nullable json/jsonb column drew NULL.
+    if value is None:
+        return None
     column = table.column(column_name)
     type_name = _base_type_name(column)
     if type_name == "jsonb":
