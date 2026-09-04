@@ -42,40 +42,38 @@ from sqlproof.schema.model import Column, Table
 # volume concern, and the paths are not required to agree on values.
 BULK_TEXT_ALPHABET = string.ascii_letters + string.digits + " _-."
 
-# Tuned to match the Hypothesis path's observed null_frac for nullable
-# columns (st.one_of(st.none(), ...) in columns.py), as measured by
-# tests/integration/test_pg_stats_parity_live.py against live pg_stats.
+# Not derived from the Hypothesis path -- deliberately chosen instead.
 #
-# Measured (a bare `text` column, no CHECK/unique/FK, N=800 rows,
-# `draw_example(dataset_strategy(...))` -> `_insert_dataset` -> ANALYZE
-# -> pg_stats.null_frac, repeated across many independent runs):
-# 0.9988, 0.9988, 1.0, 0.9988, 1.0, 0.9988, 1.0, 1.0, 0.99875 -- stable
-# at ~0.999-1.0, not noise.
+# The obvious plan was "measure the Hypothesis path's null rate for a
+# nullable column and match it". That plan doesn't work: there is no
+# such rate. `st.one_of(st.none(), strategy)` (columns.py) has no
+# stable null probability -- it's an artifact of which SqlProof entry
+# point draws from it. `core.py`'s `invariant()` draws via
+# `draw_example`, which is `SearchStrategy.example()`: internally
+# `@given(strategy)` with `phases=(Phase.generate,)` and
+# `max_examples=10` only, so it never leaves Hypothesis's "cold start"
+# region and is heavily biased toward `one_of`'s first, simplest
+# branch (`none()`) -- measured at null_frac ~0.9988-1.0 across 9
+# independent runs (see tests/integration/test_pg_stats_parity_live.py
+# history and the task-12 report for the raw numbers). Drawing the
+# *same* column strategy through a proper `@given(strategy)
+# @settings(max_examples=500)` loop instead -- many examples in one
+# continuous search, not a fresh 10-example cold start -- gives
+# null_frac ~0.002: the opposite extreme, 500x apart, for the
+# identical strategy. Neither number is a value anyone chose; both are
+# accidents of exploration depth, and matching either one means
+# matching an accident. A 100%-NULL column in particular would be
+# actively harmful here: it has degenerate selectivity, the planner
+# treats it as carrying no information, and a measurement built on it
+# describes nothing real -- the opposite of this feature's purpose.
 #
-# This is NOT "one_of is 50/50" -- it is a real, reproducible property
-# of the *specific* mechanism `_insert_dataset`'s callers use to draw a
-# dataset: `draw_example` (sampling.py) is `SearchStrategy.example()`,
-# which internally runs `@given(strategy)` with `phases=(Phase.generate,)`
-# and `max_examples=10` only, then shuffles and returns one of those 10
-# full datasets. With no `Phase.reuse`/`Phase.target`/`Phase.shrink` and
-# only 10 examples, Hypothesis never leaves the "cold start" region of
-# its search, where `one_of(st.none(), strategy)` is heavily biased
-# toward its first, simplest branch (`none()`). This is the same
-# mechanism `SqlProof.invariant()` uses (core.py calls `draw_example`
-# directly), so it is a real characteristic of that entry point, not a
-# test artifact.
-#
-# It is emphatically NOT how `SqlProof.check()` behaves: that path
-# (runners/property.py) drives the same strategy through a proper
-# `@given(strategy) @settings(max_examples=runs)` loop with default
-# phases, which explores far more of the search space and drives the
-# null rate toward the *opposite* extreme (~0.2% null, measured
-# separately over 500 examples with `phases=(Phase.generate,)` and no
-# batch-of-10 cutoff). The Hypothesis path's null rate is not a single
-# number -- it depends entirely on which SqlProof entry point drew the
-# data. This constant matches `_insert_dataset`/`draw_example`, which is
-# what this parity test (and `invariant()`) actually exercise.
-DEFAULT_NULL_FRAC = 1.0
+# So: pick a realistic default instead, and make it a knob every
+# caller can override (`bulk_table_rows`, `load_dataset`,
+# `sampler_for_column` all take `null_frac=`).
+# tests/integration/test_pg_stats_parity_live.py asserts the knob is
+# honoured end-to-end (COPY + ANALYZE + pg_stats), not that this
+# specific number matches anything upstream.
+DEFAULT_NULL_FRAC = 0.1
 
 # Bound for the range sampler's distinct-pair retry loop (see
 # sampler_for_spec's "range" branch). A range over a base type whose
