@@ -76,6 +76,33 @@ This shapes scope, so it is recorded explicitly:
    Consequence: refactoring `strategy_for_type` is the first build task,
    not a later cleanup.
 
+   **Correction (2026-09-04):** "updating one and forgetting the other
+   stops being possible" overclaims what the registry actually covers.
+   It is true for the kinds whose `TypeSpec` carries bounds --
+   `integer`, `decimal`, `text` -- because for those, both interpreters
+   read the same `min_value`/`max_value`/`min_size`/`max_size` off the
+   spec; there is nothing left to forget. It is not true for `date`,
+   `datetime`, `float`, `interval`, `binary` and `vector`: `TypeSpec`
+   carries no range for these, so each interpreter hard-codes its own,
+   and by build time they had already, measurably, diverged:
+
+   | kind | bulk | Hypothesis |
+   |---|---|---|
+   | date | 2000-01-20 … 2054-09-20 | 0066-09-01 … 9988-07-27 |
+   | datetime | 2000-01-08 … 2031-09-04 | 0100-02-06 … 9985-10-22 |
+   | float | ±1e6 | ±1.8e308 |
+   | interval | 2h … 115 days | ±~2.7M years |
+
+   The exhaustiveness test (`tests/unit/test_interpreter_exhaustiveness.py`)
+   does not catch this and cannot be relied on to: it asserts that both
+   interpreters *handle* every registered kind (return a value, don't
+   raise), never that they *agree* on what that kind means. Widening
+   `TypeSpec` to carry real bounds for these six kinds would fix it, but
+   is out of scope here -- it would change the Hypothesis path's
+   generated values too, which needs its own review. See Open
+   questions, item 1, for the follow-up and the related `pg_stats`
+   backstop gap it exposes.
+
 ## Architecture
 
 Four units, each independently testable:
@@ -488,13 +515,38 @@ confirming no `auto_explain` log parsing is needed for detection.
 
 ## Open questions
 
-1. **Multi-table sweeps.** Which table's row count is "n" when a function
+1. **(Top priority) Type-registry bounds for the unbounded kinds, and
+   the `pg_stats` backstop gap it exposes.** Confirmed Decision 7's
+   structural guarantee doesn't reach `date`, `datetime`, `float`,
+   `interval`, `binary` or `vector` -- see the correction there for the
+   measured divergence between the two interpreters' hard-coded ranges.
+   Two follow-ups, which must land together:
+   1. Give `TypeSpec` real bounds for these six kinds so both
+      interpreters read the same values, the way `integer`/`decimal`/
+      `text` already do. Deliberately deferred out of this fix: it
+      changes the Hypothesis path's generated values too, and that
+      needs its own review rather than riding in on this one.
+   2. Extend the `pg_stats` statistical-parity backstop beyond
+      `null_frac`. "Statistical parity, specific to this feature" above
+      already names `n_distinct` and `correlation` alongside
+      `null_frac` as what must match, but
+      `tests/integration/test_bulk_null_frac_live.py` (the test that
+      shipped) asserts `null_frac` only. That's not an oversight to
+      backfill casually: a cross-path `n_distinct` test would fail
+      *today*, precisely because of the range divergence above --
+      `date`/`datetime`/`float`/`interval` columns drawn from wildly
+      different domains have wildly different distinct-value counts.
+      Landing the `n_distinct`/`correlation` assertions before item 1
+      above is fixed would just be asserting the divergence; landing
+      item 1 without this would leave the backstop believing it covers
+      more than it does. Land both together.
+2. **Multi-table sweeps.** Which table's row count is "n" when a function
    touches several? Proposal: sweep one designated driver table, hold
    others at a fixed ratio, and record the ratio in the artifact.
-2. **Argument selection.** For functions taking arguments, which values?
+3. **Argument selection.** For functions taking arguments, which values?
    A poorly-chosen tenant id measures the empty case. Proposal: draw from
    the generated data, and prefer the heaviest key under skew.
-3. **Cost ceiling.** A sweep to 500K on a wide schema is minutes of
+4. **Cost ceiling.** A sweep to 500K on a wide schema is minutes of
    compute. Local default ceiling likely wants to be lower than what the
    cloud tier would allow.
 
