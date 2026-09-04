@@ -1,0 +1,22 @@
+# Codecov had no config here, so it fell back to defaults that allow no
+# coverage drop at all — a stricter bar than this project sets for itself
+# (`--cov-fail-under=94` in .github/workflows/ci.yml). These thresholds
+# mirror the declared policy instead.
+#
+# `patch` is deliberately looser than `project`. The library carries
+# defensive fallback branches that are unreachable through any supported
+# entry point — the numeric strategy's no-modifiers path, for instance,
+# now that both parse_schema_sql and introspection supply modifiers.
+# Holding new code to a higher bar than the codebase as a whole mostly
+# encourages tests written to satisfy the gate rather than to catch
+# defects.
+coverage:
+  status:
+    project:
+      default:
+        target: 94%
+        threshold: 1%
+    patch:
+      default:
+        target: 80%
+        threshold: 5%

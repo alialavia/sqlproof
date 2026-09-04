@@ -140,7 +140,8 @@ def _underlying_type_name(column: Column) -> str:
 
 def _direct_length_strategy(column: Column, op: str, value: int) -> SearchStrategy[str] | None:
     name = _underlying_type_name(column)
-    if name not in {"text", "citext", "varchar", "character varying", "char", "character"}:
+    if name not in {"text", "citext", "varchar", "character varying", "char", "character",
+                    "bpchar"}:
         return None
     min_size = 0
     max_size = column.type.modifiers[0] if column.type.modifiers else 255
@@ -174,11 +175,17 @@ def _direct_range_strategy(
     if name in {"bigint", "int8"}:
         return st.integers(max(int(minimum), -(2**63)), 2**63 - 1)
     if name in {"numeric", "decimal"}:
-        places = column.type.modifiers[1] if len(column.type.modifiers) > 1 else 2
+        modifiers = column.type.modifiers
+        if len(modifiers) >= 2:
+            precision, scale = modifiers[0], modifiers[1]
+            max_abs = Decimal(10) ** (precision - scale) - Decimal(10) ** (-scale)
+        else:
+            scale = 2
+            max_abs = Decimal("1000000")
         return st.decimals(
             min_value=minimum,
-            max_value=Decimal("1000000"),
-            places=places,
+            max_value=max_abs,
+            places=scale,
             allow_nan=False,
             allow_infinity=False,
         )
