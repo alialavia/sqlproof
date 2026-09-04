@@ -5,6 +5,13 @@ All notable changes to SqlProof will be documented here. The format is based on
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While SqlProof
 remains in `0.x`, minor versions may include breaking changes.
 
+## [0.10.1](https://github.com/alialavia/sqlproof/compare/v0.10.0...v0.10.1) (2026-09-04)
+
+
+### Fixed
+
+* **introspect:** decode atttypmod for varchar(n), char(n), and numeric(p,s) ([#101](https://github.com/alialavia/sqlproof/issues/101)) ([09cc785](https://github.com/alialavia/sqlproof/commit/09cc78559987b2188b2a1b8c16d42d9f6a8db6b7))
+
 ## [0.10.0](https://github.com/alialavia/sqlproof/compare/v0.9.0...v0.10.0) (2026-06-19)
 
 
