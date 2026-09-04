@@ -22,6 +22,7 @@ from typing import Any, LiteralString, cast
 
 import psycopg
 from psycopg import sql
+from psycopg.types.json import Json, Jsonb
 
 # Cross-module reuse of core.py's JSON-column adaptation, deliberately,
 # for the same reason bulk.py reaches into rows.py's private helpers
@@ -29,7 +30,9 @@ from psycopg import sql
 # Jsonb wrapping" here would be exactly the kind of drift this design
 # exists to prevent -- COPY and the parameterized-INSERT path must
 # agree on it, and there is exactly one place that already knows.
-from sqlproof.core import _adapt_insert_value  # pyright: ignore[reportPrivateUsage]
+# Only `_base_type_name` is reused directly, not `_adapt_insert_value`
+# itself -- see `_column_wrap_kind`'s docstring for why.
+from sqlproof.core import _base_type_name  # pyright: ignore[reportPrivateUsage]
 from sqlproof.exceptions import SqlProofGenerationError
 from sqlproof.generators.bulk import DEFAULT_NULL_FRAC, bulk_table_rows
 from sqlproof.schema.dependency_graph import resolve_insertion_plan
@@ -50,13 +53,15 @@ def copy_table(
 
     `column_names` must match the keys each row dict actually
     carries (see `load_dataset`, which derives it from a real row
-    rather than an independent guess). Every value is passed through
-    `_adapt_insert_value` before hitting the wire: `COPY`'s text
-    protocol resolves most Python types (Decimal, str, bytes,
-    datetime, a generic `Range`, ...) to the right wire format on its
-    own, but a bare `dict` for a json/jsonb column is ambiguous --
-    psycopg raises `cannot adapt type 'dict'` unless it's wrapped in
-    `Json`/`Jsonb`, exactly as the parameterized INSERT path needs.
+    rather than an independent guess). Every value is adapted before
+    hitting the wire (see `_column_wrap_kind`/`_adapt_copy_value`
+    below): `COPY`'s text protocol resolves most Python types
+    (Decimal, str, bytes, datetime, a generic `Range`, ...) to the
+    right wire format on its own, but a bare `dict` for a json/jsonb
+    column is ambiguous -- psycopg raises `cannot adapt type 'dict'`
+    unless it's wrapped in `Json`/`Jsonb`, exactly as the
+    parameterized INSERT path (`_adapt_insert_value` in core.py)
+    needs.
 
     A `GENERATED ALWAYS AS IDENTITY` column carrying an explicit
     value (as its primary key does, once it's `table.primary_key`)
@@ -71,17 +76,53 @@ def copy_table(
     # to LiteralString only satisfies pyright strict's `Query` type for
     # `Cursor.copy`, matching the pattern in mutation/runner.py.
     copy_sql = sql.SQL(cast(LiteralString, f"COPY {qualified} ({columns}) FROM STDIN"))  # type: ignore[redundant-cast]
+    # Table-invariant: which columns need Json/Jsonb wrapping depends
+    # only on the column's type, never on the row. `_adapt_insert_value`
+    # (core.py) resolves this via `table.column(name)` -- a linear scan
+    # over `table.columns` -- plus a walk up the type's domain/base
+    # chain, per VALUE per ROW. Resolved once per column here, before
+    # the `COPY` loop, instead (same hoist as generators/bulk.py's
+    # per-row FK/unique lookups).
+    wrap_kinds = [_column_wrap_kind(table, name) for name in column_names]
     written = 0
     with conn.cursor() as cur, cur.copy(copy_sql) as copy:
         for row in rows:
             copy.write_row(
                 tuple(
-                    _adapt_insert_value(table, name, row.get(name))
-                    for name in column_names
+                    _adapt_copy_value(row.get(name), kind)
+                    for name, kind in zip(column_names, wrap_kinds, strict=True)
                 )
             )
             written += 1
     return written
+
+
+def _column_wrap_kind(table: Table, column_name: str) -> str | None:
+    """Whether `column_name` needs Json/Jsonb wrapping for `COPY`, or
+    None. Mirrors `_adapt_insert_value` (core.py)'s type resolution
+    exactly, but is called once per column instead of once per value
+    -- see `copy_table`.
+    """
+    type_name = _base_type_name(table.column(column_name))
+    if type_name in ("jsonb", "json"):
+        return type_name
+    return None
+
+
+def _adapt_copy_value(value: Any, wrap_kind: str | None) -> object:
+    """Apply the wrapping `_column_wrap_kind` determined for this
+    column. A Python `None` must stay `None` -- a wire-protocol NULL
+    -- not be wrapped in Jsonb/Json, which would serialise it as the
+    *jsonb scalar* `null`: a real, non-NULL value for which `IS NULL`
+    is false. Mirrors `_adapt_insert_value` (core.py) exactly.
+    """
+    if value is None:
+        return None
+    if wrap_kind == "jsonb":
+        return Jsonb(value)
+    if wrap_kind == "json":
+        return Json(value)
+    return value
 
 
 def load_dataset(
