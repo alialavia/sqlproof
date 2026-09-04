@@ -72,7 +72,8 @@ class SqlProofStateMachine(RuleBasedStateMachine):
 # Column types drawn for non-`id` columns. Deliberately spans the
 # constructs the two generation paths (Hypothesis search vs. seeded
 # bulk RNG) could disagree on: integer width, text, boolean, decimal
-# precision, date and uuid.
+# precision, date, uuid and jsonb (the `Jsonb(None)` vs. jsonb scalar
+# `null` distinction only has a column to fail on if jsonb is here).
 _SCHEMA_COLUMN_TYPES: tuple[PgType, ...] = (
     PgType("scalar", "integer"),
     PgType("scalar", "bigint"),
@@ -81,7 +82,16 @@ _SCHEMA_COLUMN_TYPES: tuple[PgType, ...] = (
     PgType("scalar", "numeric", modifiers=(10, 2)),
     PgType("scalar", "date"),
     PgType("scalar", "uuid"),
+    PgType("scalar", "jsonb"),
 )
+
+# CHECK comparison operators drawn for the `>= 0` / `> 0` constraint on
+# non-nullable integer/bigint/numeric columns. The strict `>` shape
+# exercises decimal/integer bound *stepping* (see narrowing.py's
+# `_narrow_bound`), which `>=` alone never touches -- a strict bound
+# has to round its endpoint one unit away from the literal instead of
+# using it directly.
+_CHECK_OPERATORS: tuple[str, ...] = (">=", ">")
 
 
 def schemas(
@@ -100,6 +110,15 @@ def schemas(
 
     FK columns only ever reference an earlier table (by draw position),
     so the generated FK graph is always acyclic.
+
+    A table with two distinct earlier tables to reference (position >=
+    2) can, in addition to the usual single FK column, draw a *second*
+    FK column referencing a different earlier table -- and then draw
+    whether to make the primary key the pair of them instead of `id`.
+    This is the junction-table shape the composite-primary-key mixed-
+    radix assignment (`composite_key_values` in generators/bulk.py)
+    exists for; both the single-FK and composite-PK shapes stay
+    reachable, drawn rather than forced.
     """
     names = st.lists(
         st.sampled_from(["users", "orders", "products", "scores", "events"]),
@@ -132,9 +151,11 @@ def schemas(
                     and col_type.name in {"integer", "bigint", "numeric"}
                     and draw(st.booleans())
                 ):
-                    checks.append(CheckConstraint(expression=f"{col_name} >= 0"))
+                    operator = draw(st.sampled_from(_CHECK_OPERATORS))
+                    checks.append(CheckConstraint(expression=f"{col_name} {operator} 0"))
 
             # Reference an earlier table so the FK graph stays acyclic.
+            primary_key: tuple[str, ...] = ("id",)
             if with_foreign_keys and position > 0 and draw(st.booleans()):
                 parent = table_names[draw(st.integers(0, position - 1))]
                 fk_name = f"{parent}_id"
@@ -151,12 +172,36 @@ def schemas(
                     )
                 )
 
+                # A second, distinct earlier table lets this table take
+                # the junction-table shape: a composite primary key over
+                # both FK columns rather than the synthetic `id`. Only
+                # possible with >= 2 earlier tables, and only drawn when
+                # there's still column budget for one more column.
+                other_parents = [p for p in table_names[:position] if p != parent]
+                if other_parents and len(columns) < max_columns and draw(st.booleans()):
+                    parent2 = draw(st.sampled_from(other_parents))
+                    fk2_name = f"{parent2}_id"
+                    columns.append(
+                        Column(fk2_name, PgType("scalar", "bigint"), False, None, False)
+                    )
+                    foreign_keys.append(
+                        ForeignKey(
+                            columns=(fk2_name,),
+                            referenced_table=parent2,
+                            referenced_columns=("id",),
+                            on_delete="NO ACTION",
+                            on_update="NO ACTION",
+                        )
+                    )
+                    if draw(st.booleans()):
+                        primary_key = (fk_name, fk2_name)
+
             tables.append(
                 Table(
                     schema="public",
                     name=name,
                     columns=tuple(columns),
-                    primary_key=("id",),
+                    primary_key=primary_key,
                     foreign_keys=tuple(foreign_keys),
                     unique_constraints=(),
                     check_constraints=tuple(checks),
