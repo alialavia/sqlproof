@@ -12,6 +12,30 @@ remains in `0.x`, minor versions may include breaking changes.
 
 * **generators:** bulk generation foundation for scale analysis (Phase 1) ([#105](https://github.com/alialavia/sqlproof/issues/105)) ([dec8ae4](https://github.com/alialavia/sqlproof/commit/dec8ae47e59c50f85099baf2d3771a7f0ce4ebff))
 
+  The new bulk path is internal groundwork; `sqlproof.scale` is not yet
+  exported or documented. Two changes in the same release do affect
+  existing property tests, and are called out below.
+
+### Fixed
+
+* **core:** `NULL` in a nullable `json` / `jsonb` column is now written as a
+  SQL `NULL` rather than the JSON scalar `'null'`. `_adapt_insert_value`
+  wrapped every value — including `None` — in `Jsonb(...)`, which psycopg
+  serialises as the bytes `null`. Any row where the generator drew `None`
+  for a json column therefore landed as a real, non-`NULL` value, and
+  `IS NULL` reported false for it. If you assert on `NULL` in a json or
+  jsonb column, those assertions were being checked against wrong data.
+  ([#105](https://github.com/alialavia/sqlproof/issues/105))
+
+### Changed
+
+* **generators:** row generation builds its per-column strategies once per
+  table instead of once per row. Generated data is unchanged — this only
+  affects how often strategies are constructed — but tests with foreign
+  keys or many columns should get measurably faster; the foreign-key path
+  alone measured about 2x at 40,000 rows.
+  ([#105](https://github.com/alialavia/sqlproof/issues/105))
+
 ## [0.10.1](https://github.com/alialavia/sqlproof/compare/v0.10.0...v0.10.1) (2026-09-04)
 
 
