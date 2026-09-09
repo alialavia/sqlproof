@@ -35,6 +35,7 @@ from psycopg.types.json import Json, Jsonb
 from sqlproof.core import _base_type_name  # pyright: ignore[reportPrivateUsage]
 from sqlproof.exceptions import SqlProofGenerationError
 from sqlproof.generators.bulk import DEFAULT_NULL_FRAC, bulk_table_rows
+from sqlproof.generators.rows import ColumnOverrides
 from sqlproof.schema.dependency_graph import resolve_insertion_plan
 from sqlproof.schema.model import SchemaInfo, Table
 
@@ -133,11 +134,18 @@ def load_dataset(
     seed: int = 0,
     distribution: str = "uniform",
     null_frac: float = DEFAULT_NULL_FRAC,
+    columns: ColumnOverrides | None = None,
 ) -> dict[str, int]:
     """Generate and `COPY` every table in FK-safe order.
 
     Reuses `resolve_insertion_plan` so parents always land before
     children -- the same ordering the Hypothesis path uses.
+
+    `columns` takes the same `"table.column"` keys as the Hypothesis
+    path's `sqlproof(..., columns={...})`, so a caller pins a column the
+    same way whichever generator produced the rows. The one difference
+    is that a Hypothesis `SearchStrategy` is rejected here rather than
+    drawn -- see `bulk._resolve_override`.
     """
     plan = resolve_insertion_plan(schema.tables)
     if plan.deferred_edges:
@@ -170,6 +178,7 @@ def load_dataset(
             parent_counts=loaded,
             distribution=distribution,
             null_frac=null_frac,
+            columns=columns,
         )
         # The column list is derived from a real row `bulk_table_rows`
         # produced, not re-filtered from `table.columns` independently.

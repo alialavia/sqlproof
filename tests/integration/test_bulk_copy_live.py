@@ -195,3 +195,44 @@ def test_nonnull_json_columns_round_trip_real_objects(conn):
     ).fetchone()[0]
     assert payload_objects == 50
     assert meta_objects == 50
+
+
+def test_column_overrides_reach_postgres_through_copy(conn):
+    """The bulk path's own ranges are chosen defaults; a caller whose real
+    data looks different needs a way to say so, the same way they already
+    can on the Hypothesis path via `sqlproof(..., columns={...})`. This
+    checks the override survives generation, COPY's text protocol, and the
+    round trip back out of the database -- not merely that the generator
+    returned it in Python."""
+    schema = parse_schema_sql(SCHEMA_SQL, schema="bulk_test")
+    load_dataset(
+        conn,
+        schema,
+        {"customers": 40, "orders": 120},
+        seed=1,
+        columns={"customers.email": "pinned@example.com"},
+    )
+    distinct = conn.execute(
+        "SELECT count(DISTINCT email), min(email) FROM bulk_test.customers"
+    ).fetchone()
+    assert distinct[0] == 1
+    assert distinct[1] == "pinned@example.com"
+
+
+def test_callable_override_can_shape_a_column_per_row(conn):
+    """The realistic use: pin a column to a distribution the caller knows,
+    rather than a single value. Here every tenth row shares a tier, which is
+    the kind of skew that changes what the planner does."""
+    schema = parse_schema_sql(SCHEMA_SQL, schema="bulk_test")
+    load_dataset(
+        conn,
+        schema,
+        {"customers": 50, "orders": 100},
+        seed=1,
+        columns={"customers.tier": lambda ctx: f"tier-{ctx.row_index % 5}"},
+    )
+    rows = conn.execute(
+        "SELECT tier, count(*) FROM bulk_test.customers GROUP BY tier ORDER BY tier"
+    ).fetchall()
+    assert [r[0] for r in rows] == [f"tier-{i}" for i in range(5)]
+    assert all(r[1] == 10 for r in rows)

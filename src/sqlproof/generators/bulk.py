@@ -14,12 +14,15 @@ from __future__ import annotations
 import random
 import string
 from collections.abc import Callable, Iterator, Mapping
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from sqlproof.exceptions import SqlProofGenerationError
+from hypothesis.strategies import SearchStrategy
+
+from sqlproof.exceptions import SqlProofGenerationError, SqlProofUsageError
 from sqlproof.generators.narrowing import narrow_spec_for_checks
 
 # These four are private to rows.py, but they are the exact functions
@@ -28,6 +31,8 @@ from sqlproof.generators.narrowing import narrow_spec_for_checks
 # here would be the kind of drift this design exists to prevent, so we
 # reach across the module boundary deliberately rather than duplicate.
 from sqlproof.generators.rows import (
+    ColumnOverrides,
+    _column_override,  # pyright: ignore[reportPrivateUsage]
     _domain_checks_as_column_checks,  # pyright: ignore[reportPrivateUsage]
     _foreign_key_for_column,  # pyright: ignore[reportPrivateUsage]
     _is_single_column_unique,  # pyright: ignore[reportPrivateUsage]
@@ -432,6 +437,51 @@ def _composite_key_space(
     return space
 
 
+@dataclass(frozen=True, slots=True)
+class BulkColumnContext:
+    """What a callable override receives on the bulk path.
+
+    Deliberately narrower than `rows.py`'s `ColumnContext`, which also
+    carries `table_rows` and `rows_by_table` -- every row generated so
+    far. This path streams; holding those is precisely the memory cost
+    it exists to avoid.
+
+    It is a distinct type rather than `ColumnContext` with the two
+    fields left empty, so a callable written against the Hypothesis
+    context raises `AttributeError` here instead of silently reading an
+    empty list and producing different data than its author intended.
+    """
+
+    table: Table
+    column_name: str
+    row_index: int
+    row: dict[str, Any]
+
+
+def _resolve_override(override: Any, context: BulkColumnContext) -> Any:
+    """Mirror of `rows.py`'s `_draw_override`, minus strategies.
+
+    A `SearchStrategy` is the natural thing to reach for, and drawing
+    from one would pull Hypothesis's conjecture machinery -- whose
+    per-draw cost grows with how much has already been drawn in the same
+    example -- back into the path built to escape it. Refusing loudly
+    beats silently ignoring the argument or quietly getting slower.
+    """
+    if isinstance(override, SearchStrategy):
+        msg = (
+            f"columns[{context.table.name}.{context.column_name}] is a Hypothesis "
+            "SearchStrategy, which the bulk generation path does not accept: "
+            "drawing from a strategy reintroduces the per-draw cost this path "
+            "exists to avoid. Pass a plain value, or a callable taking a "
+            "BulkColumnContext. Strategies remain supported on the Hypothesis "
+            "path via sqlproof(..., columns={...})."
+        )
+        raise SqlProofUsageError(msg)
+    if callable(override):
+        return override(context)
+    return override
+
+
 def bulk_table_rows(
     table: Table,
     *,
@@ -441,6 +491,7 @@ def bulk_table_rows(
     distribution: str = "uniform",
     zipf_alpha: float = 1.2,
     null_frac: float = DEFAULT_NULL_FRAC,
+    columns: ColumnOverrides | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Yield `count` valid rows for `table`, one at a time.
 
@@ -464,8 +515,17 @@ def bulk_table_rows(
     construction" prerequisite); this generator existing specifically
     for throughput makes the same mistake more expensive, not less.
     """
+    columns = columns or {}
     fk_map = _foreign_key_map(table)
     unique_names = _single_column_unique_names(table)
+    # Table-invariant like fk_map/unique_names: which columns carry an
+    # override never changes across the rows we yield, so resolve the
+    # lookup once here rather than per column per row.
+    override_map = {
+        column.name: _column_override(columns, table, column.name)
+        for column in table.columns
+        if _column_override(columns, table, column.name) is not None
+    }
     composite_pk = len(table.primary_key) > 1
     key_partition: tuple[tuple[str, ...], tuple[str, ...]] | None = None
     if composite_pk:
@@ -483,6 +543,12 @@ def bulk_table_rows(
     samplers: dict[str, Callable[[], Any]] = {}
     for column in table.columns:
         if column.name in table.primary_key or column.is_generated:
+            continue
+        if column.name in override_map:
+            # The override supplies the value, so building a sampler for
+            # this column would be wasted setup -- and `spec_for_column`
+            # can raise (an undimensioned `vector`), which would turn a
+            # working call into a hard failure.
             continue
         if column.default is not None:
             continue
@@ -521,7 +587,23 @@ def bulk_table_rows(
             if name == single_pk:
                 row[name] = _unique_value(name, column.type.name, index)
                 continue
-            if column.is_generated or column.default is not None:
+            # Branch order below mirrors `rows.py`'s per-row loop exactly:
+            # PK, then is_generated, then the override, then default. The
+            # override sits BEFORE the default skip there, so a defaulted
+            # column is overridable -- collapsing these two into one test
+            # would silently make the same `columns={...}` behave
+            # differently depending on which generator ran.
+            if column.is_generated:
+                continue
+            if name in override_map:
+                row[name] = _resolve_override(
+                    override_map[name],
+                    BulkColumnContext(
+                        table=table, column_name=name, row_index=index, row=row
+                    ),
+                )
+                continue
+            if column.default is not None:
                 continue
             fk = fk_map.get(name)
             if fk is not None:
