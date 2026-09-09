@@ -1,14 +1,38 @@
 """Declarative type knowledge, consumed by both generation paths.
 
-This module holds what is *true* about a Postgres type — bounds,
-sizes, precision, element types. It contains no Hypothesis strategies
-and no RNG. `columns.py` interprets a TypeSpec into a Hypothesis
-strategy; `bulk.py` interprets the same TypeSpec into a seeded
-sampler.
+This module holds what Postgres itself *constrains* about a type:
+`int4` really is ±2³¹, `numeric(6, 2)` really does cap at 9999.99,
+`varchar(n)` really does stop at n. Facts, not preferences. It contains
+no Hypothesis strategies and no RNG. `columns.py` interprets a TypeSpec
+into a Hypothesis strategy; `bulk.py` interprets the same TypeSpec into
+a seeded sampler.
 
-Adding support for a new type means adding one entry here. Because
-neither generator holds type knowledge of its own, it is not possible
-to teach one path about a type and forget the other.
+What this module deliberately does NOT hold is *policy*. Several types
+— `date`, `datetime`, `float`, `interval`, `binary` — have no
+meaningful bound to record: Postgres accepts dates from 4713 BC to
+5874897 AD, and neither generator wants that. Each interpreter picks a
+range suited to its own job, and the two differ on purpose:
+
+    columns.py  explores extremes, because its job is finding the input
+                that breaks your code — `st.dates()` spans years 1-9999.
+    bulk.py     stays realistic, because its job is producing data whose
+                planner statistics mean something — dates land in a
+                few-decade window.
+
+Narrowing the search path would blunt it; widening the volume path
+would make `n_distinct` and `correlation` describe nothing real. So the
+divergence is intended, and neither range is "more correct".
+
+Callers who need a specific range say so per column rather than
+relying on either default — `sqlproof(..., columns={...})` on the
+Hypothesis path, `load_dataset(..., columns={...})` on the bulk path.
+
+Adding a new type means adding one entry here plus a branch in each
+interpreter; `tests/unit/test_interpreter_exhaustiveness.py` fails if
+either branch is missing. Note what that test does and does not buy:
+it proves both interpreters *handle* every kind, never that they agree
+on what a kind means. For kinds with facts recorded here, agreement is
+structural. For the policy kinds above, it is not — by design.
 """
 
 from __future__ import annotations
