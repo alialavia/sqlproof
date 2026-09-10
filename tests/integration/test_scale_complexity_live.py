@@ -22,9 +22,10 @@ runs as a Nested Loop over a Materialize, which scans the table once and
 replays it from memory for every outer row -- O(n^2) comparisons on O(n)
 buffer work, so it fits ~1. The other gap runs the opposite way: an O(1)
 function whose work moves by a block or two from point to point, like
-`pk_lookup_fn`, has R^2 near 0 by construction and is refused rather
-than fitted ~0. Both are pinned below as strict xfails (Rulings AS, AT),
-so neither gap can close -- or stay open -- silently.
+`pk_lookup_fn`, has an R^2 that measures only that wobble -- far below
+0.98 -- and is refused rather than fitted ~0. Both are pinned below as
+strict xfails (Rulings AS, AT), so neither gap can close -- or stay
+open -- silently.
 
 A wrong oracle is worse than no oracle: it reads as a broken fit, and
 the tempting repair -- widening the tolerance until it passes -- leaves
@@ -175,9 +176,10 @@ def test_a_cpu_only_quadratic_recovers_exponent_near_two(conn):
         "I1 / Ruling AT: flat-but-noisy work is refused. pk_lookup_fn is a "
         "primary-key lookup, O(1), yet its buffer work moves by a block or "
         "two from point to point with no trend (the final review saw 9-13 "
-        "blocks against a calibrated baseline of 4); against a flat series "
-        "R^2 is near 0 by construction -- 0.000 on this suite's data -- below "
-        "the spec's MIN_R_SQUARED of 0.98, so "
+        "blocks against a calibrated baseline of 4). A flat series' R^2 "
+        "measures only that wobble, which reshuffles between runs, so it "
+        "lands far below the spec's MIN_R_SQUARED of 0.98 (0.000 to 0.75 on "
+        "the patterns measured here), and "
         ".exponent raises instead of reporting ~0 -- `assert exponent < 1.5` "
         "fails CI for a well-behaved function. strict=True: the day the fit "
         "accepts a confidently flat series (e.g. a slope-standard-error "

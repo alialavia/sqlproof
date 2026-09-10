@@ -332,8 +332,9 @@ Without that, a surprising result is unreproducible.
    a later factor key distributions computed against a different parent
    count, silently changing what the FK arithmetic assumes (Ruling S).
    Total generation is ≈ 2× the largest point (1 + 2 + … + N ≈ 2N), and
-   each point depends only on the seed and its factor, which is what
-   makes a run reproducible.
+   each point's data depends only on the seed and its factor, which is
+   what makes a run reproducible -- its buffer counts to within a block
+   or two (see "Known limitations").
 3. **Stop** at the first of:
    - ≥ 5 points **and** R² ≥ 0.98 — enough is known; stop paying
    - `max_factor` reached (default 32×)
@@ -463,8 +464,12 @@ reason and the raw points.
   case pinning that buffer work is the root's count and is NOT
   multiplied by loops (Ruling A); the CTE and InitPlan/SubPlan cases use
   EXPLAIN JSON captured from a live database.
-- **Determinism** — same seed and same profile produce the same points,
-  apart from execution time (a live test pins it).
+- **Determinism** — same seed and same profile generate the same data,
+  and so the same row counts, plan shapes and resolved arguments at
+  every point. Buffer counts repeat only to within a block or two, so
+  the test as first spec'd -- identical points apart from execution
+  time -- does not hold, and is not in the suite (see "Known
+  limitations").
 
 ## Known limitations
 
@@ -491,12 +496,12 @@ open -- silently.
   function the hash never changes, peak memory reads 0, and an inner
   plan flip is fitted straight through (Ruling AK). Pinned by
   `test_a_flip_inside_a_function_is_segmented`.
-- **Flat-but-noisy work is refused.** Against a flat series R² is near
-  0 by construction, so an O(1) function whose work moves by a block or
-  two from point to point -- a primary-key lookup -- fails the
-  R² ≥ 0.98 acceptance, and `exponent` raises rather than report ~0: a
-  false alarm, never a wrong number. Only an exactly-flat series is
-  accepted as 0. Pinned by
+- **Flat-but-noisy work is refused.** Against a flat series R² measures
+  only the noise, so an O(1) function whose work moves by a block or two
+  from point to point -- a primary-key lookup, at R² 0.000 to 0.75 --
+  fails the R² ≥ 0.98 acceptance, and `exponent` raises rather than
+  report ~0: a false alarm, never a wrong number. Only an exactly-flat
+  series is accepted as 0. Pinned by
   `test_a_primary_key_lookup_recovers_exponent_near_zero`. Gating on the
   slope's standard error instead would change the acceptance rule;
   that is the user's decision (Ruling AT).
@@ -509,6 +514,18 @@ open -- silently.
   accordingly (Ruling AM; see "Data safety").
 - **A runaway probe is not cancelled.** `probe_timeout_s` is checked
   after a probe returns.
+- **Buffer counts repeat only to within a block or two.** Two sweeps
+  with the same seed and profile -- on one connection or on fresh ones
+  -- measured identical row counts, plan hashes, temp blocks, peak
+  memory and arguments, but work that differed by up to 2 blocks at a
+  point on the quadratic reference (2,862 against 2,864 at 4×, 0.07%;
+  45,187 against 45,189 at 16×), and a primary-key lookup's 10–13
+  blocks reshuffled between runs. The same happens on the code before
+  the final review's fix wave, so it comes from Postgres's buffer
+  accounting -- most likely catalog lookups, which vary from run to run
+  -- not from the sweep's
+  data. A determinism test asserting identical points fails for that
+  reason; how to pin determinism instead is left open.
 - **O(n log n) cannot be told from O(n)** by buffer counts: an in-memory
   sort touches no buffers.
 

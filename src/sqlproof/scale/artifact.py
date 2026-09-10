@@ -61,7 +61,9 @@ def save_run(
     `fit.fit_exponent(segment, baseline)` reproduces each entry of
     `regimes`. `seed`, `max_factor`, `min_points` and `probe_timeout_s`
     record how the sweep ran, so it can be run again: the same seed and
-    profile generate the same data, and so the same buffer counts.
+    profile generate the same data, though buffer counts repeat only to
+    within a block or two (measured; most likely catalog lookups, which
+    vary from run to run).
 
     `argument_policy` holds one entry per argument position, saying how
     that argument was chosen (Ruling AO): `{"kind": "heaviest", "column":

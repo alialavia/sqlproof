@@ -89,8 +89,11 @@ def run_sweep(
     result reports is the total across it (`sum(sizes.values()) *
     factor`). `args` holds one entry per function parameter: a literal,
     or a resolver re-run against each freshly loaded dataset (see
-    `args.py`). `seed` fixes the generated data, and with it every
-    point's buffer counts. `columns` pins generated columns, as
+    `args.py`). `seed` fixes the generated data, and so every point's
+    row counts, plan shape and resolved arguments; buffer counts then
+    repeat only to within a block or two (measured; most likely catalog
+    lookups, which vary from run to run). `columns` pins generated
+    columns, as
     `load_dataset`'s does.
 
     The ladder stops at the first of: `min_points` points whose final
