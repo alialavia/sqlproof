@@ -5,6 +5,10 @@ the Phase 1 spike: at a fixed dataset, wall-clock varied 1.96x across
 runs on an *idle* machine while buffer counts varied 1.0007x. An
 exponent fitted on buffers holds on a laptop and a noisy CI runner
 alike; fitted on wall-clock, the gate would flake.
+
+The price is that buffers count I/O-visible work only. CPU spent on rows
+already in memory -- a Materialize replayed for every outer row --
+touches no buffer, so CPU-only growth is invisible here.
 """
 
 from __future__ import annotations
@@ -21,6 +25,18 @@ from sqlproof.scale._identifiers import validate_function_name
 
 @dataclass(frozen=True, slots=True)
 class ProbePoint:
+    """One scale point, measured from `EXPLAIN (ANALYZE, BUFFERS)` of
+    `SELECT function(...)`.
+
+    `work_blocks` and `temp_blocks` are the root node's totals, which
+    include every statement run inside the function. `plan_hash` and
+    `peak_memory_kb` describe only the OUTER statement's plan: for a
+    function Postgres does not inline -- every plpgsql function, and SQL
+    functions with a FROM clause or an aggregate -- that plan is a single
+    `Result` node, so `plan_hash` is the same at every scale and
+    `peak_memory_kb` is always 0.
+    """
+
     factor: int
     total_rows: int
     work_blocks: int
@@ -103,6 +119,10 @@ def _shape(node: dict[str, Any]) -> str:
     detect the planner switching STRATEGY, not the data changing size.
     Every scale point changes the numbers; only a real plan change
     should change this hash.
+
+    The hash covers only the OUTER statement of `SELECT fn()`. Statements
+    run inside a non-inlined function never appear in its EXPLAIN, so a
+    plan change there leaves this hash unchanged (Ruling AK).
     """
     children = ",".join(_shape(child) for child in node.get("Plans", []))
     return f"{node.get('Node Type', '?')}({children})"

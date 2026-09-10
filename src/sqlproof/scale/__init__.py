@@ -1,8 +1,14 @@
 """Scale measurement: is this function's growth curve acceptable?
 
-The output is an assertion, not a report -- CI goes red when someone
-writes a query that will not survive growth, the way
-`assert_no_survivors()` works for mutation testing.
+The output is an assertion, not a report: CI goes red when a function's
+BUFFER WORK -- the pages its queries touch -- grows faster than the test
+allows, the way `assert_no_survivors()` works for mutation testing.
+
+Two blind spots bound that claim (see the design spec's "Known
+limitations"). Buffers count I/O-visible work, not CPU, so a quadratic
+that re-reads nothing -- a non-equi join over a materialized inner side
+-- fits ~1. And EXPLAIN of `SELECT fn()` shows only the outer statement,
+so a plan change inside a non-inlined function goes unseen.
 """
 
 from __future__ import annotations

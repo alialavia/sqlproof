@@ -1,8 +1,10 @@
 """The public surface, used the way a caller would.
 
-The output is an ASSERTION, not a report: CI goes red when someone
-writes a query that will not survive growth. The artifact written
-alongside is for trend history, the way mutation runs are.
+The output is an ASSERTION, not a report: CI goes red when a function's
+buffer work grows faster than the test allows. The artifact written
+alongside is for trend history, the way mutation runs are. The sweep is
+also destructive to the tables it models, which the last three tests
+pin (Ruling AM).
 """
 from __future__ import annotations
 

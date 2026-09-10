@@ -40,6 +40,8 @@
 | `src/sqlproof/scale/artifact.py` (new) | Persist a run as JSON, reusing the mutation-run artifact conventions. |
 | `src/sqlproof/scale/__init__.py` (modify) | Export `scale_analysis`, `heaviest`, `random_key`, `median_key`, `ScaleResult`. |
 
+> **Superseded by Ruling S — see the spec:** `sweep.py` reloads from empty at every factor; it does not load incrementally.
+
 Tests mirror this: `tests/unit/test_scale_probe_parsing.py`, `test_scale_args.py`, `test_scale_fit.py`, `test_scale_result.py`, `test_scale_artifact.py`, and `tests/integration/test_scale_probe_live.py`, `test_scale_complexity_live.py`, `test_scale_space_live.py`.
 
 ---
@@ -47,6 +49,8 @@ Tests mirror this: `tests/unit/test_scale_probe_parsing.py`, `test_scale_args.py
 ### Task 1: Parse an EXPLAIN JSON tree into a measurement
 
 Pure parsing, no database. This is where the plan's single most dangerous trap lives.
+
+> **Superseded by Ruling A — see the spec:** work is the root node's buffer count, never summed over the tree or multiplied by loops; the per-loop trap applies to `Actual Rows` / `Actual Time`, not buffers.
 
 **Files:**
 - Create: `src/sqlproof/scale/probe.py`
@@ -1596,6 +1600,8 @@ def test_sweep_records_every_point_it_measured(conn):
 Run: `uv run pytest tests/integration/test_scale_complexity_live.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'sqlproof.scale.sweep'`
 
+> **Superseded by Rulings N and T — see the spec:** the baseline comes from two one-row calibration rounds before the ladder, the second kept, not from the factor-1 point.
+
 - [ ] **Step 3: Implement the sweep**
 
 ```python
@@ -2222,6 +2228,8 @@ git commit -m "test(scale): prove spill detection against a real work_mem spill"
 
 ### Task 12: Prove plan-flip segmentation against a real flip
 
+> **Superseded by Ruling AK — see the spec:** the probe cannot see a flip inside a non-inlined function, so this test's skip branch would run on every machine; it shipped as a strict xfail beside a test proving the inner flip is real.
+
 **Files:**
 - Create: `tests/integration/test_scale_plan_flip_live.py`
 
@@ -2338,8 +2346,8 @@ git commit -m "test(scale): prove plan-flip segmentation against a real flip"
 **Known gaps, recorded rather than hidden:**
 
 1. **The sweep truncates and reloads at each factor rather than appending.** The spec's Phase 1 lineage called incremental appending an optimisation worth building in from the start, and Task 8 deliberately does not. Appending would make a sweep cost the largest point rather than the sum of all points, but rows appended at a later factor would carry key distributions computed against a different parent count, silently changing what the FK arithmetic assumes. Reloading is correct and slow; appending is fast and needs a design. The docstring in `_truncate` says so.
-2. **`heaviest` is approximated by the largest key, not a true child-row count.** For sequentially assigned keys under the current generator that is usually the same row, but not always, and it will be wrong for a schema whose skew does not follow key order. A true implementation needs the referencing table, which means walking the FK graph — deferred deliberately, and the test asserts the query shape rather than that it finds a genuine maximum.
+2. **`heaviest` is approximated by the largest key, not a true child-row count.** For sequentially assigned keys under the current generator that is usually the same row, but not always, and it will be wrong for a schema whose skew does not follow key order. **Superseded by Ruling AO — see the spec:** it is not "usually the same row" -- under the sweep's uniform data the largest key is an arbitrary parent, and under zipf the most-referenced parent is key 1, the smallest. A true implementation needs the referencing table, which means walking the FK graph — deferred deliberately, and the test asserts the query shape rather than that it finds a genuine maximum.
 3. **The timeout projection band is `0.6x`–`1.6x`, chosen rather than derived.** It reflects the 1.96× wall-clock spread measured in the Phase 1 spike, but it is not a statistically justified interval. It is deliberately wide; anyone tightening it should derive it from the observed variance instead.
-4. **Task 12 may skip.** Whether Postgres flips plan within the swept range depends on its cost constants and the machine. The test asserts the mechanism when a flip occurs and skips when none does — an honest outcome, but it means the flip path can go unexercised on some machines. The unit tests in Task 5 cover the segmentation logic unconditionally.
+4. **Task 12's flip is invisible to the probe, and is pinned as a strict xfail, not a skip** (Ruling AK). `find_one` is not inlined, so `EXPLAIN` of `SELECT find_one()` is a bare `Result` at every scale and `plan_hash` never changes, even though the inner query's plan does flip (proved by `test_the_planner_flips_inside_the_function`). `test_a_flip_inside_a_function_is_segmented` is `xfail(strict=True, raises=AssertionError)`: it XPASSes, and so fails, the day nested plans become visible to the probe. The unit tests in Task 5 cover the segmentation logic unconditionally.
 
 **Type consistency.** `ProbePoint`, `FitResult`, `PlanFlip`, `ScaleResult`, `parse_plan`, `probe_function`, `resolve_args`, `heaviest`, `random_key`, `median_key`, `fit_exponent`, `segment_by_plan`, `find_spill`, `project_rows_before_timeout`, `run_sweep`, `scale_analysis` and `save_run` are used with identical signatures everywhere they appear across tasks. `ProbePoint.args` is a tuple throughout, serialised as a list only in the artifact.
