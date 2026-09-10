@@ -196,6 +196,22 @@ def load_dataset(
     return loaded
 
 
+def truncate(conn: psycopg.Connection, schema: SchemaInfo) -> None:
+    """Clear every table before reloading at the next factor.
+
+    Reloading from empty each time is deliberate for now: appending
+    would be cheaper, but a partially-appended table whose earlier rows
+    were generated at a different factor would silently change the key
+    distribution the FK arithmetic assumes.
+    """
+    names = ", ".join(
+        f"{_quote(table.schema)}.{_quote(table.name)}" for table in schema.tables
+    )
+    if not names:
+        return
+    conn.execute(sql.SQL(cast(LiteralString, f"TRUNCATE {names} CASCADE")))  # type: ignore[redundant-cast]
+
+
 def analyze(conn: psycopg.Connection, schema: SchemaInfo) -> None:
     """Refresh planner statistics.
 
