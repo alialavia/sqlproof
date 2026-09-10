@@ -1456,14 +1456,23 @@ git commit -m "feat(scale): ScaleResult assertion surface, raising on inconclusi
 # tests/integration/test_scale_complexity_live.py
 """End-to-end complexity recovery against real Postgres.
 
-These fixtures are the regression net for the whole feature: functions
-whose complexity is known by construction, whose exponents must come
-back within tolerance.
+The functions below are REFERENCE FUNCTIONS -- calibration weights whose
+complexity is known by construction, used to check that the fit reports
+the right answer. (Not "fixtures": that word already means
+`@pytest.fixture` in this suite, and one of those appears below too.)
 
-IMPORTANT when adding a fixture: verify it actually HAS the complexity
-it claims before trusting it as an oracle. Postgres will happily
-optimise a naively-written "quadratic" query into something linear, and
-a broken oracle silently validates a broken fit.
+IMPORTANT when adding one: verify it actually HAS the complexity its
+name claims before trusting it as an oracle. Postgres will execute a
+naively-written "quadratic" query as a hash join, making it linear --
+measured on this project's test database, `SELECT count(*) FROM a, b
+WHERE a.x = b.x` fits an exponent of 0.95, not 2. Genuine quadratic
+behaviour needs a procedural FOR loop the planner cannot rewrite into a
+join, over a column with no index; that shape fits 1.95, which is why
+`quadratic_fn` below is written the way it is.
+
+A wrong oracle is worse than no oracle: it reads as a broken fit, and
+the tempting repair -- widening the tolerance until it passes -- leaves
+the measurement validated against something that proves nothing.
 """
 from __future__ import annotations
 
@@ -1687,7 +1696,9 @@ uv run pytest tests/integration/test_scale_complexity_live.py -v
 ```
 Expected: PASS (4 tests)
 
-**If an exponent comes back outside its band, do not widen the band.** Check the fixture first: run the function at two sizes by hand and confirm the work really does grow the way the name claims. A "quadratic" function the planner optimised into a hash join is a broken oracle, and widening the assertion would hide a genuine fitting bug.
+**If an exponent comes back outside its band, do not widen the band.** Check the reference function first. Run `EXPLAIN` on it and confirm the plan is the shape you expect — a `Nested Loop`, not a `Hash Join` — then run it at two sizes and confirm the buffer count really grows the way the name claims.
+
+A "quadratic" function the planner executed as a hash join is a broken oracle. Widening the assertion to accommodate it would hide a genuine fitting bug and leave the whole feature validated against a test that proves nothing.
 
 - [ ] **Step 5: Commit**
 
@@ -2304,7 +2315,7 @@ git commit -m "test(scale): prove plan-flip segmentation against a real flip"
 
 ## Self-Review Notes
 
-**Spec coverage.** Each spec section maps to a task: probe/measurement (1, 2), arguments (3), time-work axis (4), plan-flip segmentation (5, 12), space axis (6, 11), `ScaleResult` and its raise-on-inconclusive contract (7), sweep and stop conditions (8), the Python API (9), artifacts (10), known-complexity fixtures (8). Out-of-scope items — catalog discovery, a CLI, concurrency, splinter wrapping, the FK-cycle fix — appear nowhere, as intended.
+**Spec coverage.** Each spec section maps to a task: probe/measurement (1, 2), arguments (3), time-work axis (4), plan-flip segmentation (5, 12), space axis (6, 11), `ScaleResult` and its raise-on-inconclusive contract (7), sweep and stop conditions (8), the Python API (9), artifacts (10), known-complexity reference functions (8). Out-of-scope items — catalog discovery, a CLI, concurrency, splinter wrapping, the FK-cycle fix — appear nowhere, as intended.
 
 **Known gaps, recorded rather than hidden:**
 

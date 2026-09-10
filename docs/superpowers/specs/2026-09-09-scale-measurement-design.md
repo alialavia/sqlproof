@@ -333,12 +333,29 @@ reason and the raw points.
   synthetic measurement points: exponent recovery, baseline subtraction,
   flip segmentation, low-R² handling, spill detection, projection ranges.
   No database.
-- **Known-complexity integration fixtures** — hand-written O(1), O(n),
-  O(n log n) and O(n²) functions whose exponents must be recovered within
-  tolerance. This is the regression net for the whole feature. Each
-  fixture must be *verified to actually have* the complexity it claims
-  before it can serve as an oracle — the planner will happily optimise a
-  naively-written "quadratic" query into something linear.
+- **Known-complexity reference functions** — hand-written O(1), O(n),
+  O(n log n) and O(n²) SQL functions whose exponents the fit must recover
+  within tolerance. These are calibration weights: the way you check a
+  scale is to put a known mass on it. This is the regression net for the
+  whole feature.
+
+  *Called "reference functions", not "fixtures", deliberately — `fixture`
+  already means `@pytest.fixture` in this test suite, and both appear in
+  the same files.*
+
+  **Each reference function must be verified to actually have the
+  complexity its name claims before it can serve as an oracle.** The
+  planner will happily execute a naively-written "quadratic" query as a
+  hash join, making it linear. Measured on this project's test database:
+  `SELECT count(*) FROM a, b WHERE a.x = b.x` fits an exponent of **0.95**,
+  not 2 — Postgres builds a hash on one side and probes it once per row of
+  the other. Genuine quadratic behaviour needs a procedural `FOR` loop the
+  planner cannot rewrite into a join, over a column with no index; that
+  shape fits **1.95**.
+
+  A wrong oracle is worse than no oracle. It reads as a broken fit, and
+  the tempting repair — widening the tolerance until it passes — leaves
+  the measurement validated against something that proves nothing.
 - **Spill detection** — a sort forced over `work_mem` must produce a
   spill point, and one that fits must not.
 - **Plan-flip segmentation** — a query that genuinely flips plan within
