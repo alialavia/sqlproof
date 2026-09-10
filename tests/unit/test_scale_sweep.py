@@ -53,6 +53,37 @@ def test_baseline_comes_from_the_calibration_probe(monkeypatch: pytest.MonkeyPat
     assert abs(result.exponent - 2.0) < 1e-6
 
 
+def test_calibration_keeps_the_second_rounds_work_not_the_first(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ruling T: the calibration round (truncate -> one-row load ->
+    analyze -> resolve_args -> probe_function) runs TWICE and the
+    FIRST round's work is discarded -- it pays plpgsql's one-time
+    compile cost, which no ladder point ever pays. The first
+    calibration probe here returns 500 (standing in for that compile
+    tax); the second returns 100 (the steady replan cost every ladder
+    point actually experiences). Ladder work is 100 + f**2, so an
+    exponent of exactly 2.0 only comes out if the SECOND round's 100
+    is kept as baseline: keeping the first (500) would refuse every
+    ladder point outright (100 + f**2 - 500 <= 0 for small f)."""
+    calibration_calls = 0
+
+    def fake_probe(conn, function, args, *, factor, total_rows):
+        nonlocal calibration_calls
+        if factor == 0:
+            calibration_calls += 1
+            work = 500 if calibration_calls == 1 else 100
+            return _point(factor, total_rows, work)
+        return _point(factor, total_rows, 100 + factor**2)
+
+    _install_db_stubs(monkeypatch, fake_probe)
+    result = run_sweep(
+        object(), SchemaInfo(), "fn", sizes={"t": 10}, max_factor=64,
+    )
+    assert calibration_calls == 2  # the round ran twice
+    assert abs(result.exponent - 2.0) < 1e-6
+
+
 def test_ladder_stops_once_five_points_fit_a_clean_power_law(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -91,7 +122,9 @@ def test_timeout_marks_truncated_and_stops_probing(monkeypatch: pytest.MonkeyPat
         max_factor=64, probe_timeout_s=0.05,
     )
     assert result.truncated is True
-    assert probed_factors == [0, 1, 2]  # 0 is the calibration probe; 4 is never reached
+    # Two calibration probes (factor 0, run twice per Ruling T), then the
+    # ladder; 4 is never reached.
+    assert probed_factors == [0, 0, 1, 2]
 
 
 def test_final_segment_decides_when_the_ladder_stops(

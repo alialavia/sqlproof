@@ -47,17 +47,38 @@ def run_sweep(
     # own work_blocks subtracts to exactly 0 at that point and refuses
     # every sweep. Leaving the cost in the fit flattens the curve and
     # understates the exponent (the Phase 1 spike measured 1.69 raw
-    # against 1.994 corrected on an exactly-quadratic function). The
-    # factor/total_rows sentinels below are never part of any fit: this
-    # probe is not appended to `points`.
-    truncate(conn, schema)
-    load_dataset(conn, schema, {name: 1 for name in sizes}, seed=seed, columns=columns)
-    analyze(conn, schema)
-    calibration_args = resolve_args(conn, args)
-    calibration = probe_function(
-        conn, function, calibration_args, factor=0, total_rows=0,
-    )
-    baseline = calibration.work_blocks
+    # against 1.994 corrected on an exactly-quadratic function).
+    #
+    # The round runs TWICE and only the second is kept. A plpgsql
+    # function's internal query plan is compiled once per connection,
+    # the first time it is called -- that one-time compile is not paid
+    # by any ladder point, since calibration always runs first. Every
+    # ladder point instead follows truncate -> load -> analyze, which
+    # invalidates the cached plan and forces a REPLAN, cheaper than a
+    # fresh compile but still real work (measured on a reference
+    # function: 43 blocks to compile once vs. 31 to replan after
+    # invalidation, vs. 1-3 fully warm with no invalidation at all). A
+    # single calibration round pays the compile cost no ladder point
+    # pays and overstates the baseline; running it twice and discarding
+    # the first absorbs that one-time tax, leaving the second round's
+    # work_blocks measuring the same replan cost every ladder point
+    # measures. A bare warm-up call directly followed by the measured
+    # call is not equivalent: with no truncate/analyze between them
+    # there is no invalidation, so the measured call would be fully
+    # warm and understate the baseline. Neither calibration probe is
+    # appended to `points`; the factor/total_rows sentinels below are
+    # never part of any fit.
+    def _calibration_round() -> ProbePoint:
+        truncate(conn, schema)
+        load_dataset(conn, schema, {name: 1 for name in sizes}, seed=seed, columns=columns)
+        analyze(conn, schema)
+        calibration_args = resolve_args(conn, args)
+        return probe_function(
+            conn, function, calibration_args, factor=0, total_rows=0,
+        )
+
+    _calibration_round()  # discarded: absorbs the one-time compile cost
+    baseline = _calibration_round().work_blocks
 
     factor = 1
     while factor <= max_factor:
