@@ -333,8 +333,8 @@ Without that, a surprising result is unreproducible.
    count, silently changing what the FK arithmetic assumes (Ruling S).
    Total generation is ≈ 2× the largest point (1 + 2 + … + N ≈ 2N), and
    each point's data depends only on the seed and its factor, which is
-   what makes a run reproducible -- its buffer counts to within a few
-   blocks (see "Known limitations").
+   what makes a run reproducible -- its buffer counts to within a block
+   or two (see "Known limitations").
 3. **Stop** at the first of:
    - ≥ 5 points **and** R² ≥ 0.98 — enough is known; stop paying
    - `max_factor` reached (default 32×)
@@ -465,15 +465,11 @@ reason and the raw points.
   case pinning that buffer work is the root's count and is NOT
   multiplied by loops (Ruling A); the CTE and InitPlan/SubPlan cases use
   EXPLAIN JSON captured from a live database.
-- **Determinism** — pinned live (Ruling AV): two sweeps with the same
-  seed and profile, each on its own connection, agree EXACTLY at every
-  point on factor, total rows, temp blocks, peak memory, plan hash and
-  resolved arguments, for the quadratic reference and for a
-  primary-key lookup. On the quadratic reference, work also agrees to
-  within 4 blocks per point and the fitted exponents to within 0.01;
-  the lookup's work is not compared, since a 4-block tolerance means
-  nothing at its ~10 blocks. Exact equality of work is not pinned:
-  buffer counts carry a few blocks of run-to-run noise (see "Known
+- **Determinism** — same seed and same profile generate the same data,
+  and so the same row counts, plan shapes and resolved arguments at
+  every point. Buffer counts repeat only to within a block or two, so
+  the test as first spec'd -- identical points apart from execution
+  time -- does not hold, and is not in the suite (see "Known
   limitations").
 
 ## Known limitations
@@ -523,18 +519,18 @@ open silently, except where noted.
   accordingly (Ruling AM; see "Data safety").
 - **A runaway probe is not cancelled.** `probe_timeout_s` is checked
   after a probe returns.
-- **Buffer counts repeat only to within a few blocks.** Two sweeps with
-  the same seed and profile -- on one connection or on fresh ones --
-  measured identical row counts, plan hashes, temp blocks, peak memory
-  and arguments, but work that differed by up to 2 blocks at a point on
-  the quadratic reference (2,862 against 2,864 at 4×, 0.07%; 45,187
-  against 45,189 at 16×), and by up to 3 on a primary-key lookup whose
-  10–13 blocks reshuffled between runs. The same happens on the code
-  before the final review's fix wave, so it comes from Postgres's
-  buffer accounting -- most likely catalog lookups, which vary from run
-  to run -- not from the sweep's data. So the determinism test pins
-  work to within 4 blocks, not exactly (Ruling AV; see "Testing
-  strategy").
+- **Buffer counts repeat only to within a block or two.** Two sweeps
+  with the same seed and profile -- on one connection or on fresh ones
+  -- measured identical row counts, plan hashes, temp blocks, peak
+  memory and arguments, but work that differed by up to 2 blocks at a
+  point on the quadratic reference (2,862 against 2,864 at 4×, 0.07%;
+  45,187 against 45,189 at 16×), and a primary-key lookup's 10–13
+  blocks reshuffled between runs. The same happens on the code before
+  the final review's fix wave, so it comes from Postgres's buffer
+  accounting -- most likely catalog lookups, which vary from run to run
+  -- not from the sweep's
+  data. A determinism test asserting identical points fails for that
+  reason; how to pin determinism instead is left open.
 - **O(n log n) cannot be told from O(n)** by buffer counts: an in-memory
   sort touches no buffers.
 
