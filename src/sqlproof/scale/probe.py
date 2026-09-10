@@ -10,8 +10,11 @@ alike; fitted on wall-clock, the gate would flake.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, LiteralString, cast
+
+import psycopg
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,3 +104,74 @@ def _shape(node: dict[str, Any]) -> str:
     """
     children = ",".join(_shape(child) for child in node.get("Plans", []))
     return f"{node.get('Node Type', '?')}({children})"
+
+
+def probe_function(
+    conn: psycopg.Connection,
+    function: str,
+    args: Sequence[Any],
+    *,
+    factor: int,
+    total_rows: int,
+) -> ProbePoint:
+    """Measure one call of `function` under EXPLAIN.
+
+    Runs inside a savepoint that is always rolled back: a function with
+    side effects must not change the data the next scale point measures
+    against. Mirrors the isolation `core.py:175-179` uses for property
+    runs.
+
+    SAVEPOINT requires an open transaction, which an autocommit
+    connection (e.g. the one integration tests hand in) does not have
+    between statements. If none is open, one is opened here and rolled
+    back afterwards too, so it leaves no trace either. If the connection
+    is already inside a transaction -- e.g. DBManager's, autocommit=False
+    -- that transaction is left untouched; only the savepoint rolls
+    back, so callers can compose several probes inside one transaction.
+    """
+    placeholders = ", ".join(["%s"] * len(args))
+    statement = (
+        f"EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) SELECT {function}({placeholders})"
+    )
+    opened_transaction = (
+        conn.info.transaction_status == psycopg.pq.TransactionStatus.IDLE
+    )
+    with conn.cursor() as cur:
+        if opened_transaction:
+            cur.execute("BEGIN")
+        cur.execute("SAVEPOINT sqlproof_probe")
+        try:
+            # `statement` interpolates a runtime function name and
+            # placeholder count, so it isn't a LiteralString; the cast
+            # matches the pattern in scale/load.py and mutation/runner.py.
+            cur.execute(cast(LiteralString, statement), tuple(args) or None)  # type: ignore[redundant-cast]
+            # `conn` is typed as a bare, unparameterized `psycopg.Connection`
+            # (callers use both a plain and a dict_row cursor), so pyright
+            # cannot infer the row's shape; explicit `Any` launders that
+            # instead of leaving it "Unknown" for every use below.
+            row: Any = cur.fetchone()
+        finally:
+            cur.execute("ROLLBACK TO SAVEPOINT sqlproof_probe")
+            cur.execute("RELEASE SAVEPOINT sqlproof_probe")
+            if opened_transaction:
+                cur.execute("ROLLBACK")
+    assert row is not None, "EXPLAIN ANALYZE always returns exactly one row"
+    # psycopg returns the JSON already decoded; the row is a 1-tuple (or
+    # a 1-key dict under dict_row) holding the EXPLAIN array. `cast(Any,
+    # row)` (rather than casting the branch result) keeps pyright from
+    # narrowing the dict branch to `dict[Unknown, Unknown]`.
+    explain_json = cast(
+        "list[dict[str, Any]]",
+        next(iter(cast(Any, row).values())) if isinstance(row, dict) else row[0],
+    )
+    work, memory, temp, digest, ms = parse_plan(explain_json)
+    return ProbePoint(
+        factor=factor,
+        total_rows=total_rows,
+        work_blocks=work,
+        peak_memory_kb=memory,
+        temp_blocks=temp,
+        plan_hash=digest,
+        exec_ms=ms,
+        args=tuple(args),
+    )
