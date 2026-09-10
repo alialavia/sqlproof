@@ -58,13 +58,14 @@ def proof():
             connection.execute("DROP SCHEMA IF EXISTS api_test CASCADE")
 
 
-def test_scale_analysis_reads_as_a_test(proof):
+def test_scale_analysis_reads_as_a_test(proof, tmp_path):
     result = scale_analysis(
         proof,
         "api_test.events_for",
         sizes={"orgs": 20, "events": 400},
         args=[heaviest("api_test.orgs.id")],
         max_factor=16,
+        artifact_dir=tmp_path,
     )
     # events_for is linear by construction: no index on events.org_id,
     # so the count is a full seq scan.
@@ -72,7 +73,7 @@ def test_scale_analysis_reads_as_a_test(proof):
     assert not result.spills_below(1_000)
 
 
-def test_resolved_arguments_are_recorded_per_point(proof):
+def test_resolved_arguments_are_recorded_per_point(proof, tmp_path):
     """A surprising result has to be reproducible, and that means
     knowing which argument each point was measured with."""
     result = scale_analysis(
@@ -81,6 +82,7 @@ def test_resolved_arguments_are_recorded_per_point(proof):
         sizes={"orgs": 20, "events": 400},
         args=[heaviest("api_test.orgs.id")],
         max_factor=8,
+        artifact_dir=tmp_path,
     )
     # Pins that max_factor=8 actually reached run_sweep through **kwargs
     # (with the default 32 the sweep stops at 16 on fit quality).
