@@ -10,9 +10,11 @@ import json
 import re
 from datetime import UTC, datetime
 
+import pytest
+
 import sqlproof
 from sqlproof.scale.artifact import save_run
-from sqlproof.scale.fit import FitResult, PlanFlip
+from sqlproof.scale.fit import FitResult, PlanFlip, fit_exponent, segment_by_plan
 from sqlproof.scale.probe import ProbePoint
 from sqlproof.scale.result import ScaleResult
 
@@ -158,3 +160,76 @@ def test_artifact_started_at_defaults_to_now_when_not_given(tmp_path):
     assert re.match(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$", data["started_at"])
     assert data["duration_s"] is None
     assert data["schema_fingerprint"] is None
+
+
+def _fitted_result():
+    """Points exactly quadratic above a fixed 100-block baseline, fitted
+    the way `run_sweep` fits them, carrying the sweep parameters
+    `run_sweep` records."""
+    points = [
+        ProbePoint(factor=f, total_rows=f * 1000, work_blocks=100 + 50 * f * f,
+                   peak_memory_kb=0, temp_blocks=0, plan_hash="a",
+                   exec_ms=float(f), args=(7,))
+        for f in (1, 2, 4, 8, 16)
+    ]
+    segments, flips = segment_by_plan(points)
+    return ScaleResult(
+        points=points,
+        regimes=[fit_exponent(segment, 100) for segment in segments],
+        plan_flips=flips,
+        truncated=False,
+        function="billing.compute_invoice",
+        sizes={"customers": 100, "invoices": 1000},
+        baseline=100,
+        seed=7,
+        max_factor=32,
+        min_points=5,
+        probe_timeout_s=30.0,
+    )
+
+
+def test_the_artifact_re_fits_to_the_exponent_it_records(tmp_path):
+    """Ruling AQ: the spec promises a cloud tier that re-uses fit.py on
+    artifacts, which needs the points AND the calibrated baseline.
+    Rebuilt from the JSON alone, the fit must reproduce the recorded
+    exponent -- and the baseline must be load-bearing, or this would
+    pass without it being recorded at all."""
+    data = json.loads(save_run(_fitted_result(), tmp_path).read_text())
+    points = [ProbePoint(**{**p, "args": tuple(p["args"])}) for p in data["points"]]
+    segments, _flips = segment_by_plan(points)
+    refit = fit_exponent(segments[-1], data["baseline"])
+    assert refit.exponent == data["regimes"][-1]["exponent"] == 2.0
+    assert fit_exponent(segments[-1], 0).exponent != data["regimes"][-1]["exponent"]
+
+
+def test_the_artifact_records_how_the_sweep_was_run(tmp_path):
+    data = json.loads(save_run(_fitted_result(), tmp_path).read_text())
+    assert data["baseline"] == 100
+    assert data["seed"] == 7
+    assert data["max_factor"] == 32
+    assert data["min_points"] == 5
+    assert data["probe_timeout_s"] == 30.0
+
+
+@pytest.mark.parametrize(("sha", "dirty"), [("abc1234", True), (None, False)])
+def test_given_git_state_is_recorded_without_capturing_again(tmp_path, monkeypatch, sha, dirty):
+    """`scale_analysis` captures git state BEFORE the sweep and passes it
+    in. save_run must record exactly that -- including (None, False), a
+    run outside any git repository -- rather than re-capture at save
+    time."""
+
+    def must_not_capture():
+        raise AssertionError("save_run re-captured git state it was given")
+
+    monkeypatch.setattr("sqlproof.scale.artifact.capture_git_info", must_not_capture)
+    path = save_run(_result(), tmp_path, git_sha=sha, git_dirty=dirty)
+    data = json.loads(path.read_text())
+    assert data["git_sha"] == sha
+    assert data["git_dirty"] is dirty
+
+
+def test_git_state_is_captured_at_save_time_when_not_given(tmp_path, monkeypatch):
+    monkeypatch.setattr("sqlproof.scale.artifact.capture_git_info", lambda: ("fedcba9", False))
+    data = json.loads(save_run(_result(), tmp_path).read_text())
+    assert data["git_sha"] == "fedcba9"
+    assert data["git_dirty"] is False

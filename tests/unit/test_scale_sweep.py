@@ -509,3 +509,19 @@ def test_a_failing_final_truncate_does_not_mask_the_original_error(
     assert "failed to empty the modelled tables" in notes
     assert "OSError: connection lost" in notes
     assert log[-1] == ("truncate",)  # the cleanup was attempted
+
+
+def test_the_result_carries_what_a_re_fit_and_a_re_run_need(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ruling AQ: the baseline the fit subtracted, and the parameters the
+    sweep ran with, travel on the result -- and so into the artifact."""
+    _install_db_stubs(monkeypatch, _quadratic_probe)
+    result = run_sweep(
+        object(), _schema("t"), "fn", sizes={"t": 10},
+        seed=7, max_factor=64, min_points=6, probe_timeout_s=12.5,
+    )
+    assert result.baseline == 100  # the second calibration round's work
+    assert (result.seed, result.max_factor, result.min_points, result.probe_timeout_s) == (
+        7, 64, 6, 12.5,
+    )

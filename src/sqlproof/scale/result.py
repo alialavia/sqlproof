@@ -23,6 +23,16 @@ class ScaleResult:
     truncated: bool
     function: str
     sizes: Mapping[str, int]
+    # What a re-fit and a re-run need (Ruling AQ). `baseline` is the fixed
+    # per-call cost the fit subtracted: `fit_exponent(segment, baseline)`
+    # over each plan segment of `points` reproduces `regimes`. The rest are
+    # the parameters the sweep ran with. `run_sweep` always fills them; the
+    # defaults only keep hand-built results constructible.
+    baseline: int | None = None
+    seed: int | None = None
+    max_factor: int | None = None
+    min_points: int | None = None
+    probe_timeout_s: float | None = None
 
     @property
     def exponent(self) -> float:

@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 import psycopg
 
 from sqlproof.exceptions import SqlProofUsageError
+from sqlproof.mutation.persist import capture_git_info
 from sqlproof.scale.args import heaviest, median_key, random_key
 from sqlproof.scale.artifact import save_run
 from sqlproof.scale.result import ScaleResult
@@ -84,6 +85,13 @@ def scale_analysis(
     # artifact records when the measurement actually began.
     started = datetime.now(UTC)
     monotonic_start = time.monotonic()
+    # Git state too, and for the same reason: the artifact must describe
+    # the code that was measured, and a sweep can run long enough for the
+    # working tree to change underneath it (Ruling AQ).
+    git_sha: str | None = None
+    git_dirty = False
+    if artifact_dir is not None:
+        git_sha, git_dirty = capture_git_info()
     with psycopg.connect(dsn, autocommit=True) as conn:
         result = run_sweep(
             conn, proof.schema_info, function,
@@ -98,6 +106,8 @@ def scale_analysis(
                 schema_fingerprint=proof.schema_fingerprint,
                 started_at=started,
                 duration_s=duration_s,
+                git_sha=git_sha,
+                git_dirty=git_dirty,
             )
         except OSError as exc:
             warnings.warn(

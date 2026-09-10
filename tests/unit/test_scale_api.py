@@ -152,3 +152,35 @@ def test_scale_analysis_warns_and_still_returns_when_artifact_write_fails(
         )
 
     assert result.function == "public.f"
+
+
+def test_git_state_is_captured_before_the_sweep_and_passed_to_the_artifact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Task 10's git-timing minor (Ruling AQ): the artifact must describe
+    the code that was measured. Captured after the sweep, an edit made
+    while the sweep ran would be recorded as the measured state."""
+    calls: list[str] = []
+
+    def fake_capture() -> tuple[str | None, bool]:
+        calls.append("capture_git_info")
+        return ("abc1234", True)
+
+    def fake_run_sweep(*args: Any, **kwargs: Any) -> ScaleResult:
+        calls.append("run_sweep")
+        return _canned_result()
+
+    def must_not_capture() -> tuple[str | None, bool]:
+        raise AssertionError("save_run re-captured git state after the sweep")
+
+    monkeypatch.setattr("sqlproof.scale.psycopg.connect", _fake_connect)
+    monkeypatch.setattr("sqlproof.scale.capture_git_info", fake_capture)
+    monkeypatch.setattr("sqlproof.scale.run_sweep", fake_run_sweep)
+    monkeypatch.setattr("sqlproof.scale.artifact.capture_git_info", must_not_capture)
+
+    scale_analysis(_stub_proof(), "public.f", sizes={"widgets": 10}, artifact_dir=tmp_path)
+
+    assert calls == ["capture_git_info", "run_sweep"]
+    data = json.loads(next(tmp_path.glob("*.json")).read_text())
+    assert data["git_sha"] == "abc1234"
+    assert data["git_dirty"] is True

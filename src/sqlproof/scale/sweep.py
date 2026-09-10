@@ -288,4 +288,9 @@ def _measure(
         truncated=truncated,
         function=function,
         sizes=dict(sizes),
+        baseline=baseline,
+        seed=seed,
+        max_factor=max_factor,
+        min_points=min_points,
+        probe_timeout_s=probe_timeout_s,
     )

@@ -33,6 +33,8 @@ def save_run(
     schema_fingerprint: str | None = None,
     started_at: datetime | None = None,
     duration_s: float | None = None,
+    git_sha: str | None = None,
+    git_dirty: bool | None = None,
 ) -> Path:
     """Write *result* as one JSON file under *artifact_dir* and return the path.
 
@@ -45,12 +47,28 @@ def save_run(
     trend history. The directory is append-only: this never rewrites an
     existing run (exclusive create -- a genuine collision raises
     `FileExistsError`).
+
+    `git_sha` / `git_dirty` should describe the code that was MEASURED:
+    pass the pair `capture_git_info()` returned before the sweep started,
+    as `scale_analysis` does -- a sweep can run long enough for the
+    working tree to change underneath it. Only when neither is given are
+    they captured here, at save time.
+
+    The artifact carries what a re-fit needs, with no database (Ruling
+    AQ): `points` holds every measured ProbePoint and `baseline` the
+    calibrated fixed per-call cost the fit subtracted. Segmenting the
+    points on `plan_hash` (`fit.segment_by_plan`) and calling
+    `fit.fit_exponent(segment, baseline)` reproduces each entry of
+    `regimes`. `seed`, `max_factor`, `min_points` and `probe_timeout_s`
+    record how the sweep ran, so it can be run again: the same seed and
+    profile generate the same data, and so the same buffer counts.
     """
     artifact_dir.mkdir(parents=True, exist_ok=True)
     when = started_at if started_at is not None else datetime.now(UTC)
     started_at_str = when.strftime("%Y-%m-%dT%H:%M:%SZ")
     run_id = new_run_id()
-    git_sha, git_dirty = capture_git_info()
+    if git_sha is None and git_dirty is None:
+        git_sha, git_dirty = capture_git_info()
 
     stamp = started_at_str.translate(_FILENAME_SAFE)
     safe_function = _UNSAFE_FUNCTION_CHARS.sub("_", result.function)
@@ -68,6 +86,11 @@ def save_run(
         "function": result.function,
         "sizes": dict(result.sizes),
         "truncated": result.truncated,
+        "baseline": result.baseline,
+        "seed": result.seed,
+        "max_factor": result.max_factor,
+        "min_points": result.min_points,
+        "probe_timeout_s": result.probe_timeout_s,
         # Results describe the WORST case when `heaviest` resolves the
         # arguments. Recorded so nobody reads the exponent as a median.
         "argument_policy": "worst-case when resolvers are used; literals as given",
