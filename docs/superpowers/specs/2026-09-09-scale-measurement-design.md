@@ -466,12 +466,14 @@ reason and the raw points.
   case pinning that buffer work is the root's count and is NOT
   multiplied by loops (Ruling A); the CTE and InitPlan/SubPlan cases use
   EXPLAIN JSON captured from a live database.
-- **Determinism** — same seed and same profile generate the same data,
-  and so the same row counts, plan shapes and resolved arguments at
-  every point, and the same fitted exponent. Raw buffer counts are not
-  reproducible across connections, so the test as first spec'd --
-  identical points apart from execution time -- does not hold (see
-  "Known limitations").
+- **Determinism** — pinned live (Ruling AX): two sweeps with the same
+  seed and profile, each on its own connection, agree EXACTLY at every
+  point on factor, total rows, temp blocks, peak memory, plan hash and
+  resolved arguments -- for the quadratic reference and for a
+  primary-key lookup -- and the quadratic reference's fitted exponents
+  agree to within 0.01. Raw buffer counts are deliberately not
+  compared: they are not reproducible across connections (see "Known
+  limitations").
 
 ## Known limitations
 

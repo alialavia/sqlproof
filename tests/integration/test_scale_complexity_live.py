@@ -146,6 +146,52 @@ def test_sweep_records_every_point_it_measured(conn):
     assert all(p.total_rows == 420 * p.factor for p in result.points)
 
 
+@pytest.mark.parametrize(
+    ("function", "sizes", "args", "compare_exponent"),
+    [
+        ("scale_test.quadratic_fn", {"orgs": 20, "events": 400}, [], True),
+        ("scale_test.pk_lookup_fn", {"items": 1000}, [heaviest("scale_test.items.id")], False),
+    ],
+    ids=["quadratic_fn", "pk_lookup_fn"],
+)
+def test_the_same_seed_and_profile_measure_the_same_points(
+    conn, function, sizes, args, compare_exponent,
+):
+    """Ruling AU, pinned as Ruling AX has it: a run is reproducible in
+    everything its data decides. Every factor reloads from empty, so each
+    point's data depends only on the seed and its factor. Two sweeps --
+    each on its own connection, as two CI runs would be -- must agree
+    exactly on data, arguments and plans, and on the fitted exponent.
+    """
+    # Raw work_blocks are deliberately NOT compared, not even within a
+    # tolerance. Measured inside the full suite: a sweep on a fresh
+    # connection read +13 to +25 blocks at every point of quadratic_fn,
+    # with its calibrated baseline +21 -- a fixed per-connection offset,
+    # most likely per-backend catalog cache state -- while the fitted
+    # exponents agreed to 0.001 (1.9911 against 1.9902). The baseline is
+    # measured on the same connection as the ladder, so it absorbs the
+    # offset: the exponent reproduces, raw work does not. pk_lookup_fn's
+    # fit is normally refused (see its xfail), so it has no exponent to
+    # compare.
+
+    def decided_by_the_data(result):
+        return [
+            (p.factor, p.total_rows, p.temp_blocks, p.peak_memory_kb, p.plan_hash, p.args)
+            for p in result.points
+        ]
+
+    first = run_sweep(conn, _schema(), function, sizes=sizes, args=args, max_factor=16, seed=7)
+    with psycopg.connect(os.environ[DSN_ENV], autocommit=True) as fresh:
+        second = run_sweep(
+            fresh, _schema(), function, sizes=sizes, args=args, max_factor=16, seed=7,
+        )
+
+    assert len(first.points) >= 5
+    assert decided_by_the_data(first) == decided_by_the_data(second)
+    if compare_exponent:
+        assert abs(first.exponent - second.exponent) <= 0.01
+
+
 @pytest.mark.xfail(
     strict=True,
     raises=AssertionError,
