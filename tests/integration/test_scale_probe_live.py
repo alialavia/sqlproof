@@ -95,3 +95,22 @@ def test_probe_passes_arguments(conn):
     )
     assert point.work_blocks > 0
     assert point.args == ("tag1",)
+
+
+def test_heaviest_resolves_against_live_data(conn):
+    from sqlproof.scale.args import heaviest, resolve_args
+
+    resolved = resolve_args(conn, [heaviest("probe_test.items.id")])
+    assert resolved == (500,)  # the largest id in the seeded table
+
+
+def test_resolver_failing_to_find_a_row_raises_rather_than_returning_none(conn):
+    """Measuring the empty case would report 'fast' for an untested
+    function, which is the silent-wrong-answer failure this design keeps
+    guarding against."""
+    from sqlproof.exceptions import SqlProofUsageError
+    from sqlproof.scale.args import heaviest, resolve_args
+
+    conn.execute("CREATE TABLE probe_test.empty_t (id bigint PRIMARY KEY)")
+    with pytest.raises((SqlProofUsageError, TypeError)):
+        resolve_args(conn, [heaviest("probe_test.empty_t.id")])
