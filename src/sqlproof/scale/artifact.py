@@ -61,9 +61,11 @@ def save_run(
     `fit.fit_exponent(segment, baseline)` reproduces each entry of
     `regimes`. `seed`, `max_factor`, `min_points` and `probe_timeout_s`
     record how the sweep ran, so it can be run again: the same seed and
-    profile generate the same data, though buffer counts repeat only to
-    within a block or two (measured; most likely catalog lookups, which
-    vary from run to run).
+    profile reproduce the data, the resolved arguments, the plans and
+    the fitted exponent. Raw `work_blocks` do not reproduce across
+    connections -- they carry a per-connection offset of tens of blocks
+    (most likely per-backend catalog cache state) -- which `baseline`,
+    measured on the same connection as the points, absorbs.
 
     `argument_policy` holds one entry per argument position, saying how
     that argument was chosen (Ruling AO): `{"kind": "heaviest", "column":

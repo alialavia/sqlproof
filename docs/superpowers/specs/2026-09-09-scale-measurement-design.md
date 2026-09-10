@@ -333,8 +333,9 @@ Without that, a surprising result is unreproducible.
    count, silently changing what the FK arithmetic assumes (Ruling S).
    Total generation is ≈ 2× the largest point (1 + 2 + … + N ≈ 2N), and
    each point's data depends only on the seed and its factor, which is
-   what makes a run reproducible -- its buffer counts to within a block
-   or two (see "Known limitations").
+   what makes a run reproducible -- its data, arguments, plans and
+   fitted exponent, though not its raw buffer counts (see "Known
+   limitations").
 3. **Stop** at the first of:
    - ≥ 5 points **and** R² ≥ 0.98 — enough is known; stop paying
    - `max_factor` reached (default 32×)
@@ -467,10 +468,10 @@ reason and the raw points.
   EXPLAIN JSON captured from a live database.
 - **Determinism** — same seed and same profile generate the same data,
   and so the same row counts, plan shapes and resolved arguments at
-  every point. Buffer counts repeat only to within a block or two, so
-  the test as first spec'd -- identical points apart from execution
-  time -- does not hold, and is not in the suite (see "Known
-  limitations").
+  every point, and the same fitted exponent. Raw buffer counts are not
+  reproducible across connections, so the test as first spec'd --
+  identical points apart from execution time -- does not hold (see
+  "Known limitations").
 
 ## Known limitations
 
@@ -519,18 +520,21 @@ open silently, except where noted.
   accordingly (Ruling AM; see "Data safety").
 - **A runaway probe is not cancelled.** `probe_timeout_s` is checked
   after a probe returns.
-- **Buffer counts repeat only to within a block or two.** Two sweeps
-  with the same seed and profile -- on one connection or on fresh ones
-  -- measured identical row counts, plan hashes, temp blocks, peak
-  memory and arguments, but work that differed by up to 2 blocks at a
-  point on the quadratic reference (2,862 against 2,864 at 4×, 0.07%;
-  45,187 against 45,189 at 16×), and a primary-key lookup's 10–13
-  blocks reshuffled between runs. The same happens on the code before
-  the final review's fix wave, so it comes from Postgres's buffer
-  accounting -- most likely catalog lookups, which vary from run to run
-  -- not from the sweep's
-  data. A determinism test asserting identical points fails for that
-  reason; how to pin determinism instead is left open.
+- **Raw buffer counts are not reproducible across connections.** Two
+  sweeps with the same seed and profile always measured identical row
+  counts, plan hashes, temp blocks, peak memory and resolved
+  arguments, but not identical raw work. Run on their own, sweeps on
+  one connection or on fresh ones agreed to within 2-3 blocks a point,
+  as the code before the final review's fix wave did. Inside the full
+  test suite, a second sweep on a fresh connection measured a fixed
+  offset at every point -- +13 to +25 blocks on the quadratic
+  reference, with its calibrated baseline +21 -- most likely
+  per-backend catalog cache state over catalogs the suite's DDL has
+  churned. The baseline, taken on the same connection as the ladder,
+  absorbs that offset: work minus baseline agreed to within 8 blocks,
+  and the fitted exponents to 0.001 (1.9911 against 1.9902). What is
+  reproducible is the loaded data, the resolved arguments, the plans
+  and the fitted exponent -- not raw `work_blocks`.
 - **O(n log n) cannot be told from O(n)** by buffer counts: an in-memory
   sort touches no buffers.
 

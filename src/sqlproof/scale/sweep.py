@@ -89,12 +89,15 @@ def run_sweep(
     result reports is the total across it (`sum(sizes.values()) *
     factor`). `args` holds one entry per function parameter: a literal,
     or a resolver re-run against each freshly loaded dataset (see
-    `args.py`). `seed` fixes the generated data, and so every point's
-    row counts, plan shape and resolved arguments; buffer counts then
-    repeat only to within a block or two (measured; most likely catalog
-    lookups, which vary from run to run). `columns` pins generated
-    columns, as
-    `load_dataset`'s does.
+    `args.py`). `seed` fixes the generated data, and with it every
+    point's row counts, resolved arguments and plans -- and so the
+    fitted exponent. Raw buffer counts are NOT reproducible across
+    connections: a second sweep on a fresh connection measured a fixed
+    offset of tens of blocks at every point (+13 to +25, baseline +21,
+    in the full test suite; most likely per-backend catalog cache
+    state). The calibration baseline is taken on the same connection as
+    the ladder, so it absorbs that offset: the exponents agreed to
+    0.001. `columns` pins generated columns, as `load_dataset`'s does.
 
     The ladder stops at the first of: `min_points` points whose final
     plan regime fits (R^2 >= `fit.MIN_R_SQUARED`); `max_factor` reached;
