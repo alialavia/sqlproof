@@ -10,6 +10,7 @@ from __future__ import annotations
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass
+from itertools import pairwise
 
 from sqlproof.scale.probe import ProbePoint
 
@@ -133,7 +134,7 @@ def segment_by_plan(
         return [], []
     segments: list[list[ProbePoint]] = [[points[0]]]
     flips: list[PlanFlip] = []
-    for previous, current in zip(points, points[1:], strict=False):
+    for previous, current in pairwise(points):
         if current.plan_hash == previous.plan_hash:
             segments[-1].append(current)
             continue
