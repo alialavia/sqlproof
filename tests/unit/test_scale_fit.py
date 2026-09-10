@@ -110,3 +110,75 @@ def test_flipping_back_and_forth_yields_a_segment_per_run():
     segments, flips = segment_by_plan(pts)
     assert len(segments) == 3
     assert len(flips) == 2
+
+
+def test_no_temp_blocks_means_no_spill():
+    from sqlproof.scale.fit import find_spill
+
+    assert find_spill(_points({1: 10, 2: 20, 4: 40})) is None
+
+
+def test_spill_point_is_the_first_factor_with_temp_blocks():
+    """A spill is a CLIFF, not a curve: a sort that fits in work_mem is
+    fast, and the moment it spills performance drops sharply. Reported
+    separately so a fit run through it does not smear the
+    discontinuity into a gentle-looking exponent."""
+    from sqlproof.scale.fit import find_spill
+    from sqlproof.scale.probe import ProbePoint
+
+    pts = [
+        ProbePoint(factor=f, total_rows=f * 1000, work_blocks=f * 10,
+                   peak_memory_kb=100, temp_blocks=temp, plan_hash="a", exec_ms=1.0)
+        for f, temp in [(1, 0), (2, 0), (4, 0), (8, 340), (16, 900)]
+    ]
+    spill = find_spill(pts)
+    assert spill is not None
+    assert spill.factor == 8
+    assert spill.total_rows == 8000
+
+
+def test_projection_extrapolates_the_final_regime():
+    from sqlproof.scale.fit import fit_exponent, project_rows_before_timeout
+
+    pts = [
+        ProbePoint(factor=f, total_rows=f * 1000, work_blocks=f * 100,
+                   peak_memory_kb=0, temp_blocks=0, plan_hash="a", exec_ms=f * 10.0)
+        for f in (1, 2, 4, 8, 16)
+    ]
+    fit = fit_exponent(pts, baseline=0)
+    band = project_rows_before_timeout(pts, fit, timeout_ms=1000, truncated=False)
+    assert band is not None
+    lo, hi = band
+    assert lo < hi
+    assert lo > 16_000  # beyond the largest measured point
+
+
+def test_projection_is_refused_when_the_sweep_was_truncated():
+    """Extrapolating past a range we stopped measuring for a reason is
+    guessing, and a confident row count is exactly the wrong output."""
+    from sqlproof.scale.fit import fit_exponent, project_rows_before_timeout
+
+    pts = _points({1: 100, 2: 200, 4: 400, 8: 800, 16: 1600})
+    fit = fit_exponent(pts, baseline=0)
+    assert project_rows_before_timeout(pts, fit, 1000, truncated=True) is None
+
+
+def test_projection_is_refused_without_a_usable_fit():
+    from sqlproof.scale.fit import FitResult, project_rows_before_timeout
+
+    pts = _points({1: 100, 2: 200, 4: 400, 8: 800, 16: 1600})
+    bad = FitResult(None, 0.2, "too noisy", 1, 16, "a")
+    assert project_rows_before_timeout(pts, bad, 1000, truncated=False) is None
+
+
+def test_projection_returns_none_when_already_over_the_timeout():
+    from sqlproof.scale.fit import fit_exponent, project_rows_before_timeout
+    from sqlproof.scale.probe import ProbePoint
+
+    pts = [
+        ProbePoint(factor=f, total_rows=f * 1000, work_blocks=f * 100,
+                   peak_memory_kb=0, temp_blocks=0, plan_hash="a", exec_ms=5000.0 * f)
+        for f in (1, 2, 4, 8, 16)
+    ]
+    fit = fit_exponent(pts, baseline=0)
+    assert project_rows_before_timeout(pts, fit, timeout_ms=1000, truncated=False) is None

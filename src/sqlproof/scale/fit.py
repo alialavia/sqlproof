@@ -125,3 +125,50 @@ def segment_by_plan(
         )
         segments.append([current])
     return segments, flips
+
+
+def find_spill(points: Sequence[ProbePoint]) -> ProbePoint | None:
+    """The first point where a sort or hash exceeded `work_mem`.
+
+    Reported separately from the exponent because a spill is a cliff,
+    not a curve. Everything is fine right up until it is not, and a
+    least-squares fit run across that boundary reports a misleadingly
+    gentle slope.
+    """
+    for point in points:
+        if point.temp_blocks > 0:
+            return point
+    return None
+
+
+def project_rows_before_timeout(
+    points: Sequence[ProbePoint],
+    fit: FitResult,
+    timeout_ms: float,
+    *,
+    truncated: bool,
+) -> tuple[int, int] | None:
+    """Extrapolate the final regime to a wall-clock timeout.
+
+    Returns a RANGE, never a point estimate, and returns None rather
+    than guessing when the fit is unusable, the sweep was truncated, or
+    the function already exceeds the timeout inside the measured range.
+
+    This is the one output that depends on the machine that measured it.
+    Every caller must label it as such; the exponent does not carry that
+    caveat and the two must not be presented as equally solid.
+    """
+    if fit.exponent is None or truncated or not points:
+        return None
+    last = points[-1]
+    if last.exec_ms >= timeout_ms:
+        return None
+    if last.exec_ms <= 0 or fit.exponent <= 0:
+        return None
+    # time ~ rows^exponent, so rows_at_timeout = last_rows * ratio^(1/k)
+    ratio = timeout_ms / last.exec_ms
+    centre = last.total_rows * ratio ** (1.0 / fit.exponent)
+    # A deliberately wide band. The exponent is measured, but wall-clock
+    # is not stable enough (1.96x run to run on an idle machine) for a
+    # tighter claim to be honest.
+    return int(centre * 0.6), int(centre * 1.6)
