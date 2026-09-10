@@ -68,9 +68,29 @@ class ScaleResult:
         return None if spill is None else spill.factor
 
     def spills_below(self, rows: int) -> bool:
-        """Did a sort or hash spill to disk at or below `rows` total rows?"""
+        """Did a sort or hash spill to disk at or below `rows` total rows?
+
+        True when a spill was observed at or below `rows`, whatever range
+        was measured. Otherwise the answer is known only up to the
+        largest total_rows the sweep measured: False within that range,
+        and beyond it this raises `SqlProofScaleError` rather than answer
+        "no spill" for rows nobody measured (Ruling AP) -- the same
+        refusal `rows_before_timeout` makes rather than extrapolate.
+        """
         point = self.spill_point_rows
-        return point is not None and point <= rows
+        if point is not None and point <= rows:
+            return True
+        measured = max((p.total_rows for p in self.points), default=0)
+        if rows > measured:
+            msg = (
+                f"Cannot say whether {self.function} spills at or below "
+                f"{rows:,} total rows: the sweep measured up to {measured:,} "
+                "total rows and saw no spill there. Raising max_factor extends "
+                "the measured range (raise min_points too: the ladder also "
+                "stops as soon as the fit accepts)."
+            )
+            raise SqlProofScaleError(msg)
+        return False
 
     def rows_before_timeout(self, timeout_ms: float) -> tuple[int, int] | None:
         """Projected total rows at which the function crosses `timeout_ms`.

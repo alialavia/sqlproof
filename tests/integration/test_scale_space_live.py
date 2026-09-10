@@ -21,6 +21,7 @@ import os
 import psycopg
 import pytest
 
+from sqlproof.exceptions import SqlProofScaleError
 from sqlproof.scale.sweep import run_sweep
 from sqlproof.schema.parse_sql import parse_schema_sql
 
@@ -110,5 +111,10 @@ def test_a_sort_that_fits_in_work_mem_reports_no_spill(conn):
         sizes={"wide_rows": BASE_ROWS}, max_factor=16,
     )
     assert result.spill_point_rows is None
-    assert result.spills_below(10_000_000) is False
+    largest = max(point.total_rows for point in result.points)
+    assert result.spills_below(largest) is False
+    # Ruling AP: at most 1,600 rows were measured, so "no spill at ten
+    # million rows" is not an answer this sweep can give.
+    with pytest.raises(SqlProofScaleError, match=f"measured up to {largest:,}"):
+        result.spills_below(10_000_000)
     assert all(point.temp_blocks == 0 for point in result.points)

@@ -85,9 +85,31 @@ def test_r_squared_is_none_when_there_are_no_regimes():
     assert r.r_squared is None
 
 
-def test_spills_below_is_false_when_nothing_spilled():
-    assert _result().spills_below(1_000_000) is False
+def test_spills_below_is_false_within_the_measured_range_when_nothing_spilled():
+    """The default points measure 1,000-16,000 total rows, none spilling."""
+    assert _result().spills_below(8_000) is False
     assert _result().spill_point_rows is None
+
+
+def test_spills_below_at_exactly_the_largest_measured_total_is_false():
+    """16,000 rows WAS measured, so "no spill there" is an answer."""
+    assert _result().spills_below(16_000) is False
+
+
+def test_spills_below_beyond_the_measured_range_without_a_spill_raises():
+    """Ruling AP: one row past the largest measured total is a row count
+    nobody measured. `assert not spills_below(500_000)` used to pass
+    vacuously after a sweep that stopped at 16,000 rows."""
+    with pytest.raises(SqlProofScaleError, match="measured up to 16,000") as exc_info:
+        _result().spills_below(16_001)
+    assert "max_factor" in str(exc_info.value)
+
+
+def test_spills_below_beyond_the_measured_range_with_a_spill_below_is_true():
+    """An observed spill at or below `rows` answers the question whatever
+    range was measured: the sweep did see it spill by then."""
+    pts = [_pt(1, 100), _pt(2, 200), _pt(4, 400, temp=500), _pt(8, 800, temp=900)]
+    assert _result(points=pts).spills_below(1_000_000) is True
 
 
 def test_spills_below_uses_total_rows_across_the_profile():
