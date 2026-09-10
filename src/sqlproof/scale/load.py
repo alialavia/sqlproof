@@ -22,6 +22,7 @@ from typing import Any, LiteralString, cast
 
 import psycopg
 from psycopg import sql
+from psycopg.rows import tuple_row
 from psycopg.types.json import Json, Jsonb
 
 # Cross-module reuse of core.py's JSON-column adaptation, deliberately,
@@ -36,7 +37,7 @@ from sqlproof.core import _base_type_name  # pyright: ignore[reportPrivateUsage]
 from sqlproof.exceptions import SqlProofGenerationError
 from sqlproof.generators.bulk import DEFAULT_NULL_FRAC, bulk_table_rows
 from sqlproof.generators.rows import ColumnOverrides
-from sqlproof.schema.dependency_graph import resolve_insertion_plan
+from sqlproof.schema.dependency_graph import InsertionPlan, resolve_insertion_plan
 from sqlproof.schema.model import SchemaInfo, Table
 
 
@@ -126,26 +127,19 @@ def _adapt_copy_value(value: Any, wrap_kind: str | None) -> object:
     return value
 
 
-def load_dataset(
-    conn: psycopg.Connection,
-    schema: SchemaInfo,
-    sizes: Mapping[str, int],
-    *,
-    seed: int = 0,
-    distribution: str = "uniform",
-    null_frac: float = DEFAULT_NULL_FRAC,
-    columns: ColumnOverrides | None = None,
-) -> dict[str, int]:
-    """Generate and `COPY` every table in FK-safe order.
+def insertion_plan(schema: SchemaInfo) -> InsertionPlan:
+    """The FK-safe order `load_dataset` loads tables in -- or an error
+    when this loader cannot load the schema at all.
 
-    Reuses `resolve_insertion_plan` so parents always land before
-    children -- the same ordering the Hypothesis path uses.
+    Split out of `load_dataset` so a caller can find out a schema is
+    unloadable BEFORE doing anything destructive: `run_sweep` calls it
+    ahead of its first TRUNCATE. `load_dataset` calls it too, so the two
+    can never disagree about what loads.
 
-    `columns` takes the same `"table.column"` keys as the Hypothesis
-    path's `sqlproof(..., columns={...})`, so a caller pins a column the
-    same way whichever generator produced the rows. The one difference
-    is that a Hypothesis `SearchStrategy` is rejected here rather than
-    drawn -- see `bulk._resolve_override`.
+    Raises `CircularDependencyError` (from `resolve_insertion_plan`) for
+    a foreign-key cycle with no nullable edge to defer, and
+    `SqlProofGenerationError` for a cycle that could be deferred, since
+    the bulk path has no second UPDATE pass yet.
     """
     plan = resolve_insertion_plan(schema.tables)
     if plan.deferred_edges:
@@ -165,6 +159,66 @@ def load_dataset(
             f"same, loading would silently leave these columns NULL."
         )
         raise SqlProofGenerationError(msg)
+    return plan
+
+
+def missing_required_parents(
+    schema: SchemaInfo, sizes: Mapping[str, int]
+) -> list[str]:
+    """Foreign keys `load_dataset` cannot satisfy at these `sizes`, as
+    `"child.column -> parent"` strings; empty when all of them can be.
+
+    A foreign key is REQUIRED when every one of its columns is NOT NULL.
+    A table `sizes` populates, holding a required foreign key into a
+    modelled table `sizes` leaves empty (absent, or sized 0), cannot be
+    loaded: every row needs a parent row that will not exist. Checked
+    against this loader rather than assumed -- the generator refuses
+    ("required foreign key has no parent rows", or zero composite keys)
+    and, for a column with a DEFAULT or a `columns` override, COPY fails
+    on the foreign key instead. A NULLABLE foreign key into an empty
+    parent loads fine, as NULL, so it is not reported.
+
+    Only modelled parents are checked, matched by table name as the
+    loader matches them. A foreign key into a table outside the model is
+    left to the loader and to Postgres.
+    """
+    modelled = {table.name for table in schema.tables}
+    missing: list[str] = []
+    for table in schema.tables:
+        if sizes.get(table.name, 0) <= 0:
+            continue
+        for fk in table.foreign_keys:
+            parent = fk.referenced_table
+            if parent not in modelled or sizes.get(parent, 0) > 0:
+                continue
+            if all(not table.column(name).nullable for name in fk.columns):
+                missing.append(f"{table.name}.{', '.join(fk.columns)} -> {parent}")
+    return missing
+
+
+def load_dataset(
+    conn: psycopg.Connection,
+    schema: SchemaInfo,
+    sizes: Mapping[str, int],
+    *,
+    seed: int = 0,
+    distribution: str = "uniform",
+    null_frac: float = DEFAULT_NULL_FRAC,
+    columns: ColumnOverrides | None = None,
+) -> dict[str, int]:
+    """Generate and `COPY` every table in FK-safe order.
+
+    Reuses `resolve_insertion_plan` (through `insertion_plan`) so parents
+    always land before children -- the same ordering the Hypothesis path
+    uses.
+
+    `columns` takes the same `"table.column"` keys as the Hypothesis
+    path's `sqlproof(..., columns={...})`, so a caller pins a column the
+    same way whichever generator produced the rows. The one difference
+    is that a Hypothesis `SearchStrategy` is rejected here rather than
+    drawn -- see `bulk._resolve_override`.
+    """
+    plan = insertion_plan(schema)
     rng = random.Random(seed)
     loaded: dict[str, int] = {}
     for table in plan.ordered_tables:
@@ -197,7 +251,8 @@ def load_dataset(
 
 
 def truncate(conn: psycopg.Connection, schema: SchemaInfo) -> None:
-    """Clear every table before reloading at the next factor.
+    """Empty every modelled table: before each reload at the next factor,
+    and once more when a sweep ends, so it leaves no synthetic rows behind.
 
     Reloading from empty each time is deliberate for now: appending
     would be cheaper, but a partially-appended table whose earlier rows
@@ -231,3 +286,22 @@ def analyze(conn: psycopg.Connection, schema: SchemaInfo) -> None:
     for table in schema.tables:
         qualified = f"{_quote(table.schema)}.{_quote(table.name)}"
         conn.execute(sql.SQL(cast(LiteralString, f"ANALYZE {qualified}")))  # type: ignore[redundant-cast]
+
+
+def row_counts(conn: psycopg.Connection, schema: SchemaInfo) -> dict[str, int]:
+    """Rows currently in each modelled table, keyed by table name -- the
+    keys `sizes` uses.
+
+    `run_sweep` calls it before its first TRUNCATE, so it can refuse to
+    empty tables holding rows it did not put there. Identifiers are
+    quoted exactly as `truncate` and `analyze` quote them. The cursor
+    always yields tuples, whatever row factory the connection uses.
+    """
+    counts: dict[str, int] = {}
+    with conn.cursor(row_factory=tuple_row) as cur:
+        for table in schema.tables:
+            qualified = f"{_quote(table.schema)}.{_quote(table.name)}"
+            cur.execute(sql.SQL(cast(LiteralString, f"SELECT count(*) FROM {qualified}")))  # type: ignore[redundant-cast]
+            row = cur.fetchone()
+            counts[table.name] = 0 if row is None else int(row[0])
+    return counts

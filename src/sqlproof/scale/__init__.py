@@ -41,9 +41,27 @@ def scale_analysis(
     sizes: Mapping[str, int],
     args: Sequence[Any] = (),
     artifact_dir: Path | str | None = ".sqlproof/scale-runs",
+    truncate_existing: bool = False,
     **kwargs: Any,
 ) -> ScaleResult:
     """Measure how `function` scales, using `proof`'s schema and database.
+
+    DESTRUCTIVE -- point it at a dedicated test database. The sweep
+    EMPTIES AND REPOPULATES every table in the proof's schema
+    (`proof.schema_info`: for a connection-string proof, every table in
+    `SqlProofConfig.schema`), committing as it goes. It refuses to start
+    while any of those tables holds rows, unless `truncate_existing=True`
+    -- deliberately an explicit keyword here, not one of `**kwargs`, so
+    the opt-in to deleting rows is always visible at the call site. It
+    leaves the tables EMPTY when it finishes, whether it succeeded or
+    failed. See `run_sweep` for everything it checks before the first
+    TRUNCATE.
+
+    Options forwarded to `run_sweep` through `**kwargs`: `max_factor`
+    (default 32), `min_points` (default 5; at least `fit.MIN_POINTS`),
+    `probe_timeout_s` (default 30.0; checked after each probe returns,
+    never cancelling one), `seed` (default 0) and `columns` (per-column
+    overrides, as `load_dataset` takes them).
 
     Opens its own autocommit connection: the sweep issues TRUNCATE,
     COPY and ANALYZE, which want a lifecycle of their own rather than
@@ -67,7 +85,10 @@ def scale_analysis(
     started = datetime.now(UTC)
     monotonic_start = time.monotonic()
     with psycopg.connect(dsn, autocommit=True) as conn:
-        result = run_sweep(conn, proof.schema_info, function, sizes=sizes, args=args, **kwargs)
+        result = run_sweep(
+            conn, proof.schema_info, function,
+            sizes=sizes, args=args, truncate_existing=truncate_existing, **kwargs,
+        )
     duration_s = time.monotonic() - monotonic_start
     if artifact_dir is not None:
         try:
