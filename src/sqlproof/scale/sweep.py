@@ -91,10 +91,9 @@ def run_sweep(
     or a resolver re-run against each freshly loaded dataset (see
     `args.py`). `seed` fixes the generated data, and so every point's
     row counts, plan shape and resolved arguments; buffer counts then
-    repeat only to within a block or two (measured; most likely catalog
-    lookups, which vary from run to run). `columns` pins generated
-    columns, as
-    `load_dataset`'s does.
+    repeat only to within a few blocks (up to 3 measured; most likely
+    catalog lookups, which vary from run to run). `columns` pins
+    generated columns, as `load_dataset`'s does.
 
     The ladder stops at the first of: `min_points` points whose final
     plan regime fits (R^2 >= `fit.MIN_R_SQUARED`); `max_factor` reached;

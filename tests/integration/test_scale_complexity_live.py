@@ -144,6 +144,51 @@ def test_sweep_records_every_point_it_measured(conn):
     assert all(p.total_rows == 420 * p.factor for p in result.points)
 
 
+@pytest.mark.parametrize(
+    ("function", "sizes", "args", "compare_work"),
+    [
+        ("scale_test.quadratic_fn", {"orgs": 20, "events": 400}, [], True),
+        ("scale_test.pk_lookup_fn", {"items": 1000}, [heaviest("scale_test.items.id")], False),
+    ],
+    ids=["quadratic_fn", "pk_lookup_fn"],
+)
+def test_the_same_seed_and_profile_measure_the_same_points(
+    conn, function, sizes, args, compare_work,
+):
+    """Ruling AU, pinned as Ruling AV has it: a run is reproducible. Every
+    factor reloads from empty, so each point's data depends only on the
+    seed and its factor. Two sweeps -- each on its own connection, as two
+    CI runs would be -- must agree exactly on everything that data decides.
+    """
+    # Buffer work is the exception, compared within a tolerance. Measured
+    # on this suite's data: the same seed and profile gave work differing
+    # by up to 3 blocks at a point (2 on quadratic_fn; the PK lookup's
+    # 10-13 blocks reshuffle), on one connection and on fresh ones alike,
+    # and the same on the code before the final review's fix wave --
+    # Postgres's buffer accounting, not the generator. 4 blocks is a tight
+    # bound on quadratic_fn's 241 to ~45,000 blocks and none at all on the
+    # PK lookup's ~10, whose work is therefore not compared.
+
+    def decided_by_the_data(result):
+        return [
+            (p.factor, p.total_rows, p.temp_blocks, p.peak_memory_kb, p.plan_hash, p.args)
+            for p in result.points
+        ]
+
+    first = run_sweep(conn, _schema(), function, sizes=sizes, args=args, max_factor=16, seed=7)
+    with psycopg.connect(os.environ[DSN_ENV], autocommit=True) as fresh:
+        second = run_sweep(
+            fresh, _schema(), function, sizes=sizes, args=args, max_factor=16, seed=7,
+        )
+
+    assert len(first.points) >= 5
+    assert decided_by_the_data(first) == decided_by_the_data(second)
+    if compare_work:
+        for a, b in zip(first.points, second.points, strict=True):
+            assert abs(a.work_blocks - b.work_blocks) <= 4, (a.factor, a.work_blocks, b.work_blocks)
+        assert abs(first.exponent - second.exponent) <= 0.01
+
+
 @pytest.mark.xfail(
     strict=True,
     raises=AssertionError,
