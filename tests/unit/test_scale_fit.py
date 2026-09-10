@@ -73,6 +73,45 @@ def test_baseline_larger_than_measured_work_is_refused():
     assert fit.reason is not None
 
 
+def test_zero_growth_work_is_exponent_zero():
+    """A function that does zero work at every factor is genuinely
+    O(1) -- there is nothing to take the log of, so this is a special
+    case rather than a degenerate fit."""
+    pts = _points({1: 0, 2: 0, 4: 0, 8: 0, 16: 0})
+    fit = fit_exponent(pts, baseline=0)
+    assert fit.exponent == 0.0
+    assert fit.r_squared == 1.0
+    assert fit.reason is None
+
+
+def test_flat_nonzero_work_at_the_baseline_is_exponent_zero():
+    """Flat work exactly at the baseline is also O(1): nothing grows,
+    it just happens to grow from a nonzero floor."""
+    pts = _points({1: 50, 2: 50, 4: 50, 8: 50, 16: 50})
+    fit = fit_exponent(pts, baseline=50)
+    assert fit.exponent == 0.0
+    assert fit.r_squared == 1.0
+
+
+def test_rising_work_under_the_baseline_is_refused_not_reported_as_constant():
+    """Work that grows but never breaches an inflated baseline must
+    stay refused. An inflated baseline must never make a genuinely
+    growing function look constant."""
+    pts = _points({1: 10, 2: 20, 4: 30, 8: 40, 16: 45})
+    fit = fit_exponent(pts, baseline=100)
+    assert fit.exponent is None
+    assert fit.reason is not None
+
+
+def test_work_straddling_the_baseline_is_refused():
+    """Some points above the baseline, some below: not flat, and not
+    fittable either -- refused, not zero."""
+    pts = _points({1: 150, 2: 50, 4: 150, 8: 50, 16: 150})
+    fit = fit_exponent(pts, baseline=100)
+    assert fit.exponent is None
+    assert fit.reason is not None
+
+
 def test_points_with_one_plan_are_a_single_segment():
     from sqlproof.scale.fit import segment_by_plan
 
