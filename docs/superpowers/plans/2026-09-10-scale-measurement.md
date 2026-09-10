@@ -1684,7 +1684,7 @@ def run_sweep(
     regimes = [fit_exponent(segment, baseline) for segment in segments]
     return ScaleResult(
         points=points,
-        regimes=[r for r in regimes if r.exponent is not None] or regimes,
+        regimes=regimes,
         plan_flips=flips,
         truncated=truncated,
         function=function,
