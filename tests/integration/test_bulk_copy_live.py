@@ -11,11 +11,12 @@ from __future__ import annotations
 import os
 
 import psycopg
+import psycopg.errors
 import pytest
 from psycopg.rows import dict_row
 
 from sqlproof.exceptions import SqlProofGenerationError
-from sqlproof.scale.load import analyze, load_dataset
+from sqlproof.scale.load import analyze, load_dataset, truncate
 from sqlproof.schema.introspect import introspect_schema
 from sqlproof.schema.parse_sql import parse_schema_sql
 
@@ -113,6 +114,47 @@ def test_cyclic_schema_raises_rather_than_loading_null_relationships(conn):
 
     with pytest.raises(SqlProofGenerationError, match="foreign-key cycles"):
         load_dataset(conn, schema, {"content": 10, "versions": 10}, seed=1)
+
+
+def test_truncate_refuses_a_table_outside_the_modelled_schema(conn):
+    """Ruling V: `truncate` (scale/load.py) deliberately drops CASCADE.
+    Every table the sweep controller needs to clear each factor is
+    already named in the one TRUNCATE statement, since `schema.tables`
+    is the whole model -- CASCADE could only ever reach a table OUTSIDE
+    that model, emptying it silently. Without CASCADE, Postgres refuses
+    with a loud error instead, and the outside table's rows survive.
+
+    The exact exception class was checked empirically rather than
+    assumed: Postgres raises SQLSTATE 0A000
+    ("cannot truncate a table referenced in a foreign key constraint"),
+    which psycopg maps to `FeatureNotSupported`, not the more
+    intuitive-sounding `ForeignKeyViolation` (that class is for DML --
+    INSERT/UPDATE/DELETE -- violating a constraint, not for TRUNCATE
+    refusing to run at all).
+    """
+    schema = parse_schema_sql(SCHEMA_SQL, schema="bulk_test")
+    load_dataset(conn, schema, {"customers": 5, "orders": 10}, seed=1)
+
+    conn.execute(
+        "CREATE TABLE bulk_test.audit_log ("
+        "  id bigint PRIMARY KEY, customer_id bigint REFERENCES bulk_test.customers(id)"
+        ")"
+    )
+    try:
+        conn.execute(
+            "INSERT INTO bulk_test.audit_log (id, customer_id) "
+            "SELECT id, id FROM bulk_test.customers"
+        )
+        before = conn.execute("SELECT count(*) FROM bulk_test.audit_log").fetchone()[0]
+        assert before == 5
+
+        with pytest.raises(psycopg.errors.FeatureNotSupported):
+            truncate(conn, schema)
+
+        after = conn.execute("SELECT count(*) FROM bulk_test.audit_log").fetchone()[0]
+        assert after == before  # the outside table's rows survive
+    finally:
+        conn.execute("DROP TABLE IF EXISTS bulk_test.audit_log")
 
 
 def test_load_is_linear_enough_to_reach_scale(conn):

@@ -203,13 +203,22 @@ def truncate(conn: psycopg.Connection, schema: SchemaInfo) -> None:
     would be cheaper, but a partially-appended table whose earlier rows
     were generated at a different factor would silently change the key
     distribution the FK arithmetic assumes.
+
+    Deliberately no CASCADE. Every table this call needs to clear is
+    already named in the one TRUNCATE statement below -- `schema.tables`
+    is the whole model, and Postgres truncates a set of tables that
+    reference each other within that set without needing CASCADE.
+    CASCADE could therefore only ever reach a table OUTSIDE the model,
+    emptying it silently instead of the loud foreign-key error Postgres
+    raises without it -- the correct failure mode for a table this call
+    was never told to touch.
     """
     names = ", ".join(
         f"{_quote(table.schema)}.{_quote(table.name)}" for table in schema.tables
     )
     if not names:
         return
-    conn.execute(sql.SQL(cast(LiteralString, f"TRUNCATE {names} CASCADE")))  # type: ignore[redundant-cast]
+    conn.execute(sql.SQL(cast(LiteralString, f"TRUNCATE {names}")))  # type: ignore[redundant-cast]
 
 
 def analyze(conn: psycopg.Connection, schema: SchemaInfo) -> None:

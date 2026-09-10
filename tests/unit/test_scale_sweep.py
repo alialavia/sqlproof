@@ -17,14 +17,40 @@ from sqlproof.scale.sweep import run_sweep
 from sqlproof.schema.model import SchemaInfo
 
 
-def _install_db_stubs(monkeypatch: pytest.MonkeyPatch, probe_fn: Any) -> None:
-    monkeypatch.setattr(sweep, "truncate", lambda conn, schema: None)
-    monkeypatch.setattr(
-        sweep, "load_dataset", lambda conn, schema, sizes, *, seed, columns: None
-    )
-    monkeypatch.setattr(sweep, "analyze", lambda conn, schema: None)
+def _install_db_stubs(
+    monkeypatch: pytest.MonkeyPatch,
+    probe_fn: Any,
+    log: list[tuple[Any, ...]] | None = None,
+) -> None:
+    """Stub every database-touching name `sweep` imports. When `log` is
+    given, `truncate`/`load_dataset`/`analyze`/`probe_function` each
+    append an entry to it -- ("truncate",), ("load", dict(sizes)),
+    ("analyze",), ("probe", factor, total_rows) -- so a test can pin
+    the exact shape and order of what the controller does, not just
+    the final result (Ruling R #1 / Important 2)."""
+
+    def _truncate(conn: Any, schema: Any) -> None:
+        if log is not None:
+            log.append(("truncate",))
+
+    def _load_dataset(conn: Any, schema: Any, sizes: Any, *, seed: Any, columns: Any) -> None:
+        if log is not None:
+            log.append(("load", dict(sizes)))
+
+    def _analyze(conn: Any, schema: Any) -> None:
+        if log is not None:
+            log.append(("analyze",))
+
+    def _probe(conn: Any, function: Any, args: Any, *, factor: int, total_rows: int) -> Any:
+        if log is not None:
+            log.append(("probe", factor, total_rows))
+        return probe_fn(conn, function, args, factor=factor, total_rows=total_rows)
+
+    monkeypatch.setattr(sweep, "truncate", _truncate)
+    monkeypatch.setattr(sweep, "load_dataset", _load_dataset)
+    monkeypatch.setattr(sweep, "analyze", _analyze)
     monkeypatch.setattr(sweep, "resolve_args", lambda conn, args: ())
-    monkeypatch.setattr(sweep, "probe_function", probe_fn)
+    monkeypatch.setattr(sweep, "probe_function", _probe)
 
 
 def _point(factor: int, total_rows: int, work: int, plan_hash: str = "h") -> ProbePoint:
@@ -40,17 +66,55 @@ def test_baseline_comes_from_the_calibration_probe(monkeypatch: pytest.MonkeyPat
     is what gets subtracted. Baselining on the factor-1 point (work=101,
     which would zero out that very point and refuse the fit) or on 0
     (which leaves the constant term in and understates the exponent)
-    both give a detectably different result."""
+    both give a detectably different result.
+
+    Ruling R #1 / Important 2: the result alone doesn't pin the SHAPE
+    of what got there -- a full-size calibration load, a bare warm
+    probe with no truncate/load/analyze, or a missing ANALYZE anywhere
+    could all still land on the same exponent by coincidence with this
+    particular fake probe. Two differently-sized tables (so the
+    one-row calibration map is distinguishable from the full-size
+    ladder map) plus a call log pin the exact sequence: truncate, load
+    {a:1,b:1}, analyze, probe 0 -- twice (Ruling T) -- then truncate,
+    load {a:10,b:30}, analyze, probe 1 with total_rows scaled by
+    factor, and so on for every ladder probe."""
+    log: list[tuple[Any, ...]] = []
 
     def fake_probe(conn, function, args, *, factor, total_rows):
         work = 100 if factor == 0 else 100 + factor**2
         return _point(factor, total_rows, work)
 
-    _install_db_stubs(monkeypatch, fake_probe)
+    _install_db_stubs(monkeypatch, fake_probe, log=log)
     result = run_sweep(
-        object(), SchemaInfo(), "fn", sizes={"t": 10}, max_factor=64,
+        object(), SchemaInfo(), "fn", sizes={"a": 10, "b": 30}, max_factor=64,
     )
     assert abs(result.exponent - 2.0) < 1e-6
+
+    assert log[:8] == [
+        ("truncate",),
+        ("load", {"a": 1, "b": 1}),
+        ("analyze",),
+        ("probe", 0, 0),
+        ("truncate",),
+        ("load", {"a": 1, "b": 1}),
+        ("analyze",),
+        ("probe", 0, 0),
+    ]
+    assert log[8:12] == [
+        ("truncate",),
+        ("load", {"a": 10, "b": 30}),
+        ("analyze",),
+        ("probe", 1, 40),
+    ]
+
+    # Global Constraint: every ladder probe's total_rows is the full
+    # profile scaled by its own factor (sum(sizes.values()) * factor),
+    # never a per-table count or an unscaled constant.
+    ladder_probes = [entry for entry in log if entry[0] == "probe" and entry[1] >= 1]
+    assert ladder_probes == [
+        ("probe", 1, 40), ("probe", 2, 80), ("probe", 4, 160),
+        ("probe", 8, 320), ("probe", 16, 640),
+    ]
 
 
 def test_calibration_keeps_the_second_rounds_work_not_the_first(

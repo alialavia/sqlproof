@@ -112,6 +112,35 @@ def test_work_straddling_the_baseline_is_refused():
     assert fit.reason is not None
 
 
+def test_growth_equal_to_the_baseline_at_the_first_point_is_refused_not_zero():
+    """Ruling U: the old zero-growth guard only checked 'no point
+    exceeds the first point's work', which a genuinely GROWING series
+    can satisfy if its first point happens to equal the baseline. This
+    is exactly linear after the first point -- not flat -- and must be
+    refused, not reported as O(1)."""
+    pts = _points({1: 100, 2: 10, 4: 20, 8: 40, 16: 80})
+    fit = fit_exponent(pts, baseline=100)
+    assert fit.exponent is None
+
+
+def test_strictly_decreasing_work_is_refused_not_zero():
+    """A strictly decreasing series also satisfies 'no point exceeds
+    the first point's work' under the old guard, but it is not flat
+    either."""
+    pts = _points({1: 50, 2: 40, 4: 30, 8: 20, 16: 10})
+    fit = fit_exponent(pts, baseline=50)
+    assert fit.exponent is None
+
+
+def test_spike_then_flat_is_refused_not_zero():
+    """A spike at the first point followed by flat work also satisfies
+    the old guard's 'no point exceeds the first point'. The series is
+    not flat -- only points 2-5 are -- so it must be refused."""
+    pts = _points({1: 500, 2: 30, 4: 30, 8: 30, 16: 30})
+    fit = fit_exponent(pts, baseline=500)
+    assert fit.exponent is None
+
+
 def test_points_with_one_plan_are_a_single_segment():
     from sqlproof.scale.fit import segment_by_plan
 

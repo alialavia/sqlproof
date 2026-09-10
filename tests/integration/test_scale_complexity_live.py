@@ -69,11 +69,14 @@ CREATE FUNCTION scale_test.constant_fn() RETURNS int LANGUAGE sql IMMUTABLE AS
 def conn():
     with psycopg.connect(os.environ[DSN_ENV], autocommit=True) as connection:
         connection.execute("DROP SCHEMA IF EXISTS scale_test CASCADE")
-        connection.execute("CREATE SCHEMA scale_test")
-        connection.execute("SET search_path TO scale_test")
-        connection.execute(SCHEMA_SQL)
-        connection.execute(FUNCTIONS_SQL)
         try:
+            # Ruling W: setup lives inside the try too, so a failure partway
+            # through (e.g. FUNCTIONS_SQL) still drops whatever schema/tables
+            # did get created, instead of leaking them past this test.
+            connection.execute("CREATE SCHEMA scale_test")
+            connection.execute("SET search_path TO scale_test")
+            connection.execute(SCHEMA_SQL)
+            connection.execute(FUNCTIONS_SQL)
             yield connection
         finally:
             connection.execute("DROP SCHEMA IF EXISTS scale_test CASCADE")

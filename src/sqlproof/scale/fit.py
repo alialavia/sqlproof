@@ -51,15 +51,24 @@ def fit_exponent(points: Sequence[ProbePoint], baseline: int) -> FitResult:
         )
 
     # Zero growth is a real answer, not a degenerate fit: a function
-    # that never does more work than its own first measurement -- and
-    # never exceeds the fixed baseline either -- is genuinely O(1),
-    # and there is nothing to take the log of. Work that RISES while
-    # staying under an inflated baseline must still fall through to
-    # the refusal below rather than be reported as constant.
+    # whose work is IDENTICAL at every factor, and does not exceed the
+    # fixed baseline, is genuinely O(1) -- there is nothing to take the
+    # log of, and the ordinary per-point loop below would otherwise
+    # refuse it outright (adjusted <= 0 whenever the flat value is at
+    # or below the baseline). A flat series ABOVE the baseline needs no
+    # special case: it already fits exponent 0.0 (r^2 1.0) through the
+    # ordinary path below, since a constant y against varying x has
+    # zero slope.
+    #
+    # Ruling U: this must require every point EQUAL, not merely "no
+    # point exceeds the first point's work" (the earlier guard) -- a
+    # series that genuinely rises, falls, or spikes-then-flattens can
+    # still satisfy "no point exceeds the first" (e.g. a spike at the
+    # first point, or growth capped by an inflated baseline) without
+    # being flat, and must stay refused below, not be reported as
+    # constant.
     first_work = points[0].work_blocks
-    if all(p.work_blocks <= baseline for p in points) and all(
-        p.work_blocks <= first_work for p in points
-    ):
+    if all(p.work_blocks == first_work for p in points) and first_work <= baseline:
         return FitResult(0.0, 1.0, None, lo, hi, shape)
 
     xs: list[float] = []
