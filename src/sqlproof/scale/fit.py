@@ -88,3 +88,40 @@ def fit_exponent(points: Sequence[ProbePoint], baseline: int) -> FitResult:
             lo, hi, shape,
         )
     return FitResult(round(slope, 4), round(r2, 4), None, lo, hi, shape)
+
+
+@dataclass(frozen=True, slots=True)
+class PlanFlip:
+    at_factor: int
+    from_hash: str
+    to_hash: str
+
+
+def segment_by_plan(
+    points: Sequence[ProbePoint],
+) -> tuple[list[list[ProbePoint]], list[PlanFlip]]:
+    """Split points into runs sharing a plan shape, and report the
+    boundaries.
+
+    A plan change is a genuine discontinuity in the cost curve: at small
+    n a sequential scan is correctly cheapest, and the planner switching
+    to an index scan resets the curve rather than bending it. Fitting
+    straight through one averages two different functions together.
+    """
+    if not points:
+        return [], []
+    segments: list[list[ProbePoint]] = [[points[0]]]
+    flips: list[PlanFlip] = []
+    for previous, current in zip(points, points[1:], strict=False):
+        if current.plan_hash == previous.plan_hash:
+            segments[-1].append(current)
+            continue
+        flips.append(
+            PlanFlip(
+                at_factor=current.factor,
+                from_hash=previous.plan_hash,
+                to_hash=current.plan_hash,
+            )
+        )
+        segments.append([current])
+    return segments, flips
