@@ -182,3 +182,118 @@ def test_projection_returns_none_when_already_over_the_timeout():
     ]
     fit = fit_exponent(pts, baseline=0)
     assert project_rows_before_timeout(pts, fit, timeout_ms=1000, truncated=False) is None
+
+
+def test_projection_band_is_calculated_correctly():
+    """Pin the exact band constants to catch regressions in the 0.6/1.6
+    multipliers."""
+    from sqlproof.scale.fit import fit_exponent, project_rows_before_timeout
+    from sqlproof.scale.probe import ProbePoint
+
+    pts = [
+        ProbePoint(factor=f, total_rows=f * 1000, work_blocks=f * 100,
+                   peak_memory_kb=0, temp_blocks=0, plan_hash="a", exec_ms=f * 10.0)
+        for f in (1, 2, 4, 8, 16)
+    ]
+    fit = fit_exponent(pts, baseline=0)
+    band = project_rows_before_timeout(pts, fit, timeout_ms=1000, truncated=False)
+    assert band is not None
+    lo, hi = band
+    # Exponent is 1.0, last.total_rows=16000, last.exec_ms=160, timeout=1000
+    # centre = 16000 * (1000/160)^1 = 100000
+    # lo = max(int(100000*0.6), 16000) = max(60000, 16000) = 60000
+    # hi = int(100000*1.6) = 160000
+    assert lo == 60000
+    assert hi == 160000
+
+
+def test_projection_lower_bound_is_clamped_to_measured_rows():
+    """The lower bound cannot undercut row counts we already measured.
+    Reproduce: exponent=1.0, last.total_rows=16000, last.exec_ms=900,
+    timeout=1000 yields centre=17777.78, raw_lo=10666 < 16000. Clamp it."""
+    from sqlproof.scale.fit import FitResult, project_rows_before_timeout
+    from sqlproof.scale.probe import ProbePoint
+
+    pts = [
+        ProbePoint(factor=f, total_rows=f * 1000, work_blocks=f * 100,
+                   peak_memory_kb=0, temp_blocks=0, plan_hash="a", exec_ms=900.0)
+        for f in (1, 2, 4, 8, 16)
+    ]
+    fit = FitResult(1.0, 0.99, None, 1, 16, "a")
+    band = project_rows_before_timeout(pts, fit, timeout_ms=1000, truncated=False)
+    assert band is not None
+    lo, hi = band
+    assert lo >= pts[-1].total_rows  # lo must not contradict measured data
+
+
+def test_projection_refuses_when_spill_occurs_even_if_exponent_is_good():
+    """A spill does not change plan_hash so it is fitted through, producing
+    R² near 1.0 and a confident but wrong projection over a cost cliff.
+    Refuse extrapolation when any spill is detected."""
+    from sqlproof.scale.fit import fit_exponent, project_rows_before_timeout
+    from sqlproof.scale.probe import ProbePoint
+
+    # Linear work_blocks, but temp_blocks turn on at factor 8 and 16.
+    pts = [
+        ProbePoint(factor=f, total_rows=f * 1000, work_blocks=f * 100,
+                   peak_memory_kb=0, temp_blocks=(200 if f >= 8 else 0),
+                   plan_hash="a", exec_ms=f * 10.0)
+        for f in (1, 2, 4, 8, 16)
+    ]
+    fit = fit_exponent(pts, baseline=0)
+    assert fit.exponent is not None  # work_blocks alone fit well
+    band = project_rows_before_timeout(pts, fit, timeout_ms=1000, truncated=False)
+    assert band is None  # but projection is refused due to spill
+
+
+def test_segment_by_plan_on_empty_sequence():
+    """segment_by_plan handles empty input gracefully."""
+    from sqlproof.scale.fit import segment_by_plan
+
+    segments, flips = segment_by_plan([])
+    assert segments == []
+    assert flips == []
+
+
+def test_segment_by_plan_on_single_point():
+    """segment_by_plan handles a single point."""
+    from sqlproof.scale.fit import segment_by_plan
+
+    pts = _points({1: 100})
+    segments, flips = segment_by_plan(pts)
+    assert len(segments) == 1
+    assert segments[0] == pts
+    assert flips == []
+
+
+def test_find_spill_on_empty_sequence():
+    """find_spill handles empty input gracefully."""
+    from sqlproof.scale.fit import find_spill
+
+    assert find_spill([]) is None
+
+
+def test_find_spill_on_single_point_with_spill():
+    """find_spill detects spill in a single point."""
+    from sqlproof.scale.fit import find_spill
+    from sqlproof.scale.probe import ProbePoint
+
+    pt = ProbePoint(factor=1, total_rows=1000, work_blocks=100,
+                    peak_memory_kb=0, temp_blocks=500, plan_hash="a", exec_ms=1.0)
+    assert find_spill([pt]) is pt
+
+
+def test_projection_returns_none_when_exponent_is_zero():
+    """An exponent of zero means constant time regardless of scale, so
+    extrapolation does not make sense."""
+    from sqlproof.scale.fit import project_rows_before_timeout
+    from sqlproof.scale.probe import ProbePoint
+    from sqlproof.scale.fit import FitResult
+
+    pts = [
+        ProbePoint(factor=f, total_rows=f * 1000, work_blocks=500,
+                   peak_memory_kb=0, temp_blocks=0, plan_hash="a", exec_ms=100.0)
+        for f in (1, 2, 4, 8, 16)
+    ]
+    fit = FitResult(0.0, 0.99, None, 1, 16, "a")
+    assert project_rows_before_timeout(pts, fit, timeout_ms=1000, truncated=False) is None

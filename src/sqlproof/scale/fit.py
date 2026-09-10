@@ -160,6 +160,11 @@ def project_rows_before_timeout(
     """
     if fit.exponent is None or truncated or not points:
         return None
+    # A spill does not change plan_hash so it is fitted through,
+    # producing R² near 1.0 and confident but wrong projections over a
+    # cost cliff. Refuse rather than extrapolate through a discontinuity.
+    if find_spill(points) is not None:
+        return None
     last = points[-1]
     if last.exec_ms >= timeout_ms:
         return None
@@ -171,4 +176,9 @@ def project_rows_before_timeout(
     # A deliberately wide band. The exponent is measured, but wall-clock
     # is not stable enough (1.96x run to run on an idle machine) for a
     # tighter claim to be honest.
-    return int(centre * 0.6), int(centre * 1.6)
+    lo = int(centre * 0.6)
+    # Clamp the lower bound to the largest measured row count: we proved
+    # that many rows complete under the timeout, so do not claim a lower
+    # bound that contradicts our own data.
+    lo = max(lo, last.total_rows)
+    return lo, int(centre * 1.6)
