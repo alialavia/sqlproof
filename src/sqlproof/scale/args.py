@@ -34,7 +34,13 @@ Resolver = Callable[[Any], Any]
 # `resolve`, below), and catalog-driven discovery is on this feature's
 # roadmap, at which point a column name stops being a developer literal
 # and starts coming from introspection of the user's own database.
-_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+#
+# Matched with `fullmatch`, not `match` against a `$`-anchored pattern:
+# in Python, `$` matches immediately before a trailing "\n" as well as
+# at the true end of string, so "id\n" would otherwise pass as a bare
+# identifier and carry one newline into the generated SQL. `fullmatch`
+# has no such carve-out.
+_IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
 def _split(column: str) -> tuple[str, str]:
@@ -45,7 +51,7 @@ def _split(column: str) -> tuple[str, str]:
         )
         raise SqlProofUsageError(msg)
     for segment in column.split("."):
-        if not _IDENTIFIER_RE.match(segment):
+        if not _IDENTIFIER_RE.fullmatch(segment):
             msg = (
                 f"Column reference {column!r} contains an invalid "
                 f"identifier segment {segment!r}. Each dot-separated part "

@@ -112,3 +112,16 @@ def test_legitimate_qualified_columns_still_resolve():
 def test_unqualified_reference_still_raises():
     with pytest.raises(SqlProofUsageError):
         heaviest("id")
+
+
+def test_heaviest_rejects_a_trailing_newline_on_the_final_segment():
+    """Python's `$` matches immediately before a trailing "\\n" as well
+    as at true end-of-string, so a `$`-anchored `match` would let
+    "id\\n" through as a bare identifier. Must be rejected."""
+    with pytest.raises(SqlProofUsageError):
+        heaviest("schema.canary.id\n")
+
+
+def test_heaviest_rejects_a_trailing_newline_on_a_leading_segment():
+    with pytest.raises(SqlProofUsageError):
+        heaviest("schema.canary\n.id")
