@@ -133,6 +133,7 @@ def test_the_planner_flips_inside_the_function(conn):
 
 @pytest.mark.xfail(
     strict=True,
+    raises=AssertionError,
     reason=(
         "probe_function measures EXPLAIN of the OUTER `SELECT find_one()` "
         "call; find_one is LANGUAGE sql and not inlined, so that tree is "
