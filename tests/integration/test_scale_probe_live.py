@@ -5,6 +5,7 @@ import os
 import psycopg
 import pytest
 
+from sqlproof.exceptions import SqlProofUsageError
 from sqlproof.scale.probe import probe_function
 
 DSN_ENV = "SQLPROOF_TEST_DATABASE_URL"
@@ -82,6 +83,27 @@ def test_probe_composes_inside_an_existing_transaction(conn):
     finally:
         other.rollback()
         other.close()
+
+
+def test_an_injected_function_name_is_refused_and_the_canary_survives(conn):
+    """Ruling AN, against a real database. Before the name was validated,
+    this payload emptied the canary (3 rows -> 0, still gone on a fresh
+    connection): the simple-query protocol ran the smuggled COMMIT and
+    DELETE as statements of their own."""
+    conn.execute(
+        "CREATE FUNCTION probe_test.noop() RETURNS int LANGUAGE sql VOLATILE AS 'SELECT 1'"
+    )
+    conn.execute("CREATE TABLE probe_test.canary (id int)")
+    conn.execute("INSERT INTO probe_test.canary VALUES (1), (2), (3)")
+    payload = (
+        "probe_test.noop(); COMMIT; DELETE FROM probe_test.canary; "
+        "SELECT probe_test.noop"
+    )
+    with pytest.raises(SqlProofUsageError, match="invalid identifier segment"):
+        probe_function(conn, payload, [], factor=1, total_rows=0)
+    with psycopg.connect(os.environ[DSN_ENV]) as fresh:
+        remaining = fresh.execute("SELECT count(*) FROM probe_test.canary").fetchone()[0]
+    assert remaining == 3
 
 
 def test_probe_passes_arguments(conn):

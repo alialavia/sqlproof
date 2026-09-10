@@ -16,6 +16,8 @@ from typing import Any, LiteralString, cast
 
 import psycopg
 
+from sqlproof.scale._identifiers import validate_function_name
+
 
 @dataclass(frozen=True, slots=True)
 class ProbePoint:
@@ -128,7 +130,13 @@ def probe_function(
     is already inside a transaction -- e.g. DBManager's, autocommit=False
     -- that transaction is left untouched; only the savepoint rolls
     back, so callers can compose several probes inside one transaction.
+
+    `function` is interpolated into the statement, so it is checked
+    first -- every dot-separated part a bare identifier -- and a bad name
+    raises `SqlProofUsageError` before any SQL runs (see
+    `_identifiers.validate_function_name`).
     """
+    validate_function_name(function)
     placeholders = ", ".join(["%s"] * len(args))
     statement = (
         f"EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) SELECT {function}({placeholders})"

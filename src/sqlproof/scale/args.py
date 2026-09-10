@@ -18,29 +18,13 @@ reported. `random_key` and `median_key` answer the other question.
 
 from __future__ import annotations
 
-import re
 from collections.abc import Callable, Sequence
 from typing import Any
 
 from sqlproof.exceptions import SqlProofUsageError
+from sqlproof.scale._identifiers import IDENTIFIER_RE
 
 Resolver = Callable[[Any], Any]
-
-# Bare, unquoted SQL identifier: a letter or underscore, then letters,
-# digits or underscores. Deliberately conservative -- this rejects some
-# identifiers Postgres would itself accept (quoted identifiers with
-# spaces or special characters), which is the right trade here: these
-# strings are interpolated straight into generated SQL (see `heaviest`'s
-# `resolve`, below), and catalog-driven discovery is on this feature's
-# roadmap, at which point a column name stops being a developer literal
-# and starts coming from introspection of the user's own database.
-#
-# Matched with `fullmatch`, not `match` against a `$`-anchored pattern:
-# in Python, `$` matches immediately before a trailing "\n" as well as
-# at the true end of string, so "id\n" would otherwise pass as a bare
-# identifier and carry one newline into the generated SQL. `fullmatch`
-# has no such carve-out.
-_IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
 def _split(column: str) -> tuple[str, str]:
@@ -50,8 +34,10 @@ def _split(column: str) -> tuple[str, str]:
             '"table.column" so the resolver knows which table to query.'
         )
         raise SqlProofUsageError(msg)
+    # These segments are interpolated into the resolver's SQL; see
+    # `_identifiers.py` for why the rule is this strict, and fullmatch.
     for segment in column.split("."):
-        if not _IDENTIFIER_RE.fullmatch(segment):
+        if not IDENTIFIER_RE.fullmatch(segment):
             msg = (
                 f"Column reference {column!r} contains an invalid "
                 f"identifier segment {segment!r}. Each dot-separated part "
