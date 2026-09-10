@@ -172,7 +172,18 @@ def project_rows_before_timeout(
         return None
     # time ~ rows^exponent, so rows_at_timeout = last_rows * ratio^(1/k)
     ratio = timeout_ms / last.exec_ms
-    centre = last.total_rows * ratio ** (1.0 / fit.exponent)
+    try:
+        centre = last.total_rows * ratio ** (1.0 / fit.exponent)
+    except OverflowError:
+        # A near-zero exponent means cost does not grow: there is no row
+        # count at which the function times out, so extrapolating one is
+        # meaningless. Refuse rather than crash or claim absurd numbers.
+        return None
+    # Refuse projections exceeding 1e12 rows: beyond any plausible Postgres
+    # table, a projection past it is an artifact of a near-flat exponent
+    # rather than a measurement.
+    if not math.isfinite(centre) or centre > 1e12:
+        return None
     # A deliberately wide band. The exponent is measured, but wall-clock
     # is not stable enough (1.96x run to run on an idle machine) for a
     # tighter claim to be honest.

@@ -297,3 +297,61 @@ def test_projection_returns_none_when_exponent_is_zero():
     ]
     fit = FitResult(0.0, 0.99, None, 1, 16, "a")
     assert project_rows_before_timeout(pts, fit, timeout_ms=1000, truncated=False) is None
+
+
+def test_projection_returns_none_when_exponent_is_very_small():
+    """A near-zero exponent means cost does not grow with scale, so there
+    is no row count at which the function times out. Extrapolating past
+    it is meaningless and risks OverflowError. Return None instead."""
+    from sqlproof.scale.fit import project_rows_before_timeout
+    from sqlproof.scale.probe import ProbePoint
+    from sqlproof.scale.fit import FitResult
+
+    pts = [
+        ProbePoint(factor=f, total_rows=f * 1000, work_blocks=100,
+                   peak_memory_kb=0, temp_blocks=0, plan_hash="a", exec_ms=1.0)
+        for f in (1, 2, 4, 8, 16)
+    ]
+    # This used to raise OverflowError for exponent 0.001
+    fit = FitResult(0.001, 0.99, None, 1, 16, "a")
+    assert project_rows_before_timeout(pts, fit, timeout_ms=1000.0, truncated=False) is None
+
+
+def test_projection_returns_none_when_exponent_is_too_small_for_accuracy():
+    """Even without raising, a very small exponent can produce absurdly
+    large row counts (e.g., 9.6e152 for exponent 0.02). These are not
+    measurements but artifacts of near-flat curves. Refuse them."""
+    from sqlproof.scale.fit import project_rows_before_timeout
+    from sqlproof.scale.probe import ProbePoint
+    from sqlproof.scale.fit import FitResult
+
+    pts = [
+        ProbePoint(factor=f, total_rows=f * 1000, work_blocks=100,
+                   peak_memory_kb=0, temp_blocks=0, plan_hash="a", exec_ms=1.0)
+        for f in (1, 2, 4, 8, 16)
+    ]
+    # This used to return (9.6e152, 2.56e153)
+    fit = FitResult(0.02, 0.99, None, 1, 16, "a")
+    assert project_rows_before_timeout(pts, fit, timeout_ms=1000.0, truncated=False) is None
+
+
+def test_projection_band_unchanged_with_healthy_exponent():
+    """Verify the fix for near-zero exponents does not affect healthy
+    exponents near 1.0. The pinned band test must pass unchanged."""
+    from sqlproof.scale.fit import fit_exponent, project_rows_before_timeout
+    from sqlproof.scale.probe import ProbePoint
+
+    pts = [
+        ProbePoint(factor=f, total_rows=f * 1000, work_blocks=f * 100,
+                   peak_memory_kb=0, temp_blocks=0, plan_hash="a", exec_ms=f * 10.0)
+        for f in (1, 2, 4, 8, 16)
+    ]
+    fit = fit_exponent(pts, baseline=0)
+    band = project_rows_before_timeout(pts, fit, timeout_ms=1000, truncated=False)
+    assert band is not None
+    lo, hi = band
+    # Exponent is 1.0, last.total_rows=16000, last.exec_ms=160, timeout=1000
+    # centre = 16000 * (1000/160)^1 = 100000
+    # lo = max(60000, 16000) = 60000, hi = 160000
+    assert lo == 60000
+    assert hi == 160000
