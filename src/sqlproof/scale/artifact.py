@@ -62,6 +62,14 @@ def save_run(
     `regimes`. `seed`, `max_factor`, `min_points` and `probe_timeout_s`
     record how the sweep ran, so it can be run again: the same seed and
     profile generate the same data, and so the same buffer counts.
+
+    `argument_policy` holds one entry per argument position, saying how
+    that argument was chosen (Ruling AO): `{"kind": "heaviest", "column":
+    "t.id"}` (the largest key value), `{"kind": "median_key", "column":
+    ...}`, `{"kind": "random_key", "column": ..., "seed": 0}`, `{"kind":
+    "callable"}` for a caller's own resolver, or `{"kind": "literal"}`
+    (the value itself is in each point's `args`). No entry claims a
+    worst case: none of the resolvers guarantees one.
     """
     artifact_dir.mkdir(parents=True, exist_ok=True)
     when = started_at if started_at is not None else datetime.now(UTC)
@@ -91,9 +99,9 @@ def save_run(
         "max_factor": result.max_factor,
         "min_points": result.min_points,
         "probe_timeout_s": result.probe_timeout_s,
-        # Results describe the WORST case when `heaviest` resolves the
-        # arguments. Recorded so nobody reads the exponent as a median.
-        "argument_policy": "worst-case when resolvers are used; literals as given",
+        # One entry per argument position (see the docstring) -- deliberately
+        # not a run-wide "worst case" label: no resolver guarantees one.
+        "argument_policy": [dict(entry) for entry in result.argument_policy],
         "spill_point_rows": result.spill_point_rows,
         "factor_at_spill": result.factor_at_spill,
         "points": [

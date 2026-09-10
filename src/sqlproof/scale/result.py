@@ -33,6 +33,9 @@ class ScaleResult:
     max_factor: int | None = None
     min_points: int | None = None
     probe_timeout_s: float | None = None
+    # How each argument position was chosen (`args.argument_policy`): a
+    # built-in resolver's kind and column, "callable", or "literal".
+    argument_policy: Sequence[Mapping[str, object]] = ()
 
     @property
     def exponent(self) -> float:

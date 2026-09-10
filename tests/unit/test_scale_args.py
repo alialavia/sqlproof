@@ -11,7 +11,13 @@ from __future__ import annotations
 import pytest
 
 from sqlproof.exceptions import SqlProofUsageError
-from sqlproof.scale.args import heaviest, median_key, random_key, resolve_args
+from sqlproof.scale.args import (
+    argument_policy,
+    heaviest,
+    median_key,
+    random_key,
+    resolve_args,
+)
 
 
 class FakeConn:
@@ -43,13 +49,12 @@ def test_resolver_is_called_with_the_connection():
     assert len(conn.sql) == 1
 
 
-def test_heaviest_orders_by_descending_child_count():
+def test_heaviest_picks_the_largest_key_value_not_a_child_count():
+    """Ruling AO: `heaviest` orders by the key itself and never counts
+    referencing rows -- pinned exactly, since its name suggests more."""
     conn = FakeConn(3)
     heaviest("customers.id")(conn)
-    sql = conn.sql[0].lower()
-    assert "order by" in sql
-    assert "desc" in sql
-    assert "limit 1" in sql
+    assert conn.sql == ["SELECT id FROM customers ORDER BY id DESC LIMIT 1"]
 
 
 def test_median_key_uses_an_offset_rather_than_ordering_by_count():
@@ -125,3 +130,34 @@ def test_heaviest_rejects_a_trailing_newline_on_the_final_segment():
 def test_heaviest_rejects_a_trailing_newline_on_a_leading_segment():
     with pytest.raises(SqlProofUsageError):
         heaviest("schema.canary\n.id")
+
+
+def test_argument_policy_names_how_each_position_is_chosen():
+    """Ruling AO: one entry per position, read from each built-in
+    resolver's marker -- so the artifact says which case was measured
+    instead of claiming a worst case for the whole run."""
+    args = [
+        heaviest("customers.id"),
+        42,
+        random_key("billing.invoices.id", seed=7),
+        median_key("t.id"),
+        lambda conn: 1,
+    ]
+    assert argument_policy(args) == (
+        {"kind": "heaviest", "column": "customers.id"},
+        {"kind": "literal"},
+        {"kind": "random_key", "column": "billing.invoices.id", "seed": 7},
+        {"kind": "median_key", "column": "t.id"},
+        {"kind": "callable"},
+    )
+
+
+def test_random_key_coerces_its_seed_to_an_integer_before_building_sql():
+    """The seed is interpolated into the query as text, so it goes
+    through int() first: an integer-like seed still works, and anything
+    else fails before any SQL exists."""
+    conn = FakeConn(1)
+    random_key("customers.id", seed="5")(conn)  # type: ignore[arg-type]
+    assert conn.sql == ["SELECT id FROM customers ORDER BY md5(id::text || '5') LIMIT 1"]
+    with pytest.raises(ValueError):
+        random_key("customers.id", seed="0') || (SELECT 1")  # type: ignore[arg-type]

@@ -28,7 +28,7 @@ from sqlproof.exceptions import (
 )
 from sqlproof.generators.rows import ColumnOverrides
 from sqlproof.scale._identifiers import validate_function_name
-from sqlproof.scale.args import resolve_args
+from sqlproof.scale.args import argument_policy, resolve_args
 from sqlproof.scale.fit import MIN_POINTS, fit_exponent, segment_by_plan
 from sqlproof.scale.load import (
     analyze,
@@ -293,4 +293,5 @@ def _measure(
         max_factor=max_factor,
         min_points=min_points,
         probe_timeout_s=probe_timeout_s,
+        argument_policy=argument_policy(args),
     )

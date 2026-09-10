@@ -15,6 +15,7 @@ import pytest
 
 from sqlproof.exceptions import SqlProofScaleError, SqlProofUsageError
 from sqlproof.scale import sweep
+from sqlproof.scale.args import heaviest
 from sqlproof.scale.fit import MIN_POINTS
 from sqlproof.scale.probe import ProbePoint
 from sqlproof.scale.sweep import run_sweep
@@ -524,4 +525,20 @@ def test_the_result_carries_what_a_re_fit_and_a_re_run_need(
     assert result.baseline == 100  # the second calibration round's work
     assert (result.seed, result.max_factor, result.min_points, result.probe_timeout_s) == (
         7, 64, 6, 12.5,
+    )
+
+
+def test_the_result_records_how_each_argument_is_chosen(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ruling AO: run_sweep derives the per-argument policy from `args`
+    itself, so the artifact describes the resolvers actually used."""
+    _install_db_stubs(monkeypatch, _quadratic_probe)
+    result = run_sweep(
+        object(), _schema("t"), "fn", sizes={"t": 10},
+        args=[heaviest("t.id"), 5], max_factor=64,
+    )
+    assert result.argument_policy == (
+        {"kind": "heaviest", "column": "t.id"},
+        {"kind": "literal"},
     )

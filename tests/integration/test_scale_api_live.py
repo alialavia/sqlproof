@@ -6,6 +6,7 @@ alongside is for trend history, the way mutation runs are.
 """
 from __future__ import annotations
 
+import json
 import os
 from itertools import pairwise
 
@@ -93,6 +94,11 @@ def test_resolved_arguments_are_recorded_per_point(proof, tmp_path):
     # with factor (points arrive in ascending factor order).
     resolved_values = [p.args[0] for p in result.points]
     assert all(a < b for a, b in pairwise(resolved_values))
+    # Ruling AO: the artifact says how the argument was chosen -- the
+    # largest key value, by `heaviest` -- and claims no worst case.
+    (artifact,) = tmp_path.glob("*.json")
+    data = json.loads(artifact.read_text())
+    assert data["argument_policy"] == [{"kind": "heaviest", "column": "api_test.orgs.id"}]
 
 
 # --- Ruling AM: the sweep empties and repopulates every modelled table ---

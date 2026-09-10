@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 import pytest
 
 import sqlproof
+from sqlproof.scale.args import argument_policy, heaviest, median_key, random_key
 from sqlproof.scale.artifact import save_run
 from sqlproof.scale.fit import FitResult, PlanFlip, fit_exponent, segment_by_plan
 from sqlproof.scale.probe import ProbePoint
@@ -85,11 +86,30 @@ def test_artifact_records_resolved_arguments_per_point(tmp_path):
     assert data["points"][0]["args"] == [7]
 
 
-def test_artifact_labels_the_worst_case_argument_policy(tmp_path):
-    """Results describe worst-case behaviour when `heaviest` is used.
-    Unlabelled, someone reads the exponent as a median."""
-    data = json.loads(save_run(_result(), tmp_path).read_text())
-    assert "worst-case" in data["argument_policy"]
+def test_artifact_records_how_each_argument_was_chosen_and_claims_no_worst_case(tmp_path):
+    """Ruling AO: the artifact used to label every resolver run
+    "worst-case" -- `random_key` and `median_key` included -- although
+    `heaviest` returns the largest key value, an arbitrary parent under
+    the sweep's uniform data. It now records one entry per position, and
+    nothing in it claims a worst case."""
+    base = _result()
+    result = ScaleResult(
+        points=base.points, regimes=base.regimes, plan_flips=base.plan_flips,
+        truncated=base.truncated, function=base.function, sizes=base.sizes,
+        argument_policy=argument_policy([
+            heaviest("customers.id"), 42, random_key("customers.id", seed=3),
+            median_key("t.id"),
+        ]),
+    )
+    path = save_run(result, tmp_path)
+    data = json.loads(path.read_text())
+    assert data["argument_policy"] == [
+        {"kind": "heaviest", "column": "customers.id"},
+        {"kind": "literal"},
+        {"kind": "random_key", "column": "customers.id", "seed": 3},
+        {"kind": "median_key", "column": "t.id"},
+    ]
+    assert "worst" not in path.read_text().lower()
 
 
 def test_artifact_carries_a_schema_version(tmp_path):
