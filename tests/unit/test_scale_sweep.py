@@ -252,6 +252,10 @@ def test_timeout_marks_truncated_and_stops_probing(monkeypatch: pytest.MonkeyPat
     # Two calibration probes (factor 0, run twice per Ruling T), then the
     # ladder; 4 is never reached.
     assert probed_factors == [0, 0, 1, 2]
+    # The point that timed out is still a measurement, and stays in the
+    # result (the spec's truncated-sweep rule: the fit covers what was
+    # actually measured).
+    assert [p.factor for p in result.points] == [1, 2]
 
 
 def test_final_segment_decides_when_the_ladder_stops(

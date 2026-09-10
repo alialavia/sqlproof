@@ -93,11 +93,15 @@ def _peak_memory(node: dict[str, Any]) -> int:
     Peak memory is what decides whether `work_mem` is exceeded, and
     nodes do not all hold their peak simultaneously. Summing would
     overstate it and make the spill point look closer than it is.
+
+    A sort that spilled reports its DISK usage in the same "Sort Space
+    Used" field, marked "Sort Space Type": "Disk". That space is temp
+    blocks, not memory, so it is not counted here.
     """
-    own = max(
-        int(node.get("Sort Space Used", 0)),
-        int(node.get("Peak Memory Usage", 0)),
-    )
+    sort_space = int(node.get("Sort Space Used", 0))
+    if node.get("Sort Space Type") == "Disk":
+        sort_space = 0
+    own = max(sort_space, int(node.get("Peak Memory Usage", 0)))
     for child in node.get("Plans", []):
         own = max(own, _peak_memory(child))
     return own

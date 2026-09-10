@@ -1,9 +1,14 @@
 """Parsing an EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) tree.
 
-Pure: these are dicts shaped like Postgres output, no database. The
-per-loop trap in `test_nested_loop_work_multiplies_by_loops` is the
-reason this parsing gets its own task -- reading `Actual Rows` without
-multiplying by `Actual Loops` is exactly where a quadratic hides.
+Pure: dicts shaped like Postgres output, and plans captured from a live
+database, but no database is touched here. The trap these tests exist
+for is the opposite of the obvious one (Ruling A): buffer counts are
+CUMULATIVE totals and INCLUSIVE of children, so work is the root's
+count, never a sum over the tree and never multiplied by loops (see
+`test_work_is_the_root_total_not_a_sum_over_the_tree` and
+`test_work_does_not_multiply_by_loops`). Multiplying by `Actual Loops`
+is right only for the per-loop `Actual Rows` and `Actual Time`, which
+the fit never reads.
 """
 from __future__ import annotations
 
@@ -95,6 +100,25 @@ def test_peak_memory_takes_the_largest_node_not_the_sum():
         )
     )
     assert mem == 2048
+
+
+def test_peak_memory_does_not_count_a_sort_that_spilled_to_disk():
+    """A spilled sort reports its DISK usage in the same "Sort Space Used"
+    field, marked "Sort Space Type": "Disk" -- temp space, not memory.
+    The same node marked "Memory" is counted."""
+
+    def peak_of_a_sort_using(space_type):
+        return parse_plan(
+            _plan(**{
+                "Node Type": "Sort",
+                "Sort Method": "external merge" if space_type == "Disk" else "quicksort",
+                "Sort Space Used": 9000,
+                "Sort Space Type": space_type,
+            })
+        )[1]
+
+    assert peak_of_a_sort_using("Disk") == 0
+    assert peak_of_a_sort_using("Memory") == 9000
 
 
 def test_temp_blocks_signal_a_spill():

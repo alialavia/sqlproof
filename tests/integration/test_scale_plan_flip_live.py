@@ -153,5 +153,8 @@ def test_a_flip_inside_a_function_is_segmented(conn):
         sizes={"lookups": BASE_ROWS}, max_factor=MAX_FACTOR, min_points=6,
         columns=NEEDLE_COLUMNS,
     )
-    assert result.plan_flips, "distinct plans seen but no flip recorded"
+    assert result.plan_flips, (
+        "no plan flip recorded: the probe hashes only the outer SELECT "
+        "find_one() plan, so it cannot see the inner query's plan change"
+    )
     assert len(result.regimes) >= 2
