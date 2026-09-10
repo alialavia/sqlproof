@@ -451,7 +451,8 @@ reason and the raw points.
   Materialize that replays the inner side from memory -- quadratic in
   CPU, yet ~1 in buffers. The suite pins that blind spot, and the
   flat-but-noisy refusal (a primary-key lookup), as **adversarial
-  reference functions** in strict xfails (see "Known limitations").
+  reference functions** in xfails -- strict for the CPU gap, not for
+  the flat-but-noisy one (see "Known limitations").
 
   A wrong oracle is worse than no oracle. It reads as a broken fit, and
   the tempting repair — widening the tolerance until it passes — leaves
@@ -478,8 +479,8 @@ reason and the raw points.
 ## Known limitations
 
 What the measurement cannot see, or refuses, as built. Every gap a test
-can pin is pinned by a strict xfail, so it cannot close -- or stay
-open -- silently.
+can pin is pinned by an xfail -- strict, so it cannot close or stay
+open silently, except where noted.
 
 - **CPU-only growth is invisible.** Buffers count I/O-visible work --
   pages touched -- not CPU. A quadratic that re-reads nothing passes the
@@ -505,10 +506,14 @@ open -- silently.
   from point to point -- a primary-key lookup, at R² 0.000 to 0.75 --
   fails the R² ≥ 0.98 acceptance, and `exponent` raises rather than
   report ~0: a false alarm, never a wrong number. Only an exactly-flat
-  series is accepted as 0. Pinned by
-  `test_a_primary_key_lookup_recovers_exponent_near_zero`. Gating on the
-  slope's standard error instead would change the acceptance rule;
-  that is the user's decision (Ruling AT).
+  series is accepted as 0. Tracked by
+  `test_a_primary_key_lookup_recovers_exponent_near_zero`, a NON-strict
+  xfail (Ruling AW): the noise is run-to-run, so a run whose five points
+  happen to land on one block count is exactly flat, is accepted as
+  0.0, and XPASSes by chance -- a strict xfail would turn a clean
+  branch red at random. Gating on the slope's standard error instead
+  would change the acceptance rule; that is the user's decision
+  (Ruling AT).
 - **No argument is a worst case.** `heaviest` returns the largest key
   value and the sweep loads uniform data; the artifact labels each
   argument by how it was chosen (Ruling AO; see "Arguments").

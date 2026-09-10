@@ -23,9 +23,11 @@ replays it from memory for every outer row -- O(n^2) comparisons on O(n)
 buffer work, so it fits ~1. The other gap runs the opposite way: an O(1)
 function whose work moves by a block or two from point to point, like
 `pk_lookup_fn`, has an R^2 that measures only that wobble -- far below
-0.98 -- and is refused rather than fitted ~0. Both are pinned below as
-strict xfails (Rulings AS, AT), so neither gap can close -- or stay
-open -- silently.
+0.98 -- and is refused rather than fitted ~0. The CPU gap is pinned
+below as a strict xfail (Ruling AS), so it cannot close -- or stay
+open -- silently. The flat-but-noisy one is a NON-strict xfail (Rulings
+AT, AW): a run whose five points happen to land on one block count is
+exactly flat, is accepted as 0.0, and would XPASS by chance.
 
 A wrong oracle is worse than no oracle: it reads as a broken fit, and
 the tempting repair -- widening the tolerance until it passes -- leaves
@@ -214,8 +216,16 @@ def test_a_cpu_only_quadratic_recovers_exponent_near_two(conn):
     )
 
 
+# Ruling AW: NOT strict, unlike the other xfails here. The wobble is
+# run-to-run noise, and a run whose five points happen to land on one
+# block count is exactly flat: the fit accepts it as 0.0, so the test
+# XPASSes by chance (every other 10-13-block pattern is refused). A
+# strict xfail that can turn a clean branch red at random is worse than
+# one that reports XPASS. `raises=` stays, so an unrelated crash still
+# fails loudly; the gap stays tracked here and in the spec's "Known
+# limitations".
 @pytest.mark.xfail(
-    strict=True,
+    strict=False,
     raises=SqlProofScaleError,
     reason=(
         "I1 / Ruling AT: flat-but-noisy work is refused. pk_lookup_fn is a "
@@ -224,12 +234,10 @@ def test_a_cpu_only_quadratic_recovers_exponent_near_two(conn):
         "blocks against a calibrated baseline of 4). A flat series' R^2 "
         "measures only that wobble, which reshuffles between runs, so it "
         "lands far below the spec's MIN_R_SQUARED of 0.98 (0.000 to 0.75 on "
-        "the patterns measured here), and "
-        ".exponent raises instead of reporting ~0 -- `assert exponent < 1.5` "
-        "fails CI for a well-behaved function. strict=True: the day the fit "
-        "accepts a confidently flat series (e.g. a slope-standard-error "
-        "gate), this XPASSes and fails, so the gap cannot close -- or stay "
-        "open -- silently."
+        "the patterns measured here), and .exponent raises instead of "
+        "reporting ~0 -- `assert exponent < 1.5` fails CI for a well-behaved "
+        "function. Not strict (Ruling AW): a run that happens to come out "
+        "exactly flat is accepted as 0.0 and XPASSes by chance."
     ),
 )
 def test_a_primary_key_lookup_recovers_exponent_near_zero(conn):
