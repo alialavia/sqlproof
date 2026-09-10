@@ -8,6 +8,9 @@ not exist at 1x.
 """
 from __future__ import annotations
 
+import pytest
+
+from sqlproof.exceptions import SqlProofUsageError
 from sqlproof.scale.args import heaviest, median_key, random_key, resolve_args
 
 
@@ -72,3 +75,40 @@ def test_mixed_literals_and_resolvers_keep_their_positions():
 def test_a_plain_callable_is_treated_as_a_resolver():
     conn = FakeConn(None)
     assert resolve_args(conn, [lambda c: 123]) == (123,)
+
+
+def test_heaviest_rejects_a_multi_statement_injection_payload():
+    """Reviewer-demonstrated payload: without segment validation this
+    builds `SELECT 1 FROM victim; DELETE FROM probe_inj3.canary; SELECT
+    1 ... ORDER BY ...`, which Postgres's simple-query protocol executes
+    as three statements -- the DELETE commits silently. Must be rejected
+    before any SQL is built, not merely fail to run."""
+    with pytest.raises(SqlProofUsageError):
+        heaviest("victim; DELETE FROM x.canary; SELECT 1.1")
+
+
+def test_heaviest_rejects_a_segment_containing_whitespace():
+    with pytest.raises(SqlProofUsageError):
+        heaviest("customers.bad id")
+
+
+def test_heaviest_rejects_a_segment_containing_a_quote():
+    with pytest.raises(SqlProofUsageError):
+        heaviest("customers.i'd")
+
+
+def test_heaviest_rejects_a_segment_containing_a_comment_marker():
+    with pytest.raises(SqlProofUsageError):
+        heaviest("customers.id--")
+
+
+def test_legitimate_qualified_columns_still_resolve():
+    conn = FakeConn(3)
+    assert heaviest("probe_test.items.id")(conn) == 3
+    assert heaviest("api_test.orgs.id")(conn) == 3
+    assert heaviest("customers.id")(conn) == 3
+
+
+def test_unqualified_reference_still_raises():
+    with pytest.raises(SqlProofUsageError):
+        heaviest("id")

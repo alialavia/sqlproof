@@ -18,12 +18,23 @@ reported. `random_key` and `median_key` answer the other question.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Sequence
 from typing import Any
 
 from sqlproof.exceptions import SqlProofUsageError
 
 Resolver = Callable[[Any], Any]
+
+# Bare, unquoted SQL identifier: a letter or underscore, then letters,
+# digits or underscores. Deliberately conservative -- this rejects some
+# identifiers Postgres would itself accept (quoted identifiers with
+# spaces or special characters), which is the right trade here: these
+# strings are interpolated straight into generated SQL (see `heaviest`'s
+# `resolve`, below), and catalog-driven discovery is on this feature's
+# roadmap, at which point a column name stops being a developer literal
+# and starts coming from introspection of the user's own database.
+_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def _split(column: str) -> tuple[str, str]:
@@ -33,6 +44,16 @@ def _split(column: str) -> tuple[str, str]:
             '"table.column" so the resolver knows which table to query.'
         )
         raise SqlProofUsageError(msg)
+    for segment in column.split("."):
+        if not _IDENTIFIER_RE.match(segment):
+            msg = (
+                f"Column reference {column!r} contains an invalid "
+                f"identifier segment {segment!r}. Each dot-separated part "
+                "must be a bare SQL identifier (letters, digits and "
+                "underscores, not starting with a digit) -- this string is "
+                "interpolated directly into generated SQL."
+            )
+            raise SqlProofUsageError(msg)
     table, _, name = column.rpartition(".")
     return table, name
 
