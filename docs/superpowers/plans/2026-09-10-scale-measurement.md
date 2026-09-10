@@ -94,43 +94,52 @@ def test_work_sums_hit_and_read_blocks():
     assert work == 42
 
 
-def test_work_sums_over_the_whole_tree():
+def test_work_is_the_root_total_not_a_sum_over_the_tree():
+    """Postgres's buffer counts are INCLUSIVE of children: the root's
+    figure already contains every descendant's. Verified on a live
+    nested loop -- Aggregate=24, Nested Loop=24, children 23 + 1.
+    Summing the tree would count the same pages several times."""
     work, _m, _t, _h, _ms = parse_plan(
         _plan(
             **{
-                "Shared Hit Blocks": 10,
+                "Shared Hit Blocks": 24,
                 "Plans": [
-                    {"Node Type": "Seq Scan", "Shared Hit Blocks": 5,
+                    {"Node Type": "Seq Scan", "Shared Hit Blocks": 23,
                      "Shared Read Blocks": 0, "Actual Loops": 1},
-                    {"Node Type": "Seq Scan", "Shared Hit Blocks": 7,
+                    {"Node Type": "Materialize", "Shared Hit Blocks": 1,
                      "Shared Read Blocks": 0, "Actual Loops": 1},
                 ],
             }
         )
     )
-    assert work == 22
+    assert work == 24
 
 
-def test_nested_loop_work_multiplies_by_loops():
-    """Postgres reports per-node buffer counts already totalled, but
-    `Actual Rows` is a PER-LOOP average. A node reporting rows=50
-    loops=10000 processed 500,000 rows, not 50. Any measure derived from
-    rows must multiply; this pins that the parser does."""
+def test_work_does_not_multiply_by_loops():
+    """The single most dangerous mistake available here.
+
+    `Actual Rows` and `Actual Time` are per-loop AVERAGES, but buffer
+    counts are cumulative TOTALS. Verified live: a Materialize node with
+    loops=5000 reports sharedHit=1, not 5000.
+
+    Multiplying would inflate by a factor that GROWS WITH n (loops grow
+    with the data), fabricating superlinear growth from a linear
+    function and reporting a false quadratic. Every exponent the feature
+    produced would be wrong, in the direction that invents problems."""
     work, _m, _t, _h, _ms = parse_plan(
         _plan(
             **{
                 "Node Type": "Nested Loop",
-                "Shared Hit Blocks": 2,
+                "Shared Hit Blocks": 24,
                 "Plans": [
-                    {"Node Type": "Seq Scan", "Shared Hit Blocks": 3,
-                     "Shared Read Blocks": 0, "Actual Loops": 10000,
-                     "Actual Rows": 50},
+                    {"Node Type": "Materialize", "Shared Hit Blocks": 1,
+                     "Shared Read Blocks": 0, "Actual Loops": 5000,
+                     "Actual Rows": 20},
                 ],
             }
         )
     )
-    # 2 + (3 * 10000): the inner scan really was executed 10000 times.
-    assert work == 30002
+    assert work == 24  # NOT 24 + 1*5000
 
 
 def test_peak_memory_takes_the_largest_node_not_the_sum():
@@ -233,7 +242,7 @@ def parse_plan(explain_json: list[dict[str, Any]]) -> tuple[int, int, int, str, 
     """
     envelope = explain_json[0]
     root = envelope["Plan"]
-    work = _work(root, loops=1)
+    work = _work(root)
     memory = _peak_memory(root)
     temp = _temp_blocks(root)
     shape = _shape(root)
@@ -241,21 +250,30 @@ def parse_plan(explain_json: list[dict[str, Any]]) -> tuple[int, int, int, str, 
     return work, memory, temp, digest, float(envelope.get("Execution Time", 0.0))
 
 
-def _work(node: dict[str, Any], loops: int) -> int:
-    """Buffer pages touched by this node and its children.
+def _work(root: dict[str, Any]) -> int:
+    """Buffer pages touched by the whole query: the ROOT node's counts.
 
-    A node's own buffer counts are already totalled across its loops by
-    Postgres, but a child executed inside a Nested Loop runs once per
-    outer row. `Actual Loops` on the CHILD is that multiplier, so the
-    child's contribution scales by it. Getting this wrong is how a
-    quadratic reads as linear -- a node showing `rows=50 loops=10000`
-    processed half a million rows.
+    Two properties of EXPLAIN output make this a one-liner rather than a
+    tree walk, and both were verified against a live nested loop
+    (Aggregate=24, Nested Loop=24, Seq Scan=23, Materialize loops=5000
+    sharedHit=1):
+
+    1. Buffer counts are CUMULATIVE TOTALS, not per-loop averages. The
+       Materialize executed 5000 times and reports 1 block. This is the
+       opposite of `Actual Rows` and `Actual Time`, which ARE per-loop
+       averages -- a genuine trap, but for anything derived from rows,
+       not from buffers.
+    2. They are INCLUSIVE of children. The root already contains every
+       descendant's count.
+
+    So summing the tree double-counts, and multiplying by loops inflates
+    by a factor that GROWS WITH n -- which would fabricate superlinear
+    growth from a linear function and report a false quadratic. Take the
+    root.
     """
-    own = int(node.get("Shared Hit Blocks", 0)) + int(node.get("Shared Read Blocks", 0))
-    total = own * loops
-    for child in node.get("Plans", []):
-        total += _work(child, loops=int(child.get("Actual Loops", 1)))
-    return total
+    return int(root.get("Shared Hit Blocks", 0)) + int(
+        root.get("Shared Read Blocks", 0)
+    )
 
 
 def _peak_memory(node: dict[str, Any]) -> int:
@@ -274,13 +292,13 @@ def _peak_memory(node: dict[str, Any]) -> int:
     return own
 
 
-def _temp_blocks(node: dict[str, Any]) -> int:
-    total = int(node.get("Temp Read Blocks", 0)) + int(
-        node.get("Temp Written Blocks", 0)
+def _temp_blocks(root: dict[str, Any]) -> int:
+    """Root total, for the same reason `_work` takes the root: temp
+    blocks live in the same BufferUsage struct and accumulate inclusively
+    up the tree."""
+    return int(root.get("Temp Read Blocks", 0)) + int(
+        root.get("Temp Written Blocks", 0)
     )
-    for child in node.get("Plans", []):
-        total += _temp_blocks(child)
-    return total
 
 
 def _shape(node: dict[str, Any]) -> str:
