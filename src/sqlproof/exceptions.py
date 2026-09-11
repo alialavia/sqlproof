@@ -49,3 +49,9 @@ class SqlProofContainerError(SqlProofError):
 
 class SqlProofMutationError(SqlProofError):
     """Mutation testing: bad mutant definition, apply failure, or surviving mutants."""
+
+
+class SqlProofScaleError(SqlProofError):
+    """A scale measurement could not produce the answer that was asked
+    for -- an inconclusive fit, or no stable plan regime. Raised rather
+    than returning None so the reason travels with the failure."""
