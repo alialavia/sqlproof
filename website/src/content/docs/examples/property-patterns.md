@@ -62,7 +62,7 @@ combinatorial space tractable.
 ```python
 from sqlproof import SqlProof
 from sqlproof.testing import SqlProofStateMachine
-from sqlproof.contrib.supabase import as_supabase_user
+from sqlproof.contrib.supabase import as_rls_user
 from hypothesis.stateful import rule, invariant
 from hypothesis import strategies as st
 
@@ -95,7 +95,7 @@ class RLSMachine(SqlProofStateMachine):
 
     @invariant()
     def user_b_only_sees_shared_projects(self):
-        with as_supabase_user(self.db, self.user_b):
+        with as_rls_user(self.db, self.user_b):
             visible = {r["id"] for r in self.db.query("SELECT id FROM projects")}
         assert visible == self.shares
 

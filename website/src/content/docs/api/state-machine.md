@@ -149,5 +149,6 @@ example would catch the bug.
 
 - [SqlProof class API](/api/sqlproof-class/) — `client_for_dataset`,
   `dataset_strategy`, and the rest of the proof surface.
-- [Supabase contrib](/guides/supabase/) — `as_supabase_user` for RLS
-  testing in tandem with state machines.
+- [Supabase contrib](/guides/supabase/) — `as_rls_user` for RLS
+  testing in tandem with state machines (`as_supabase_user` when you
+  only need `auth.uid()` resolved, as in the example above).

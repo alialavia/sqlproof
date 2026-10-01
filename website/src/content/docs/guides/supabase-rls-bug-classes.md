@@ -48,7 +48,7 @@ def test_view_respects_underlying_rls(supabase_proof, data):
 
 Supabase exposes `auth.jwt() -> 'user_metadata'` as JWT claims that the *client* can write. Policies that trust `user_metadata->>'role' = 'admin'` are bypassable; use `app_metadata` (server-only) or a database table.
 
-SqlProof's `as_supabase_user` accepts an `extra_claims=` arg, so you can directly test that a user *with* an `admin` claim in `user_metadata` doesn't gain admin powers:
+SqlProof's `as_rls_user` accepts an `extra_claims=` arg, so you can directly test that a user *with* an `admin` claim in `user_metadata` doesn't gain admin powers:
 
 ```python
 with as_rls_user(db, user_id, extra_claims={"user_metadata": {"role": "admin"}}):
