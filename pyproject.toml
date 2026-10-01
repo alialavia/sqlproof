@@ -109,6 +109,10 @@ packages = ["sqlproof"]
 source = ["src/sqlproof"]
 omit = [
   "src/sqlproof/__init__.py",
+  # __main__.py: only runs under `python -m sqlproof`, which is exercised
+  # via a subprocess in tests/unit/test_cli_smoke.py (not captured by
+  # pytest-cov). It just delegates to cli.main, itself omitted below.
+  "src/sqlproof/__main__.py",
   "src/sqlproof/_version.py",
   "src/sqlproof/cli.py",
   "src/sqlproof/coverage/plpgsql.py",
