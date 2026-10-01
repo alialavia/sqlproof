@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Generator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
@@ -12,7 +13,12 @@ from hypothesis.strategies import SearchStrategy
 from psycopg.rows import dict_row
 from psycopg.types.json import Json, Jsonb
 
-from sqlproof.client import InMemorySqlProofClient, PsycopgSqlProofClient, SqlProofClient
+from sqlproof.client import (
+    InMemorySqlProofClient,
+    PsycopgSqlProofClient,
+    SqlProofClient,
+    normalize_identifier,
+)
 from sqlproof.config import ExternalSeed, ExternalTableSpec, SqlProofConfig
 from sqlproof.exceptions import SqlProofPropertyFailure, SqlProofUsageError
 from sqlproof.generators.graph import ColumnOverrides, Dataset, SizeSpec, dataset_strategy
@@ -209,18 +215,41 @@ class SqlProof:
         seed: int | None = None,
         timeout_ms: int = 5000,
     ) -> None:
+        """Assert that ``query`` returns no rows (or some rows) on every dataset.
+
+        Each run draws a dataset, loads it through ``client_for_dataset``
+        (the same path ``check()`` uses, so with a database connection the
+        rows are INSERTed inside a savepoint that is rolled back afterwards)
+        and executes ``query`` against it. With ``expect_empty=True`` the
+        invariant fails when the query returns any row; with
+        ``expect_empty=False`` it fails when the query returns none.
+
+        Errors raised while executing ``query`` (unknown table, syntax
+        error, ...) propagate unchanged: a query that cannot run is never
+        reported as a passing invariant.
+
+        Without a database connection (``from_schema_file`` and no DSN)
+        there is nothing to execute SQL on, so only a plain
+        ``SELECT <columns> FROM <table>`` -- no WHERE, JOIN, GROUP BY,
+        expressions, etc. -- over a table in the schema is accepted. Any
+        other query raises ``SqlProofUsageError`` rather than being
+        evaluated with its predicates silently ignored.
+        """
         del seed, timeout_ms
+        if self._db_manager is None:
+            _require_in_memory_evaluable(query, self.schema_info)
         strategy = self.dataset_strategy(sizes=sizes)
         for run_index in range(runs):
-            client = InMemorySqlProofClient(draw_example(strategy))
-            rows = client.query(query)
+            dataset = draw_example(strategy)
+            with self.client_for_dataset(dataset) as client:
+                rows = client.query(query)
             failed = bool(rows) if expect_empty else not rows
             if failed:
                 payload = {
                     "property_name": name,
                     "runs": run_index + 1,
                     "row_context": {},
-                    "dataset": client.get_generated_data(),
+                    "dataset": dataset,
                     "schema_fingerprint": self.schema_fingerprint,
                 }
                 raise SqlProofPropertyFailure(
@@ -287,6 +316,71 @@ class SqlProof:
             )
         finally:
             connection.close()
+
+
+_IDENTIFIER = r'(?:[A-Za-z_][A-Za-z0-9_$]*|"(?:[^"]|"")+")'
+_PLAIN_SELECT = re.compile(
+    rf"""
+    \A\s*SELECT\s+
+    (?P<columns>\*|{_IDENTIFIER}(?:\s*\.\s*{_IDENTIFIER})?
+        (?:\s*,\s*{_IDENTIFIER}(?:\s*\.\s*{_IDENTIFIER})?)*)
+    \s+FROM\s+
+    (?P<table>{_IDENTIFIER})
+    \s*;?\s*\Z
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+_IDENTIFIER_LIST_ITEM = re.compile(
+    rf"(?:({_IDENTIFIER})\s*\.\s*)?({_IDENTIFIER})(?:\s*,|\s*\Z)",
+)
+
+
+def _require_in_memory_evaluable(query: str, schema_info: SchemaInfo) -> None:
+    """Refuse invariant queries the in-memory client cannot evaluate faithfully.
+
+    ``InMemorySqlProofClient.query`` only understands the projection and
+    the table name of a ``SELECT``; it would silently ignore a WHERE
+    clause, JOINs, aggregates and so on, turning the invariant into a
+    check of "does the table have rows". See #112.
+    """
+    hint = (
+        "invariant() without a database connection can only evaluate a plain "
+        "'SELECT <columns> FROM <table>' query (no WHERE, JOIN, GROUP BY, "
+        "expressions, etc.). Use SqlProof.from_connection_string(...) (or set "
+        "connection_string) so the query runs on a real Postgres database."
+    )
+    match = _PLAIN_SELECT.match(query)
+    if match is None:
+        msg = f"Cannot evaluate invariant query {query!r} in memory. {hint}"
+        raise SqlProofUsageError(msg)
+    table_name = normalize_identifier(match.group("table"))
+    table = next((t for t in schema_info.tables if t.name == table_name), None)
+    if table is None:
+        msg = (
+            f"Invariant query {query!r} references table {table_name!r}, which is "
+            f"not in the schema. {hint}"
+        )
+        raise SqlProofUsageError(msg)
+    columns_sql = match.group("columns")
+    if columns_sql == "*":
+        return
+    known_columns = {column.name for column in table.columns}
+    for selected in _IDENTIFIER_LIST_ITEM.findall(columns_sql):
+        qualifier, column = selected
+        if qualifier and normalize_identifier(qualifier) != table_name:
+            msg = (
+                f"Invariant query {query!r} qualifies a column with "
+                f"{normalize_identifier(qualifier)!r}, not the selected table "
+                f"{table_name!r}. {hint}"
+            )
+            raise SqlProofUsageError(msg)
+        if normalize_identifier(column) not in known_columns:
+            msg = (
+                f"Invariant query {query!r} selects column "
+                f"{normalize_identifier(column)!r}, which table {table_name!r} "
+                f"does not have. {hint}"
+            )
+            raise SqlProofUsageError(msg)
 
 
 def _insert_dataset(
