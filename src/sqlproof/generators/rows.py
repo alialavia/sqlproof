@@ -13,7 +13,7 @@ from hypothesis.strategies import SearchStrategy
 
 from sqlproof.exceptions import SqlProofGenerationError
 from sqlproof.generators.columns import strategy_for_column
-from sqlproof.generators.constraints import refine_for_checks
+from sqlproof.generators.constraints import refine_for_checks, warn_unhonored_checks
 from sqlproof.schema.model import CheckConstraint, Column, ForeignKey, Table
 
 DatasetRows = dict[str, list[dict[str, Any]]]
@@ -76,6 +76,7 @@ def table_rows_strategy(
     # Building this per row cost ~2x at n=40,000 (see the scale
     # analysis design doc).
     refined_by_column: dict[str, SearchStrategy[Any]] = {}
+    unhonored_scope: list[CheckConstraint] = list(table.check_constraints)
     for column in table.columns:
         if column.name in table.primary_key and len(table.primary_key) == 1:
             continue
@@ -89,11 +90,17 @@ def table_rows_strategy(
             continue
         if _is_single_column_unique(table, column.name):
             continue
+        domain_checks = _domain_checks_as_column_checks(column)
+        unhonored_scope.extend(domain_checks)
         refined_by_column[column.name] = refine_for_checks(
             column,
             strategy_for_column(column),
-            table.check_constraints + _domain_checks_as_column_checks(column),
+            table.check_constraints + domain_checks,
         )
+    # Columns drawn from `refined_by_column` are the only ones whose
+    # values come from a type strategy; a CHECK sqlproof can't read
+    # that touches one of them may be violated, so say so.
+    warn_unhonored_checks(table, unhonored_scope, refined_by_column)
 
     # Loop-invariant: one sampled_from per FK column, not per row.
     # Constructing it per row is O(len(parents)) each time.

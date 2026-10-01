@@ -63,7 +63,7 @@ def test_no_orphan_line_items(db):
 ```
 
 SqlProof parses your schema, topologically orders tables by FK, generates rows
-that honor types / CHECK / UNIQUE / NOT NULL / FK constraints, runs the
+that honor types / CHECK (common shapes) / UNIQUE / NOT NULL / FK constraints, runs the
 property under Hypothesis, and shrinks any failure to the smallest reproducer.
 
 ## What you can do
@@ -71,11 +71,20 @@ property under Hypothesis, and shrinks any failure to the smallest reproducer.
 ### Generate datasets that respect your schema
 
 The generation engine reads your schema and produces multi-table datasets
-where every FK references a real parent, every CHECK constraint is honored at
-generation time (no rejection sampling), every UNIQUE constraint is enforced,
+where every FK references a real parent, every UNIQUE constraint is enforced,
 and types are realistic — `NUMERIC(10,2)` gets scale-2 decimals, `varchar(50)`
 gets bounded strings, enums sample from declared values, `vector(N)` gets
 length-correct embeddings.
+
+Single-column CHECK constraints are honored at generation time (values are
+valid by construction, no rejection sampling), whether the schema comes from a
+file or a live connection: numeric comparisons and `BETWEEN` against literals
+(`total >= 0`, `quantity > 0`), `char_length(col)` / `length(col)` bounds,
+`col IN (...)` / `col = ANY (ARRAY[...])`, `col <> ''` / `NOT IN`, any
+`AND` of those, and `<shape> OR col IS NULL`. A CHECK sqlproof can't interpret
+(regexes, function calls, cross-column comparisons like `starts_at < ends_at`)
+raises a `sqlproof.exceptions.UnhonoredCheckWarning` naming the constraint — Postgres still
+enforces it, so pin the affected column with `columns={...}`.
 
 Useful far beyond tests: seed local dev databases, generate fixtures, replay
 schema-respecting data through migrations, sample child-row FKs from external

@@ -49,3 +49,12 @@ class SqlProofContainerError(SqlProofError):
 
 class SqlProofMutationError(SqlProofError):
     """Mutation testing: bad mutant definition, apply failure, or surviving mutants."""
+
+
+class UnhonoredCheckWarning(UserWarning):
+    """A CHECK constraint sqlproof cannot interpret at generation time.
+
+    Generated rows may violate it, in which case Postgres rejects the
+    INSERT with a CheckViolation. Supply a ``columns={...}`` override
+    for the affected column(s) to generate valid values explicitly.
+    """

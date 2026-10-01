@@ -28,7 +28,16 @@ class PgType:
 
 @dataclass(frozen=True, slots=True)
 class ParsedCheck:
-    kind: Literal["range", "in_set", "regex", "length", "compound"]
+    """One fact a CHECK states about a column (see schema/checks.py).
+
+    Payloads by kind: ``range`` -> ``(op, Decimal)`` with op in
+    ``>= > <= <``; ``length`` -> ``(op, int)`` (op may also be ``=``);
+    ``in_set`` / ``not_in`` -> tuple of literal values; ``compound`` ->
+    tuple of ParsedCheck atoms that all hold (``column`` is ``""`` when
+    they span several columns). ``regex`` is reserved.
+    """
+
+    kind: Literal["range", "in_set", "not_in", "regex", "length", "compound"]
     column: str
     payload: Any
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal, cast
 
+from sqlproof.schema.checks import parse_check_expression
 from sqlproof.schema.model import (
     CheckConstraint,
     Column,
@@ -153,7 +154,10 @@ def _check_constraints(
     grouped: dict[tuple[str, str], list[CheckConstraint]] = {}
     for row in _fetch_all(connection, _CHECKS_SQL, schema):
         key = (str(row["schema_name"]), str(row["table_name"]))
-        grouped.setdefault(key, []).append(CheckConstraint(str(row["expression"])))
+        expression = str(row["expression"])
+        grouped.setdefault(key, []).append(
+            CheckConstraint(expression, parsed=parse_check_expression(expression))
+        )
     return grouped
 
 
