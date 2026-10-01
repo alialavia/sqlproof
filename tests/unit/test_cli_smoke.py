@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
+from pathlib import Path
 
 from sqlproof.cli import main
 
@@ -110,3 +114,25 @@ def test_mutation_report_renders_existing_runs(tmp_path) -> None:
     html = output.read_text(encoding="utf-8")
     assert "billing.f" in html
     assert "--hypothesis-seed=42" in html
+
+
+def test_python_module_invocation_shows_help() -> None:
+    project_root = Path(__file__).resolve().parents[2]
+    source_dir = project_root / "src"
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join(
+        path for path in (str(source_dir), env.get("PYTHONPATH", "")) if path
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-m", "sqlproof", "--help"],
+        cwd=project_root,
+        env=env,
+        capture_output=True,
+        check=False,
+        text=True,
+        timeout=10,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "usage: sqlproof" in result.stdout.lower()
