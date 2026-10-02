@@ -370,6 +370,9 @@ def test_other_users_cannot_read_<resource>_they_dont_own(
   without enforcing policies (e.g. testing a function's return value).
 - **Always test both directions:** owner can access, non-owner cannot. A policy that returns *too much* data is the actual bug class.
 - **Take `supabase_proof`/`supabase_db`**, not `proof`/`db`. RLS tests need the seeded auth.users pool.
+- **Put `"auth.users": N` in `sizes` when the test needs to pick a user** (e.g. a non-owner). The dataset then
+  uses exactly N pool users for every `auth.users` FK and returns them as `dataset["auth.users"]`
+  (each row holds only `id`). Leave it out and there is no `dataset["auth.users"]` key.
 - **Test names should be sentences a non-engineer would understand.** `test_owner_can_read_their_own_project` not `test_rls_22`.
 
 ## Pattern 2: SQL function / RPC test

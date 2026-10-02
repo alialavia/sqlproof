@@ -123,10 +123,20 @@ class SqlProof:
         sizes: Mapping[str, SizeSpec],
         columns: ColumnOverrides | None,
     ) -> SearchStrategy[Dataset]:
+        # An external table named in `sizes` (e.g. `{"auth.users": 2}`) sets
+        # how many of its sampled rows this dataset uses for FK draws, and
+        # those rows are returned under that key so a test can pick, say, a
+        # non-owner. External tables left out of `sizes` stay FK-only.
+        external_tables = self.config.external_tables or {}
+        external_sizes = {name: size for name, size in sizes.items() if name in external_tables}
+
         @st.composite
         def dataset(draw: st.DrawFn) -> Dataset:
-            external_parent_rows = self._external_parent_rows(draw=draw)
-            return draw(
+            external_parent_rows = self._external_parent_rows(
+                draw=draw,
+                size_overrides=external_sizes,
+            )
+            generated = draw(
                 dataset_strategy(
                     self.schema_info,
                     sizes=sizes,
@@ -134,6 +144,9 @@ class SqlProof:
                     columns=columns,
                 )
             )
+            for name in external_sizes:
+                generated[name] = [dict(row) for row in external_parent_rows[name]]
+            return generated
 
         return dataset()
 
@@ -294,6 +307,7 @@ class SqlProof:
         self,
         *,
         draw: st.DrawFn | None = None,
+        size_overrides: Mapping[str, SizeSpec] | None = None,
     ) -> dict[str, list[dict[str, Any]]]:
         if not self.config.external_tables:
             return {}
@@ -313,6 +327,7 @@ class SqlProof:
                 client,
                 draw=draw,
                 sample_cache=self._external_sample_cache,
+                size_overrides=size_overrides,
             )
         finally:
             connection.close()
@@ -521,10 +536,21 @@ def _external_parent_rows(
     *,
     draw: st.DrawFn | None = None,
     sample_cache: dict[str, list[object]] | None = None,
+    size_overrides: Mapping[str, SizeSpec] | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
+    """Seed and sample each external table's parent rows.
+
+    ``size_overrides`` maps a table to a requested row count (from the
+    caller's ``sizes``). It replaces the spec's ``seed_count``, and a
+    sample smaller than the request raises instead of silently
+    returning fewer rows.
+    """
+    size_overrides = size_overrides or {}
     rows_by_table: dict[str, list[dict[str, Any]]] = {}
     for table_name, spec in specs.items():
-        seed_count = _draw_seed_count(spec.seed_count, draw=draw)
+        requested = table_name in size_overrides
+        size = size_overrides[table_name] if requested else spec.seed_count
+        seed_count = _draw_seed_count(size, draw=draw)
         if spec.seed is not None:
             _call_external_seed(spec.seed, client, seed_count)
         sampled_values = _sample_external_values(
@@ -534,6 +560,12 @@ def _external_parent_rows(
             sample_cache=sample_cache,
         )
         if seed_count is not None:
+            if requested and len(sampled_values) < seed_count:
+                msg = (
+                    f"sizes[{table_name!r}] asks for {seed_count} rows, but the external "
+                    f"table's sample returned only {len(sampled_values)}."
+                )
+                raise SqlProofUsageError(msg)
             sampled_values = sampled_values[:seed_count]
         rows = [{spec.primary_key: value} for value in sampled_values]
         rows_by_table[table_name] = rows
