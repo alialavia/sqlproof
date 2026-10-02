@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 
 from sqlproof.cli import main
 
@@ -110,3 +112,15 @@ def test_mutation_report_renders_existing_runs(tmp_path) -> None:
     html = output.read_text(encoding="utf-8")
     assert "billing.f" in html
     assert "--hypothesis-seed=42" in html
+
+
+def test_python_dash_m_entrypoint_runs_cli() -> None:
+    result = subprocess.run(
+        [sys.executable, "-m", "sqlproof", "--help"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "usage: sqlproof" in result.stdout
