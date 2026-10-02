@@ -2,6 +2,8 @@
 
 > SqlProof is property-based testing for PostgreSQL (and Supabase). You describe an invariant about your schema or SQL; SqlProof reads the schema, generates valid multi-table datasets with Hypothesis (respecting FKs, CHECK, UNIQUE, NOT NULL, enums), runs your query through psycopg, and shrinks any failure to the smallest counterexample. It plugs into pytest and is built for Supabase projects whose tests are written by AI coding agents: RLS policies, RPC functions, triggers and migrations.
 
+What it catches: leaky RLS policies (including views without `security_invoker`), wrong query results, broken RPCs and triggers, and migrations that change query results. The [Inbox sample](https://sqlproof.com/examples/inbox/) plants 10 such bugs in a multi-tenant Supabase app; each has a SqlProof property that catches it.
+
 Requires Python 3.11+ and PostgreSQL 13+. SqlProof is pre-1.0 (`0.x`); APIs may change between minor versions.
 
 If you are an AI coding agent: read AGENTS.md (linked below) before writing tests. It has the exact patterns and the anti-patterns agents commonly get wrong.
@@ -85,14 +87,19 @@ from sqlproof.contrib.supabase import as_rls_user
 
 @given(data=st.data())
 def test_users_only_see_their_own_rows(supabase_proof, data):
-    dataset = data.draw(supabase_proof.dataset_strategy(sizes={"projects": 6}))
+    dataset = data.draw(supabase_proof.dataset_strategy(
+        sizes={"projects": st.integers(min_value=1, max_value=6)},
+    ))
     with supabase_proof.client_for_dataset(dataset) as db:
         users = db.query("SELECT id::text FROM auth.users")
         for user in users:
-            with as_rls_user(db, user["id"]):
-                rows = db.query("SELECT user_id::text FROM projects")
-                rows += db.query("SELECT user_id::text FROM project_summaries")  # a view
-            assert all(r["user_id"] == user["id"] for r in rows)
+            for source in ("projects", "project_summaries"):  # a table and a view
+                with as_rls_user(db, user["id"]):
+                    rows = db.query(f"SELECT id::text, user_id::text FROM {source}")
+                leaked = [r for r in rows if r["user_id"] != user["id"]]
+                assert not leaked, (
+                    f"user {user['id']} can read another user's row via {source}: {leaked[0]}"
+                )
 ```
 
 ## Agent instructions
