@@ -181,6 +181,48 @@
   margin-bottom: 0;
   opacity: 0.85;
 }
+/* Split hero: copy on the left, failure report on the right. */
+.sp-hero.sp-hero-split {
+  max-width: 1180px;
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+  gap: 48px;
+  align-items: center;
+  text-align: left;
+  padding: 72px 48px 48px;
+}
+.sp-hero-split h1 { font-size: 46px; }
+.sp-hero-split p { margin-left: 0; margin-right: 0; margin-bottom: 24px; }
+.sp-hero-split .sp-install-row,
+.sp-cta .sp-install-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+}
+.sp-cta .sp-install-row { max-width: 640px; margin-left: auto; margin-right: auto; }
+.sp-hero-split .sp-install,
+.sp-cta .sp-install { font-size: 14px; align-items: baseline; }
+.sp-hero-terminal { margin-top: 0; }
+.sp-hero-terminal .sp-code-body { font-size: 12px; line-height: 1.7; }
+.sp-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 28px;
+}
+.sp-chips .sp-badge { margin-bottom: 0; }
+.sp-proof-line {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 0 48px 40px;
+  font-size: 15px;
+  color: var(--sp-muted);
+}
+.sp-proof-line a { color: var(--sp-accent-high); }
+.sp-how-lead { margin-bottom: 8px; }
+.sp-cta { text-align: center; }
+.sp-cta h2 { margin-bottom: 28px; }
+
 .sp-hero-buttons {
   display: flex;
   gap: 12px;
@@ -225,7 +267,8 @@
   margin-bottom: 16px;
 }
 .sp-section .sp-lead,
-.sp-code-section .sp-lead {
+.sp-code-section .sp-lead,
+.sp-how-inner .sp-lead {
   font-size: 17px;
   color: var(--sp-muted);
   max-width: 600px;
@@ -339,6 +382,11 @@
   .sp-nav-links { display: none; }
   .sp-hero { padding: 60px 24px 48px; }
   .sp-hero h1 { font-size: 36px; }
+  .sp-hero.sp-hero-split { grid-template-columns: minmax(0, 1fr); gap: 32px; padding: 48px 24px 32px; }
+  .sp-hero-split h1 { font-size: 34px; }
+  .sp-proof-line { padding: 0 24px 32px; }
+  .sp-hero-split .sp-install-row,
+  .sp-cta .sp-install-row { grid-template-columns: minmax(0, 1fr); }
   .sp-section { padding: 48px 24px; }
   .sp-why-grid { grid-template-columns: 1fr; }
   .sp-how-section { padding: 48px 24px; }
@@ -346,4 +394,8 @@
   .sp-code-section { padding: 48px 24px; }
   .sp-install-group .sp-install { padding: 12px 14px; }
   .sp-footer { padding: 32px 24px; flex-direction: column; gap: 20px; text-align: center; }
+}
+
+@media (max-width: 1000px) {
+  .sp-hero.sp-hero-split { grid-template-columns: minmax(0, 1fr); }
 }
