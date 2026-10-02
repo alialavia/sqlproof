@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from typing import Any, cast
 
 import pytest
@@ -9,6 +10,7 @@ from hypothesis import strategies as st
 from psycopg.types.json import Jsonb
 
 from sqlproof import ExternalTableSpec, SqlProof, sqlproof
+from sqlproof import core as core_module
 from sqlproof.core import _external_parent_rows, _insert_dataset
 from sqlproof.exceptions import SqlProofPropertyFailure, SqlProofUsageError
 from sqlproof.runners import property as property_module
@@ -303,6 +305,64 @@ def test_external_table_size_override_larger_than_sample_raises() -> None:
             cast(Any, FakeClient()),
             size_overrides={"auth.users": 3},
         )
+
+
+def _proof_with_fake_external_users(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, user_ids: list[str]
+) -> SqlProof:
+    schema_file = tmp_path / "schema.sql"
+    schema_file.write_text(
+        """
+        CREATE TABLE projects (
+          id SERIAL PRIMARY KEY,
+          user_id UUID NOT NULL REFERENCES auth.users(id)
+        );
+        """,
+        encoding="utf-8",
+    )
+    proof = SqlProof.from_schema_file(schema_file)
+    # External tables need a connection; point the config at a fake one.
+    proof.config = replace(
+        proof.config,
+        schema_file=None,
+        connection_string="postgresql://fake",
+        external_tables={
+            "auth.users": ExternalTableSpec(
+                primary_key="id",
+                seed_count=1,
+                sample=lambda db: user_ids,
+            )
+        },
+    )
+
+    class FakeConnection:
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(core_module.psycopg, "connect", lambda **kwargs: FakeConnection())
+    return proof
+
+
+def test_dataset_includes_external_rows_named_in_sizes(tmp_path, monkeypatch) -> None:
+    proof = _proof_with_fake_external_users(tmp_path, monkeypatch, ["u1", "u2", "u3"])
+
+    dataset = find(
+        proof.dataset_strategy(sizes={"projects": 4, "auth.users": 2}),
+        lambda _: True,
+    )
+
+    assert dataset["auth.users"] == [{"id": "u1"}, {"id": "u2"}]
+    assert {row["user_id"] for row in dataset["projects"]} <= {"u1", "u2"}
+
+
+def test_dataset_omits_external_rows_left_out_of_sizes(tmp_path, monkeypatch) -> None:
+    proof = _proof_with_fake_external_users(tmp_path, monkeypatch, ["u1", "u2"])
+
+    dataset = find(proof.dataset_strategy(sizes={"projects": 2}), lambda _: True)
+
+    assert "auth.users" not in dataset
+    # The spec's seed_count (1) still caps the FK pool.
+    assert {row["user_id"] for row in dataset["projects"]} == {"u1"}
 
 
 def test_external_table_sampling_uses_cache_when_no_seed() -> None:
