@@ -1,0 +1,126 @@
+# SqlProof
+
+> SqlProof is property-based testing for PostgreSQL (and Supabase). You describe an invariant about your schema or SQL; SqlProof reads the schema, generates valid multi-table datasets with Hypothesis (respecting FKs, CHECK, UNIQUE, NOT NULL, enums), runs your query through psycopg, and shrinks any failure to the smallest counterexample. It plugs into pytest and is built for Supabase projects whose tests are written by AI coding agents: RLS policies, RPC functions, triggers and migrations.
+
+Requires Python 3.11+ and PostgreSQL 13+. SqlProof is pre-1.0 (`0.x`); APIs may change between minor versions.
+
+If you are an AI coding agent: read AGENTS.md (linked below) before writing tests. It has the exact patterns and the anti-patterns agents commonly get wrong.
+
+## Install
+
+```bash
+pip install sqlproof
+# or: uv add sqlproof
+```
+
+Claude Code plugins (patterns as auto-activating skills):
+
+```
+/plugin install alialavia/pbt-skills
+/plugin install alialavia/sqlproof-skills
+```
+
+Cursor / Codex / Aider / agents without a plugin system: copy AGENTS.md into the project root, and load the SKILL.md files from https://github.com/alialavia/pbt-skills/tree/main/skills and https://github.com/alialavia/sqlproof-skills/tree/main/skills.
+
+```bash
+curl -O https://raw.githubusercontent.com/alialavia/sqlproof/main/AGENTS.md
+```
+
+## Core usage
+
+```python
+from sqlproof import SqlProof, sqlproof
+
+proof = SqlProof.from_schema_file("./schema.sql")
+# or: SqlProof.from_connection_string("postgresql://localhost/postgres")
+
+
+@sqlproof(proof, sizes={"orders": 20, "line_items": 50}, runs=50)
+def test_no_orphan_line_items(db):
+    rows = db.query("""
+        SELECT li.id FROM line_items li
+        LEFT JOIN orders o ON li.order_id = o.id
+        WHERE o.id IS NULL
+    """)
+    assert rows == []
+```
+
+- `db` is a `SqlProofClient`: `db.query(sql, *params)`, `db.scalar(sql, *params)`, `db.execute(sql, *params)`. Params are splatted, not passed as a list.
+- Method form: `proof.check("name", sizes={...}, property=lambda db: ...)`. "Must return no rows" shorthand: `proof.invariant("name", sizes={...}, query="SELECT ...", expect_empty=True)`.
+- With Hypothesis directly: `dataset = data.draw(proof.dataset_strategy(sizes={...}))`, then `with proof.client_for_dataset(dataset) as db: ...`.
+- One schema-aware fixture row: `proof.row_strategy("orders", customer_id=42).example()`.
+- Failures are saved under `.sqlproof/failures/`; inspect with `sqlproof report <file>` and `sqlproof replay <file>`.
+
+Pytest plugin: set `SUPABASE_DB_URL` (or `SQLPROOF_DATABASE_URL`, or `--sqlproof-database-url`). No conftest.py needed; it ships fixtures `proof` / `db` and, for anything touching `auth.uid()` or RLS, `supabase_proof` / `supabase_db` (seeds a deterministic `auth.users` pool and samples `auth.users` FKs from it). Each test runs in a savepoint that rolls back.
+
+```bash
+export SUPABASE_DB_URL='postgresql://postgres:postgres@127.0.0.1:54322/postgres'  # supabase start
+pytest tests/ -v
+```
+
+## Testing Supabase RLS policies
+
+- Run user queries with `as_rls_user(db, user_id)` from `sqlproof.contrib.supabase`. It sets `request.jwt.claims` (so `auth.uid()` returns `user_id`) and runs `SET LOCAL ROLE authenticated`. Use `role="anon"` for anonymous access.
+- The role switch is what makes policies apply. The test connection is usually the `postgres` superuser, which bypasses RLS, so claims alone (or `as_supabase_user`) test nothing. Never set `request.jwt.claims` by hand.
+- `auth.uid()` must read the `sub` claim from `request.jwt.claims`. On the `supabase/postgres` image in CI, run the `alialavia/sqlproof/.github/actions/setup-supabase-test-db` action (it applies GoTrue's auth migration); without it `auth.uid()` silently returns NULL and RLS tests pass for the wrong reason. On plain Postgres, a minimal stub works:
+
+```sql
+create schema if not exists auth;
+create table auth.users (id uuid primary key, email text not null unique);
+create function auth.uid() returns uuid language sql stable as $$
+  select (nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub')::uuid
+$$;
+create role authenticated nologin;  -- plus GRANTs on your tables, views and auth.uid()
+```
+
+- Views run as their owner (often `postgres`) and ignore the underlying table's RLS unless created `WITH (security_invoker = true)` (PG15+). Test reads through views as well as tables.
+- Test both directions: the owner sees their rows, and nobody sees anyone else's.
+
+```python
+from hypothesis import given
+from hypothesis import strategies as st
+from sqlproof.contrib.supabase import as_rls_user
+
+
+@given(data=st.data())
+def test_users_only_see_their_own_rows(supabase_proof, data):
+    dataset = data.draw(supabase_proof.dataset_strategy(sizes={"projects": 6}))
+    with supabase_proof.client_for_dataset(dataset) as db:
+        users = db.query("SELECT id::text FROM auth.users")
+        for user in users:
+            with as_rls_user(db, user["id"]):
+                rows = db.query("SELECT user_id::text FROM projects")
+                rows += db.query("SELECT user_id::text FROM project_summaries")  # a view
+            assert all(r["user_id"] == user["id"] for r in rows)
+```
+
+## Agent instructions
+
+- [AGENTS.md](https://github.com/alialavia/sqlproof/blob/main/AGENTS.md): rules for agents writing SqlProof tests on Supabase projects (RLS, RPC, stateful and mutation patterns; anti-patterns). Raw: https://raw.githubusercontent.com/alialavia/sqlproof/main/AGENTS.md
+- [sqlproof-skills](https://github.com/alialavia/sqlproof-skills): Claude Code / Cursor plugin with per-pattern skills
+- [pbt-skills](https://github.com/alialavia/pbt-skills): foundational property-based-testing skills
+
+## Docs
+
+- [Test your Supabase project in 60 seconds](https://sqlproof.com/supabase-quickstart/): install, point at the DB, ask your agent for tests
+- [Getting started](https://sqlproof.com/getting-started/): general (non-Supabase) setup
+- [Testing Supabase apps](https://sqlproof.com/guides/supabase/): `as_rls_user`, `as_supabase_user`, auth-user seeding, external tables
+- [Supabase RLS bug classes](https://sqlproof.com/guides/supabase-rls-bug-classes/): `USING (true)`, UPDATE without SELECT, `security_invoker` views, `user_metadata` trust, schema audits
+- [Five property patterns](https://sqlproof.com/examples/property-patterns/): aggregation, RLS, migration safety, idempotency, round-trip
+- [Testing SQL functions](https://sqlproof.com/examples/testing-sql-functions/): RPC testing, pgTAP vs SqlProof
+- [Stateful tests](https://sqlproof.com/api/state-machine/): bugs that need a sequence of operations
+- [CI/CD integration](https://sqlproof.com/guides/ci-cd/): GitHub Actions for vanilla Postgres and Supabase
+- [Mutation testing](https://sqlproof.com/guides/mutation-testing/): check that your tests would catch a bug
+- [API reference](https://sqlproof.com/api/sqlproof-class/): `SqlProof` class
+
+## Examples
+
+- [Inbox sample](https://sqlproof.com/examples/inbox/): multi-tenant Supabase app with 10 intentional RLS / RPC / trigger bugs, each with the property that catches it ([source](https://github.com/alialavia/sqlproof/tree/main/examples/inbox))
+- [Supabase RLS, pgTAP vs SqlProof](https://github.com/alialavia/sqlproof/tree/main/examples/supabase_rls): orgs / members / posts policies tested as properties
+- [E-commerce orders walkthrough](https://sqlproof.com/examples/orders/)
+
+## Optional
+
+- [README](https://github.com/alialavia/sqlproof/blob/main/README.md)
+- [SqlProof vs pgTAP](https://sqlproof.com/guides/vs-pgtap/)
+- [PyPI](https://pypi.org/project/sqlproof/)
