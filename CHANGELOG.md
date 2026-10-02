@@ -5,6 +5,13 @@ All notable changes to SqlProof will be documented here. The format is based on
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While SqlProof
 remains in `0.x`, minor versions may include breaking changes.
 
+## [0.11.2](https://github.com/alialavia/sqlproof/compare/v0.11.1...v0.11.2) (2026-10-02)
+
+
+### Fixed
+
+* **core:** return external-table rows named in dataset sizes ([#125](https://github.com/alialavia/sqlproof/issues/125)) ([64f89b0](https://github.com/alialavia/sqlproof/commit/64f89b0361a33f362a6c39dc0cff77aa1fb2eb81))
+
 ## [0.11.1](https://github.com/alialavia/sqlproof/compare/v0.11.0...v0.11.1) (2026-10-02)
 
 
