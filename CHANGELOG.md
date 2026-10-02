@@ -5,6 +5,15 @@ All notable changes to SqlProof will be documented here. The format is based on
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While SqlProof
 remains in `0.x`, minor versions may include breaking changes.
 
+## [0.11.1](https://github.com/alialavia/sqlproof/compare/v0.11.0...v0.11.1) (2026-10-02)
+
+
+### Fixed
+
+* **cli:** support python -m sqlproof ([#118](https://github.com/alialavia/sqlproof/issues/118)) ([9a85273](https://github.com/alialavia/sqlproof/commit/9a8527322f5216dd94415598e5e0791e68a4c63e))
+* **contrib:** seed test users on stubbed auth.users schemas ([#119](https://github.com/alialavia/sqlproof/issues/119)) ([2d84198](https://github.com/alialavia/sqlproof/commit/2d84198f99ec785b82f49963d2cf4904d1a80d8b))
+* **core:** execute invariant() queries against the database ([#120](https://github.com/alialavia/sqlproof/issues/120)) ([5a6a3a9](https://github.com/alialavia/sqlproof/commit/5a6a3a94f8b4af94809ccd63ec54dba86148136f))
+
 ## [0.11.0](https://github.com/alialavia/sqlproof/compare/v0.10.1...v0.11.0) (2026-09-04)
 
 
