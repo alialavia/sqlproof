@@ -181,7 +181,10 @@ proof = SqlProof.from_connection_string("postgresql://localhost/postgres")
 # Property runner (decorator shown above, or method form):
 proof.check("name", sizes={"orders": 10}, property=lambda db: ...)
 
-# Shorthand for "this query must return no rows":
+# Shorthand for "this query must return no rows". The query runs against each
+# generated dataset on the connected database; a query that errors raises.
+# (Without a connection only a plain `SELECT cols FROM table` can be evaluated;
+# anything else, e.g. a WHERE clause, raises SqlProofUsageError.)
 proof.invariant(
     "no bad rows",
     sizes={"orders": 10},

@@ -63,7 +63,22 @@ proof.check(
 
 ## Invariants
 
-Use `invariant()` when a SQL query should return zero rows.
+Use `invariant()` when a SQL query should return zero rows (or, with
+`expect_empty=False`, at least one row) for every generated dataset.
+
+Each run loads a generated dataset into the database inside a savepoint, executes
+`query`, and rolls the savepoint back. If the query returns rows when
+`expect_empty=True` (or none when `expect_empty=False`), `invariant()` raises
+`SqlProofPropertyFailure` with the dataset as the counterexample. Errors from
+the database, such as an unknown table or a syntax error, are raised as-is and
+never count as a pass.
+
+`invariant()` needs a database connection (`from_connection_string`) to run
+arbitrary SQL. A proof built only from a schema file evaluates queries in
+memory, which handles just a plain `SELECT <columns> FROM <table>`. Any other
+query, including one with a `WHERE` clause or a `JOIN` like the example below,
+raises `SqlProofUsageError` instead of being evaluated with its predicates
+ignored.
 
 ```python
 proof.invariant(
