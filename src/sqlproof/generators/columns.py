@@ -8,7 +8,13 @@ from hypothesis.strategies import SearchStrategy
 from psycopg.types.range import Range
 
 from sqlproof.exceptions import SqlProofSchemaError
-from sqlproof.generators.typespec import TypeSpec, spec_for_type
+from sqlproof.generators.typespec import (
+    TypeSpec,
+    float32_ceil,
+    float32_floor,
+    spec_for_type,
+    spec_is_empty,
+)
 from sqlproof.schema.model import Column, PgType
 
 _POSTGRES_BLACKLIST_CATEGORIES: tuple[Literal["Cs"], ...] = ("Cs",)
@@ -31,6 +37,20 @@ def strategy_for_type(pg_type: PgType) -> SearchStrategy[Any]:
 
 
 def strategy_for_spec(spec: TypeSpec) -> SearchStrategy[Any]:
+    if spec_is_empty(spec):
+        # A CHECK narrowed the spec to nothing (`length(x) >= 100` on a
+        # varchar(5), an IN-list disjoint from an enum's labels).
+        # Drawing raises Unsatisfiable instead of an obscure
+        # InvalidArgument from the underlying strategy.
+        return st.nothing()
+    strategy = _strategy_for_spec(spec)
+    if spec.excluded_values:
+        excluded = spec.excluded_values
+        strategy = strategy.filter(lambda value: value not in excluded)
+    return strategy
+
+
+def _strategy_for_spec(spec: TypeSpec) -> SearchStrategy[Any]:
     if spec.kind == "integer":
         assert spec.min_value is not None and spec.max_value is not None
         # An integer spec's bounds are always plain `int` -- only a
@@ -46,9 +66,21 @@ def strategy_for_spec(spec: TypeSpec) -> SearchStrategy[Any]:
             allow_infinity=False,
         )
     if spec.kind == "float":
-        if spec.float_width == 32:
-            return st.floats(width=32, allow_nan=False, allow_infinity=False)
-        return st.floats(allow_nan=False, allow_infinity=False)
+        width: Literal[32, 64] = 32 if spec.float_width == 32 else 64
+        lo = None if spec.min_value is None else float(spec.min_value)
+        hi = None if spec.max_value is None else float(spec.max_value)
+        if width == 32:
+            # Hypothesis requires width-32 bounds to be exactly
+            # representable; round inward so every draw stays inside.
+            lo = None if lo is None else float32_ceil(lo)
+            hi = None if hi is None else float32_floor(hi)
+        return st.floats(
+            min_value=lo,
+            max_value=hi,
+            width=width,
+            allow_nan=False,
+            allow_infinity=False,
+        )
     if spec.kind == "boolean":
         return st.booleans()
     if spec.kind == "text":

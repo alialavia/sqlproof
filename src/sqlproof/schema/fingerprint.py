@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import asdict, is_dataclass
+from decimal import Decimal
 from typing import Any, cast
 
 from sqlproof.schema.model import SchemaInfo
@@ -20,6 +21,9 @@ def _canonical(value: Any) -> Any:
     if isinstance(value, list):
         list_value = cast("list[Any]", value)  # type: ignore[redundant-cast]
         return [_canonical(item) for item in list_value]
+    if isinstance(value, Decimal):
+        # CheckConstraint.parsed carries Decimal bounds.
+        return str(value)
     return value
 
 

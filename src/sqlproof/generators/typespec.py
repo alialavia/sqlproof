@@ -37,6 +37,7 @@ structural. For the policy kinds above, it is not — by design.
 
 from __future__ import annotations
 
+import struct
 from collections.abc import Callable
 from dataclasses import dataclass
 from decimal import Decimal
@@ -63,6 +64,8 @@ class TypeSpec:
     # the whole point of the narrowing. Both interpreters already
     # accept a `Decimal` here (columns.py wraps in `Decimal(...)`
     # regardless; bulk.py converts to `float` for `random.uniform`).
+    # A float spec has no bounds unless a CHECK narrows it; narrowing
+    # then stores the exact Decimal value of a float8 bound.
     min_value: int | Decimal | None = None
     max_value: int | Decimal | None = None
     places: int | None = None
@@ -76,6 +79,11 @@ class TypeSpec:
     # hand these to a sampler with no further coercion, so the type
     # here has to already match what the target column accepts.
     enum_values: tuple[Any, ...] = ()
+    # Values a CHECK forbids (`status <> 'deleted'`, `code NOT IN
+    # (...)`) that no other field can express. Both interpreters
+    # reject draws equal to one of these. Coerced to the spec's kind
+    # by narrowing.py, like `enum_values`.
+    excluded_values: tuple[Any, ...] = ()
     dimension: int | None = None
     element: TypeSpec | None = None
     fields: tuple[tuple[str, TypeSpec], ...] = ()
@@ -169,6 +177,58 @@ TYPE_SPEC_BUILDERS: dict[str, Callable[[PgType], TypeSpec]] = {
     "bytea": lambda _t: TypeSpec(kind="binary"),
     "vector": _vector,
 }
+
+_FLOAT32_MAX = 3.4028234663852886e38
+
+
+def spec_is_empty(spec: TypeSpec) -> bool:
+    """Whether CHECK narrowing left `spec` with no admissible value
+    (`length(x) >= 100` on a varchar(5), `n > 10 AND n < 5`, an
+    IN-list disjoint from an enum's labels)."""
+    if spec.kind == "enum":
+        return not spec.enum_values
+    if (
+        spec.min_value is not None
+        and spec.max_value is not None
+        and Decimal(spec.min_value) > Decimal(spec.max_value)
+    ):
+        return True
+    if spec.min_size is not None and spec.max_size is not None:
+        return spec.min_size > spec.max_size
+    return False
+
+
+def _to_float32(value: float) -> float:
+    value = max(min(value, _FLOAT32_MAX), -_FLOAT32_MAX)
+    return float(struct.unpack("<f", struct.pack("<f", value))[0])
+
+
+def _float32_step(value: float, *, up: bool) -> float:
+    if value == 0.0:
+        bits = 1
+        smallest = float(struct.unpack("<f", struct.pack("<I", bits))[0])
+        return smallest if up else -smallest
+    bits = struct.unpack("<I", struct.pack("<f", value))[0]
+    bits = bits + 1 if (value > 0) == up else bits - 1
+    return float(struct.unpack("<f", struct.pack("<I", bits))[0])
+
+
+def float32_ceil(value: float) -> float:
+    """Smallest float32-representable value >= `value`.
+
+    A `real` column stores float32, so a CHECK bound on one has to be
+    honored after that rounding; both interpreters use this (and
+    `float32_floor`) to keep narrowed `real` draws inside the bound.
+    """
+    rounded = _to_float32(value)
+    return rounded if rounded >= value else _float32_step(rounded, up=True)
+
+
+def float32_floor(value: float) -> float:
+    """Largest float32-representable value <= `value`."""
+    rounded = _to_float32(value)
+    return rounded if rounded <= value else _float32_step(rounded, up=False)
+
 
 KNOWN_TYPE_NAMES: frozenset[str] = frozenset(TYPE_SPEC_BUILDERS)
 

@@ -268,17 +268,15 @@ def test_predicate_filter_admits_null_for_nullable_column(data) -> None:
     assert value is None or value >= 1
 
 
-@NON_NULL_KW
-@given(data=st.data())
-def test_in_set_with_bare_identifier_token_is_kept_as_string(data) -> None:
-    """When an IN-list value isn't a quoted string or a number,
-    `_parse_sql_literal` returns it verbatim — the refiner still produces
-    something the column can hold."""
+def test_in_list_of_bare_identifiers_is_not_treated_as_a_value_set() -> None:
+    """In SQL, `flag IN (foo, bar)` compares against the *columns* foo
+    and bar, not the strings 'foo'/'bar'. The refiner can't honor a
+    cross-column comparison, so it leaves the strategy unchanged rather
+    than inventing a value set."""
     column = _column("flag", "text")
     strategy = strategy_for_column(column)
     refined = refine_for_checks(column, strategy, (_check("flag IN (foo, bar)"),))
-    value = data.draw(refined)
-    assert value in {"foo", "bar"}
+    assert refined is strategy
 
 
 @NON_NULL_KW
