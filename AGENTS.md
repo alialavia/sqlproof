@@ -318,7 +318,7 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from sqlproof import SqlProof
-from sqlproof.contrib.supabase import as_supabase_user
+from sqlproof.contrib.supabase import as_rls_user
 
 
 @given(data=st.data())
@@ -330,7 +330,7 @@ def test_owner_can_read_their_own_<resource>(
     ))
     with supabase_proof.client_for_dataset(dataset) as db:
         resource = dataset["<resource_table>"][0]
-        with as_supabase_user(db, resource["user_id"]):
+        with as_rls_user(db, resource["user_id"]):
             rows = db.query(
                 "SELECT id FROM <resource_table> WHERE id = %s",
                 resource["id"],
@@ -350,7 +350,7 @@ def test_other_users_cannot_read_<resource>_they_dont_own(
         non_owner = next(
             u for u in dataset["auth.users"] if u["id"] != resource["user_id"]
         )
-        with as_supabase_user(db, non_owner["id"]):
+        with as_rls_user(db, non_owner["id"]):
             rows = db.query(
                 "SELECT id FROM <resource_table> WHERE id = %s",
                 resource["id"],
@@ -359,7 +359,15 @@ def test_other_users_cannot_read_<resource>_they_dont_own(
 ```
 
 **Important rules:**
-- **Always use `as_supabase_user(db, user_id)`** to set RLS context. Do not raw-set `request.jwt.claims`.
+- **Always use `as_rls_user(db, user_id)`** to set RLS context. Do not raw-set `request.jwt.claims`.
+  It sets the JWT claims (so `auth.uid()` resolves) **and** runs `SET LOCAL ROLE authenticated`
+  (override with `role="anon"` etc.). The role switch is what makes policies apply: the test DSN
+  normally connects as the `postgres` superuser, which has `BYPASSRLS`, so without it every query
+  ignores RLS — non-owner-is-blocked tests fail on a correct schema and owner-can-read tests pass
+  even with RLS disabled. The outcome would be independent of the policies under test.
+- **Don't use `as_supabase_user` for RLS tests.** It only sets `request.jwt.claims`; it does not
+  change role, so policies are never evaluated. It's for code that needs `auth.uid()` resolved
+  without enforcing policies (e.g. testing a function's return value).
 - **Always test both directions:** owner can access, non-owner cannot. A policy that returns *too much* data is the actual bug class.
 - **Take `supabase_proof`/`supabase_db`**, not `proof`/`db`. RLS tests need the seeded auth.users pool.
 - **Test names should be sentences a non-engineer would understand.** `test_owner_can_read_their_own_project` not `test_rls_22`.
@@ -461,7 +469,7 @@ from hypothesis import strategies as st
 from hypothesis.stateful import invariant, rule
 
 from sqlproof import SqlProof
-from sqlproof.contrib.supabase import as_supabase_user
+from sqlproof.contrib.supabase import as_rls_user
 from sqlproof.testing import SqlProofStateMachine
 
 
@@ -478,7 +486,6 @@ class MembershipMachine(SqlProofStateMachine):
         # ... (`proof.dataset_strategy(...)` per machine if you need
         # generated state; otherwise insert a literal handful here)
         self.projects: list[str] = [str(uuid4()) for _ in range(3)]
-        self.enter(as_supabase_user(self.db, self.user_id))
         self.member_of: set[str] = set()
 
     @rule(idx=st.integers(0, 2))
@@ -502,7 +509,10 @@ class MembershipMachine(SqlProofStateMachine):
 
     @invariant()
     def user_only_sees_projects_they_are_member_of(self) -> None:
-        visible = {row["id"] for row in self.db.query("SELECT id FROM projects")}
+        # Rules mutate as the test superuser; only the visibility check
+        # runs as the user, with RLS enforced.
+        with as_rls_user(self.db, self.user_id):
+            visible = {row["id"] for row in self.db.query("SELECT id FROM projects")}
         assert visible == self.member_of, (
             f"visible {visible} != expected {self.member_of}"
         )
@@ -515,6 +525,8 @@ def test_membership_visibility_invariant(supabase_proof: SqlProof) -> None:
 **Important rules:**
 - **Override `on_setup`, not `__init__`.** SqlProof manages `__init__`.
 - **Use `self.enter(cm)` for context managers** that should live across rules (JWT claims, savepoints).
+  If you `self.enter(as_rls_user(...))`, every rule also runs as `authenticated` under RLS — only do
+  that when the rules themselves are meant to go through policies.
 - **Run with `supabase_proof.run_state_machine(MachineClass)`**, not `run_state_machine_as_test` directly.
 - **State machines are slower than property tests.** Use them only when the bug requires a sequence.
 
@@ -665,10 +677,13 @@ db.execute(
 ```
 
 ```python
-# Right — readable, restored on exit, exception-safe:
-with as_supabase_user(db, user_id):
+# Right — readable, restored on exit, exception-safe, and RLS is enforced:
+with as_rls_user(db, user_id):
     ...
 ```
+
+(`as_supabase_user(db, user_id)` is the claims-only variant: use it only
+when you need `auth.uid()` to resolve without enforcing policies.)
 
 ### ❌ Don't insert into `auth.users` if the test connection lacks permission
 
