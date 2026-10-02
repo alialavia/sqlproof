@@ -114,7 +114,20 @@ proof.check(
     runs=100,
 )" title="Copy code" aria-label="Copy code" class="absolute top-2 right-2 m-0 size-6 rounded border border-solid border-(--sl-color-gray-5) bg-gray-100/30 p-1 text-black backdrop-blur-sm transition hover:bg-gray-200/50 active:scale-90 dark:bg-gray-600/30 dark:text-white hover:dark:bg-gray-500/50"></nova-code-copy-button></div>
 <div class="sl-heading-wrapper level-h2"><h2 id="invariants">Invariants</h2><a class="sl-anchor-link" href="#invariants"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24"><path fill="currentcolor" d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 0 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 1 0-1.42-1.42Zm8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 0 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 1 0 1.42 1.42l3.88-3.89a4.49 4.49 0 0 0 0-6.33ZM8.83 15.17a1 1 0 0 0 1.1.22 1 1 0 0 0 .32-.22l4.92-4.92a1 1 0 0 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42Z"></path></svg></span><span class="sr-only" data-pagefind-ignore="">Section titled “Invariants”</span></a></div>
-<p>Use <code dir="auto">invariant()</code> when a SQL query should return zero rows.</p>
+<p>Use <code dir="auto">invariant()</code> when a SQL query should return zero rows (or, with
+<code dir="auto">expect_empty=False</code>, at least one row) for every generated dataset.</p>
+<p>Each run loads a generated dataset into the database inside a savepoint, executes
+<code dir="auto">query</code>, and rolls the savepoint back. If the query returns rows when
+<code dir="auto">expect_empty=True</code> (or none when <code dir="auto">expect_empty=False</code>), <code dir="auto">invariant()</code> raises
+<code dir="auto">SqlProofPropertyFailure</code> with the dataset as the counterexample. Errors from
+the database, such as an unknown table or a syntax error, are raised as-is and
+never count as a pass.</p>
+<p><code dir="auto">invariant()</code> needs a database connection (<code dir="auto">from_connection_string</code>) to run
+arbitrary SQL. A proof built only from a schema file evaluates queries in
+memory, which handles just a plain <code dir="auto">SELECT &#x3C;columns> FROM &#x3C;table></code>. Any other
+query, including one with a <code dir="auto">WHERE</code> clause or a <code dir="auto">JOIN</code> like the example below,
+raises <code dir="auto">SqlProofUsageError</code> instead of being evaluated with its predicates
+ignored.</p>
 <div data-nova-code-container="" class="not-content relative overflow-hidden [&#x26;_pre]:relative [&#x26;_nova-code-copy-button]:opacity-0 [&#x26;:hover_nova-code-copy-button]:opacity-100 border border-solid border-(--sl-color-gray-5) rounded-md"><pre class="astro-code astro-code-themes one-light github-dark-dimmed" style="--shiki-light:#383A42;--shiki-dark:#adbac7;--shiki-light-bg:#FAFAFA;--shiki-dark-bg:#22272e; overflow-x: auto;" tabindex="0" data-language="python" dir="ltr"><code><span class="line"><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">proof.invariant(</span></span>
 <span class="line"><span style="--shiki-light:#986801;--shiki-dark:#F69D50">    name</span><span style="--shiki-light:#383A42;--shiki-dark:#F47067">=</span><span style="--shiki-light:#50A14F;--shiki-dark:#96D0FF">"no orphan orders"</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">,</span></span>
 <span class="line"><span style="--shiki-light:#986801;--shiki-dark:#F69D50">    sizes</span><span style="--shiki-light:#383A42;--shiki-dark:#F47067">=</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">{</span><span style="--shiki-light:#50A14F;--shiki-dark:#96D0FF">"customers"</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">: </span><span style="--shiki-light:#986801;--shiki-dark:#6CB6FF">10</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">, </span><span style="--shiki-light:#50A14F;--shiki-dark:#96D0FF">"orders"</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">: </span><span style="--shiki-light:#986801;--shiki-dark:#6CB6FF">50</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">},</span></span>
