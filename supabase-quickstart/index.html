@@ -107,7 +107,7 @@ events for non-members.</p>
 <span class="line"><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">from</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> hypothesis </span><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">import</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> strategies </span><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">as</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> st</span></span>
 <span class="line"></span>
 <span class="line"><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">from</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> sqlproof </span><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">import</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> SqlProof</span></span>
-<span class="line"><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">from</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> sqlproof.contrib.supabase </span><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">import</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> as_supabase_user</span></span>
+<span class="line"><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">from</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> sqlproof.contrib.supabase </span><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">import</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> as_rls_user</span></span>
 <span class="line"></span>
 <span class="line"></span>
 <span class="line"><span style="--shiki-light:#4078F2;--shiki-dark:#DCBDFB">@given</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">(</span><span style="--shiki-light:#986801;--shiki-dark:#F69D50">data</span><span style="--shiki-light:#383A42;--shiki-dark:#F47067">=</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">st.data(), </span><span style="--shiki-light:#986801;--shiki-dark:#F69D50">event_count</span><span style="--shiki-light:#383A42;--shiki-dark:#F47067">=</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">st.integers(</span><span style="--shiki-light:#986801;--shiki-dark:#F69D50">min_value</span><span style="--shiki-light:#383A42;--shiki-dark:#F47067">=</span><span style="--shiki-light:#986801;--shiki-dark:#6CB6FF">1</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">, </span><span style="--shiki-light:#986801;--shiki-dark:#F69D50">max_value</span><span style="--shiki-light:#383A42;--shiki-dark:#F47067">=</span><span style="--shiki-light:#986801;--shiki-dark:#6CB6FF">20</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">))</span></span>
@@ -119,7 +119,7 @@ events for non-members.</p>
 <span class="line"><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">    ))</span></span>
 <span class="line"><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">    with</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> supabase_proof.client_for_dataset(dataset) </span><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">as</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> db:</span></span>
 <span class="line"><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">        project </span><span style="--shiki-light:#383A42;--shiki-dark:#F47067">=</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> dataset[</span><span style="--shiki-light:#50A14F;--shiki-dark:#96D0FF">"projects"</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">][</span><span style="--shiki-light:#986801;--shiki-dark:#6CB6FF">0</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">]</span></span>
-<span class="line"><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">        with</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> as_supabase_user(db, project[</span><span style="--shiki-light:#50A14F;--shiki-dark:#96D0FF">"user_id"</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">]):</span></span>
+<span class="line"><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">        with</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> as_rls_user(db, project[</span><span style="--shiki-light:#50A14F;--shiki-dark:#96D0FF">"user_id"</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">]):</span></span>
 <span class="line"><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">            payload </span><span style="--shiki-light:#383A42;--shiki-dark:#F47067">=</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> db.scalar(</span></span>
 <span class="line"><span style="--shiki-light:#50A14F;--shiki-dark:#96D0FF">                "SELECT get_dashboard_summary(</span><span style="--shiki-light:#986801;--shiki-dark:#F47067">%s</span><span style="--shiki-light:#50A14F;--shiki-dark:#96D0FF">::uuid)"</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">, project[</span><span style="--shiki-light:#50A14F;--shiki-dark:#96D0FF">"id"</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">]</span></span>
 <span class="line"><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">            )</span></span>
@@ -141,7 +141,7 @@ events for non-members.</p>
 <span class="line"><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">        non_member </span><span style="--shiki-light:#383A42;--shiki-dark:#F47067">=</span><span style="--shiki-light:#0184BC;--shiki-dark:#6CB6FF"> next</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">(</span></span>
 <span class="line"><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">            u </span><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">for</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> u </span><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">in</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> dataset[</span><span style="--shiki-light:#50A14F;--shiki-dark:#96D0FF">"auth.users"</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">] </span><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">if</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> u[</span><span style="--shiki-light:#50A14F;--shiki-dark:#96D0FF">"id"</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">] </span><span style="--shiki-light:#383A42;--shiki-dark:#F47067">!=</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> project[</span><span style="--shiki-light:#50A14F;--shiki-dark:#96D0FF">"user_id"</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">]</span></span>
 <span class="line"><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">        )</span></span>
-<span class="line"><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">        with</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> as_supabase_user(db, non_member[</span><span style="--shiki-light:#50A14F;--shiki-dark:#96D0FF">"id"</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">]):</span></span>
+<span class="line"><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">        with</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> as_rls_user(db, non_member[</span><span style="--shiki-light:#50A14F;--shiki-dark:#96D0FF">"id"</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">]):</span></span>
 <span class="line"><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">            payload </span><span style="--shiki-light:#383A42;--shiki-dark:#F47067">=</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> db.scalar(</span></span>
 <span class="line"><span style="--shiki-light:#50A14F;--shiki-dark:#96D0FF">                "SELECT get_dashboard_summary(</span><span style="--shiki-light:#986801;--shiki-dark:#F47067">%s</span><span style="--shiki-light:#50A14F;--shiki-dark:#96D0FF">::uuid)"</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">, project[</span><span style="--shiki-light:#50A14F;--shiki-dark:#96D0FF">"id"</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">]</span></span>
 <span class="line"><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">            )</span></span>
@@ -151,7 +151,7 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from sqlproof import SqlProof
-from sqlproof.contrib.supabase import as_supabase_user
+from sqlproof.contrib.supabase import as_rls_user
 
 
 @given(data=st.data(), event_count=st.integers(min_value=1, max_value=20))
@@ -163,7 +163,7 @@ def test_owner_sees_event_count_for_their_project(
     ))
     with supabase_proof.client_for_dataset(dataset) as db:
         project = dataset[&#x22;projects&#x22;][0]
-        with as_supabase_user(db, project[&#x22;user_id&#x22;]):
+        with as_rls_user(db, project[&#x22;user_id&#x22;]):
             payload = db.scalar(
                 &#x22;SELECT get_dashboard_summary(%s::uuid)&#x22;, project[&#x22;id&#x22;]
             )
@@ -185,7 +185,7 @@ def test_non_member_sees_zero_event_count(
         non_member = next(
             u for u in dataset[&#x22;auth.users&#x22;] if u[&#x22;id&#x22;] != project[&#x22;user_id&#x22;]
         )
-        with as_supabase_user(db, non_member[&#x22;id&#x22;]):
+        with as_rls_user(db, non_member[&#x22;id&#x22;]):
             payload = db.scalar(
                 &#x22;SELECT get_dashboard_summary(%s::uuid)&#x22;, project[&#x22;id&#x22;]
             )
@@ -237,7 +237,7 @@ data, check the side-effect column.</p>
 <li><strong>More test patterns:</strong> <a href="/examples/property-patterns/">Five Property Patterns</a> — aggregation invariants, idempotency, round-trip serialization.</li>
 <li><strong>Function testing in depth:</strong> <a href="/examples/testing-sql-functions/">Testing SQL Functions</a> — a realistic pricing function with stacked discounts and country-specific rounding, tested two ways.</li>
 <li><strong>The data generator:</strong> <a href="/examples/data-generation/">Realistic Data Generation</a> — schema-aware multi-table generation that respects FKs, CHECKs, UNIQUEs. Useful for seeding dev DBs too.</li>
-<li><strong>Supabase-specific helpers:</strong> <a href="/guides/supabase/">Testing Supabase Apps</a> — <code dir="auto">as_supabase_user</code>, direct-insert auth-user seeding, external table specs.</li>
+<li><strong>Supabase-specific helpers:</strong> <a href="/guides/supabase/">Testing Supabase Apps</a> — <code dir="auto">as_rls_user</code>, direct-insert auth-user seeding, external table specs.</li>
 </ul>
 <div class="sl-heading-wrapper level-h2"><h2 id="when-you-hit-something-the-docs-dont-cover">When you hit something the docs don’t cover</h2><a class="sl-anchor-link" href="#when-you-hit-something-the-docs-dont-cover"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24"><path fill="currentcolor" d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 0 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 1 0-1.42-1.42Zm8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 0 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 1 0 1.42 1.42l3.88-3.89a4.49 4.49 0 0 0 0-6.33ZM8.83 15.17a1 1 0 0 0 1.1.22 1 1 0 0 0 .32-.22l4.92-4.92a1 1 0 0 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42Z"></path></svg></span><span class="sr-only" data-pagefind-ignore="">Section titled “When you hit something the docs don’t cover”</span></a></div>
 <p><a href="https://github.com/alialavia/sqlproof/issues">Open an issue</a>. The

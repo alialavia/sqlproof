@@ -109,7 +109,7 @@ specific role/sharing combinations. A property test makes that
 combinatorial space tractable.</p>
 <div data-nova-code-container="" class="not-content relative overflow-hidden [&#x26;_pre]:relative [&#x26;_nova-code-copy-button]:opacity-0 [&#x26;:hover_nova-code-copy-button]:opacity-100 border border-solid border-(--sl-color-gray-5) rounded-md"><pre class="astro-code astro-code-themes one-light github-dark-dimmed" style="--shiki-light:#383A42;--shiki-dark:#adbac7;--shiki-light-bg:#FAFAFA;--shiki-dark-bg:#22272e; overflow-x: auto;" tabindex="0" data-language="python" dir="ltr"><code><span class="line"><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">from</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> sqlproof </span><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">import</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> SqlProof</span></span>
 <span class="line"><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">from</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> sqlproof.testing </span><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">import</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> SqlProofStateMachine</span></span>
-<span class="line"><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">from</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> sqlproof.contrib.supabase </span><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">import</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> as_supabase_user</span></span>
+<span class="line"><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">from</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> sqlproof.contrib.supabase </span><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">import</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> as_rls_user</span></span>
 <span class="line"><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">from</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> hypothesis.stateful </span><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">import</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> rule, invariant</span></span>
 <span class="line"><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">from</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> hypothesis </span><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">import</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> strategies </span><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">as</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> st</span></span>
 <span class="line"></span>
@@ -142,14 +142,14 @@ combinatorial space tractable.</p>
 <span class="line"></span>
 <span class="line"><span style="--shiki-light:#4078F2;--shiki-dark:#DCBDFB">    @invariant</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">()</span></span>
 <span class="line"><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">    def</span><span style="--shiki-light:#4078F2;--shiki-dark:#DCBDFB"> user_b_only_sees_shared_projects</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">(</span><span style="--shiki-light:#986801;--shiki-dark:#ADBAC7">self</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">):</span></span>
-<span class="line"><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">        with</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> as_supabase_user(</span><span style="--shiki-light:#E45649;--shiki-dark:#6CB6FF">self</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">.db, </span><span style="--shiki-light:#E45649;--shiki-dark:#6CB6FF">self</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">.user_b):</span></span>
+<span class="line"><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">        with</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> as_rls_user(</span><span style="--shiki-light:#E45649;--shiki-dark:#6CB6FF">self</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">.db, </span><span style="--shiki-light:#E45649;--shiki-dark:#6CB6FF">self</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">.user_b):</span></span>
 <span class="line"><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">            visible </span><span style="--shiki-light:#383A42;--shiki-dark:#F47067">=</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> {r[</span><span style="--shiki-light:#50A14F;--shiki-dark:#96D0FF">"id"</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">] </span><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">for</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> r </span><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">in</span><span style="--shiki-light:#E45649;--shiki-dark:#6CB6FF"> self</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">.db.query(</span><span style="--shiki-light:#50A14F;--shiki-dark:#96D0FF">"SELECT id FROM projects"</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">)}</span></span>
 <span class="line"><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">        assert</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> visible </span><span style="--shiki-light:#383A42;--shiki-dark:#F47067">==</span><span style="--shiki-light:#E45649;--shiki-dark:#6CB6FF"> self</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">.shares</span></span>
 <span class="line"></span>
 <span class="line"><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">def</span><span style="--shiki-light:#4078F2;--shiki-dark:#DCBDFB"> test_rls</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">(</span><span style="--shiki-light:#986801;--shiki-dark:#ADBAC7">proof</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">):</span></span>
 <span class="line"><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">    proof.run_state_machine(RLSMachine)</span></span></code></pre><nova-code-copy-button type="button" data-code="from sqlproof import SqlProof
 from sqlproof.testing import SqlProofStateMachine
-from sqlproof.contrib.supabase import as_supabase_user
+from sqlproof.contrib.supabase import as_rls_user
 from hypothesis.stateful import rule, invariant
 from hypothesis import strategies as st
 
@@ -182,7 +182,7 @@ class RLSMachine(SqlProofStateMachine):
 
     @invariant()
     def user_b_only_sees_shared_projects(self):
-        with as_supabase_user(self.db, self.user_b):
+        with as_rls_user(self.db, self.user_b):
             visible = {r[&#x22;id&#x22;] for r in self.db.query(&#x22;SELECT id FROM projects&#x22;)}
         assert visible == self.shares
 
