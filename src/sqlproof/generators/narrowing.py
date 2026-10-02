@@ -70,15 +70,14 @@ def _narrow_atom(spec: TypeSpec, column: Column, atom: ParsedCheck) -> TypeSpec:
         if spec.kind == "enum":
             return _filter_enum(spec, lambda v: isinstance(v, str) and _compare(len(v), op, n))
         return spec
-    if atom.kind == "range":
-        op, value = atom.payload
-        if spec.kind in {"integer", "decimal"}:
-            return _narrow_bound(spec, op, value)
-        if spec.kind == "float":
-            return _narrow_float_bound(spec, op, value)
-        if spec.kind == "enum":
-            return _filter_enum(spec, lambda v: _numeric_compare(v, op, value))
-        return spec
+    # The only remaining atom kind schema.checks produces is "range".
+    op, value = atom.payload
+    if spec.kind in {"integer", "decimal"}:
+        return _narrow_bound(spec, op, value)
+    if spec.kind == "float":
+        return _narrow_float_bound(spec, op, value)
+    if spec.kind == "enum":
+        return _filter_enum(spec, lambda v: _numeric_compare(v, op, value))
     return spec
 
 
@@ -90,9 +89,7 @@ def _narrow_in_set(spec: TypeSpec, column: Column, raw_values: tuple[Any, ...]) 
     values = tuple(_coerce(v, spec.kind) for v in raw_values)
     fixed_width = _underlying_type_name(column) in _FIXED_WIDTH_CHAR_TYPES
     kept = tuple(
-        v
-        for v in dict.fromkeys(values)
-        if _admits(spec, v, check_min_size=not fixed_width)
+        v for v in dict.fromkeys(values) if _admits(spec, v, check_min_size=not fixed_width)
     )
     return TypeSpec(kind="enum", enum_values=kept)
 
@@ -125,6 +122,10 @@ def _admits(spec: TypeSpec, value: Any, *, check_min_size: bool) -> bool:
             return False
         return not (check_min_size and spec.min_size is not None and len(value) < spec.min_size)
     if spec.kind in {"integer", "decimal", "float"}:
+        if _as_decimal(value) is None:
+            # A literal that isn't a number of this type (only possible
+            # in an unvalidated schema file) can't be stored here.
+            return False
         if spec.min_value is not None and not _numeric_compare(value, ">=", spec.min_value):
             return False
         return spec.max_value is None or _numeric_compare(value, "<=", spec.max_value)
@@ -137,14 +138,18 @@ def _same_value(a: Any, b: Any) -> bool:
     return str(a) == str(b)
 
 
-def _numeric_compare(value: Any, op: str, bound: Any) -> bool:
+def _as_decimal(value: Any) -> Decimal | None:
     if isinstance(value, bool):
-        return False
+        return None
     try:
-        number = Decimal(str(value))
+        return Decimal(str(value))
     except InvalidOperation:
-        return False
-    return _compare(number, op, Decimal(str(bound)))
+        return None
+
+
+def _numeric_compare(value: Any, op: str, bound: Any) -> bool:
+    number = _as_decimal(value)
+    return number is not None and _compare(number, op, Decimal(str(bound)))
 
 
 def _compare(left: Any, op: str, right: Any) -> bool:

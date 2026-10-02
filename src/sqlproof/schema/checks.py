@@ -38,7 +38,7 @@ import re
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from functools import lru_cache
-from typing import Any
+from typing import Any, Literal
 
 import pglast
 from pglast import ast
@@ -54,7 +54,7 @@ _CHECK_WRAPPER_RE = re.compile(
 _IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*")
 
 _COMPARISON_OPS = frozenset({">=", ">", "<=", "<"})
-_FLIPPED = {">=": "<=", ">": "<", "<=": ">=", "<": ">", "=": "=", "<>": "<>", "!=": "<>"}
+_FLIPPED = {">=": "<=", ">": "<", "<=": ">=", "<": ">", "=": "=", "<>": "<>"}
 _LENGTH_FUNCTIONS = frozenset({"length", "char_length", "character_length"})
 _NUMERIC_CASTS = frozenset(
     {
@@ -169,8 +169,7 @@ def _parse_expression(body: str) -> Any:
         return None
     if len(select.targetList) != 1 or select.fromClause is not None:
         return None
-    target = select.targetList[0]
-    return target.val if _is(target, ast.ResTarget) else None
+    return select.targetList[0].val
 
 
 # Reserved words that legitimately appear inside a CHECK expression;
@@ -308,11 +307,10 @@ def _atoms_for_a_expr(node: Any) -> list[ParsedCheck] | None:
     if kind == A_Expr_Kind.AEXPR_OP:
         return _comparison(op, node.lexpr, node.rexpr)
     if kind in (A_Expr_Kind.AEXPR_BETWEEN, A_Expr_Kind.AEXPR_BETWEEN_SYM):
-        bounds: Any = node.rexpr
-        if not _is(bounds, tuple) or len(bounds) != 2:
-            return None
-        low = _numeric(_literal(bounds[0]))
-        high = _numeric(_literal(bounds[1]))
+        # pglast always gives BETWEEN a (low, high) pair.
+        low_node, high_node = node.rexpr
+        low = _numeric(_literal(low_node))
+        high = _numeric(_literal(high_node))
         if low is None or high is None:
             return None
         if kind == A_Expr_Kind.AEXPR_BETWEEN_SYM and low > high:
@@ -327,11 +325,9 @@ def _atoms_for_a_expr(node: Any) -> list[ParsedCheck] | None:
         values = _literal_list(node.rexpr)
         if column is None or values is None:
             return None
-        if op == "=":
-            return [ParsedCheck(kind="in_set", column=column, payload=values)]
-        if op == "<>":
-            return [ParsedCheck(kind="not_in", column=column, payload=values)]
-        return None
+        # IN is `=`, NOT IN is `<>` -- the parser produces no other.
+        in_kind: Literal["in_set", "not_in"] = "in_set" if op == "=" else "not_in"
+        return [ParsedCheck(kind=in_kind, column=column, payload=values)]
     if kind in (A_Expr_Kind.AEXPR_OP_ANY, A_Expr_Kind.AEXPR_OP_ALL):
         column = _column_name(node.lexpr)
         array = node.rexpr
@@ -345,17 +341,16 @@ def _atoms_for_a_expr(node: Any) -> list[ParsedCheck] | None:
             return None
         if kind == A_Expr_Kind.AEXPR_OP_ANY and op == "=":
             return [ParsedCheck(kind="in_set", column=column, payload=values)]
-        if kind == A_Expr_Kind.AEXPR_OP_ALL and op in ("<>", "!="):
+        if kind == A_Expr_Kind.AEXPR_OP_ALL and op == "<>":
             return [ParsedCheck(kind="not_in", column=column, payload=values)]
         return None
     return None
 
 
-def _comparison(op: str | None, left: Any, right: Any) -> list[ParsedCheck] | None:
-    if op is None or op not in _FLIPPED:
+def _comparison(op: str, left: Any, right: Any) -> list[ParsedCheck] | None:
+    # The parser already normalizes `!=` to `<>`.
+    if op not in _FLIPPED:
         return None
-    if op == "!=":
-        op = "<>"
     value = _literal(right)
     subject = left
     if isinstance(value, _NoLiteral):
@@ -396,12 +391,10 @@ def _bound_atom(subject: Any, op: str, value: Decimal) -> ParsedCheck | None:
     return ParsedCheck(kind="range", column=column, payload=(op, value))
 
 
-def _operator(node: Any) -> str | None:
-    names = node.name or ()
-    if not names:
-        return None
-    last = names[-1]
-    return last.sval if _is(last, ast.String) else None
+def _operator(node: Any) -> str:
+    # Every A_Expr carries its operator name as String nodes; a
+    # qualified one (`OPERATOR(pg_catalog.>=)`) ends in the bare symbol.
+    return str(node.name[-1].sval)
 
 
 def _column_name(node: Any) -> str | None:
@@ -412,10 +405,10 @@ def _column_name(node: Any) -> str | None:
         return _column_name(node.arg)
     if not _is(node, ast.ColumnRef):
         return None
-    fields = node.fields or ()
-    if not fields or not _is(fields[-1], ast.String):
-        return None
-    return str(fields[-1].sval)
+    # A ColumnRef always has fields; the last is the column name, or
+    # A_Star for `t.*`, which names no single column.
+    last = node.fields[-1]
+    return str(last.sval) if _is(last, ast.String) else None
 
 
 def _length_column(node: Any) -> str | None:
@@ -467,7 +460,8 @@ def _literal(node: Any) -> Any:
 
 
 def _literal_list(nodes: Any) -> tuple[Any, ...] | None:
-    if not _is(nodes, tuple) or not nodes:
+    # `nodes` is None for an empty `ARRAY[]`.
+    if not nodes:
         return None
     values: list[Any] = []
     for node in nodes:
