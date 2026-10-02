@@ -72,6 +72,19 @@ proof = SqlProof.from_connection_string(
 Now any FK column referencing `auth.users(id)` in your generated dataset
 draws from the seeded test users.
 
+To get at those users in a test, name the external table in `sizes`:
+
+```python
+dataset = data.draw(proof.dataset_strategy(sizes={"projects": 1, "auth.users": 2}))
+owner_id = dataset["projects"][0]["user_id"]
+non_owner = next(u for u in dataset["auth.users"] if u["id"] != owner_id)
+```
+
+The dataset then uses exactly that many sampled rows for every FK into the
+external table, and returns them under its key. Each row holds only the
+primary key. A count larger than the sample raises `SqlProofUsageError`;
+an external table left out of `sizes` has no key in the dataset.
+
 ## Acting as a user (RLS testing)
 
 `as_rls_user` is a context manager that runs a block as a Supabase user

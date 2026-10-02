@@ -10,7 +10,7 @@ from psycopg.types.json import Jsonb
 
 from sqlproof import ExternalTableSpec, SqlProof, sqlproof
 from sqlproof.core import _external_parent_rows, _insert_dataset
-from sqlproof.exceptions import SqlProofPropertyFailure
+from sqlproof.exceptions import SqlProofPropertyFailure, SqlProofUsageError
 from sqlproof.runners import property as property_module
 from sqlproof.schema.model import Column, ForeignKey, PgType, SchemaInfo, Table
 
@@ -266,6 +266,43 @@ def test_external_table_seed_count_limits_sampled_parent_rows() -> None:
     )
 
     assert rows["auth.users"] == [{"id": "user-1"}, {"id": "user-2"}]
+
+
+def test_external_table_size_override_replaces_seed_count() -> None:
+    class FakeClient:
+        pass
+
+    rows = _external_parent_rows(
+        {
+            "auth.users": ExternalTableSpec(
+                primary_key="id",
+                seed_count=1,
+                sample=lambda db: ["user-1", "user-2", "user-3"],
+            )
+        },
+        cast(Any, FakeClient()),
+        size_overrides={"auth.users": 2},
+    )
+
+    assert rows["auth.users"] == [{"id": "user-1"}, {"id": "user-2"}]
+    assert rows["users"] == rows["auth.users"]
+
+
+def test_external_table_size_override_larger_than_sample_raises() -> None:
+    class FakeClient:
+        pass
+
+    with pytest.raises(SqlProofUsageError, match=r"sizes\['auth.users'\] asks for 3 rows"):
+        _external_parent_rows(
+            {
+                "auth.users": ExternalTableSpec(
+                    primary_key="id",
+                    sample=lambda db: ["user-1", "user-2"],
+                )
+            },
+            cast(Any, FakeClient()),
+            size_overrides={"auth.users": 3},
+        )
 
 
 def test_external_table_sampling_uses_cache_when_no_seed() -> None:

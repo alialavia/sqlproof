@@ -48,6 +48,7 @@ def test_no_orphan_line_items(db):
 - `db` is a `SqlProofClient`: `db.query(sql, *params)`, `db.scalar(sql, *params)`, `db.execute(sql, *params)`. Params are splatted, not passed as a list.
 - Method form: `proof.check("name", sizes={...}, property=lambda db: ...)`. "Must return no rows" shorthand: `proof.invariant("name", sizes={...}, query="SELECT ...", expect_empty=True)`.
 - With Hypothesis directly: `dataset = data.draw(proof.dataset_strategy(sizes={...}))`, then `with proof.client_for_dataset(dataset) as db: ...`.
+- External tables (e.g. `auth.users` under `supabase_proof`): name one in `sizes` (`{"projects": 1, "auth.users": 2}`) to use exactly that many pool rows for FKs and get them back as `dataset["auth.users"]` (rows hold only `id`).
 - One schema-aware fixture row: `proof.row_strategy("orders", customer_id=42).example()`.
 - Failures are saved under `.sqlproof/failures/`; inspect with `sqlproof report <file>` and `sqlproof replay <file>`.
 

@@ -141,3 +141,50 @@ def test_supabase_proof_fixture_works_on_stubbed_auth_users(
         "-v",
     )
     result.assert_outcomes(passed=1)
+
+
+def test_supabase_proof_dataset_includes_external_rows_named_in_sizes(
+    stub_dsn: str, pytester: pytest.Pytester
+) -> None:
+    # The AGENTS.md non-owner pattern: `sizes={..., "auth.users": 2}` then
+    # pick a user from `dataset["auth.users"]` that doesn't own the row.
+    pytester.makepyfile(
+        """
+        from hypothesis import HealthCheck, given, settings
+        from hypothesis import strategies as st
+
+
+        @settings(
+            max_examples=10,
+            deadline=None,
+            suppress_health_check=[HealthCheck.function_scoped_fixture],
+        )
+        @given(data=st.data())
+        def test_non_owner_is_drawn_from_the_dataset(supabase_proof, data):
+            dataset = data.draw(supabase_proof.dataset_strategy(
+                sizes={"profiles": 3, "auth.users": 2},
+            ))
+            users = dataset["auth.users"]
+            assert len(users) == 2
+            user_ids = {u["id"] for u in users}
+            assert {p["user_id"] for p in dataset["profiles"]} <= user_ids
+            owner = dataset["profiles"][0]["user_id"]
+            non_owner = next(u for u in users if u["id"] != owner)
+            with supabase_proof.client_for_dataset(dataset) as db:
+                assert db.scalar(
+                    "SELECT count(*) FROM auth.users WHERE id = %s::uuid", non_owner["id"]
+                ) == 1
+
+
+        def test_external_tables_left_out_of_sizes_are_not_in_the_dataset(supabase_proof):
+            dataset = supabase_proof.dataset_strategy(sizes={"profiles": 1}).example()
+            assert "auth.users" not in dataset
+        """
+    )
+    result = pytester.runpytest_subprocess(
+        f"--sqlproof-database-url={stub_dsn}",
+        "-p",
+        "no:cacheprovider",
+        "-v",
+    )
+    result.assert_outcomes(passed=2)

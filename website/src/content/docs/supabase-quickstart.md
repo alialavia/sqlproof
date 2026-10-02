@@ -25,7 +25,7 @@ the project's working deprecation policy.
 
 ## 2. Point SqlProof at your database
 
-`pytest start` for Supabase brings up Postgres on
+`supabase start` brings up Postgres on
 `127.0.0.1:54322`. Tell SqlProof about it:
 
 ```bash
