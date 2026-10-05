@@ -1,0 +1,61 @@
+# OSV-Scanner config for the dependency license check in ci.yml.
+#
+# This file is only passed to the license job (via --config). It is kept
+# out of the default `osv-scanner.toml` location on purpose: it silences
+# vulnerability findings so the job fails on license violations alone,
+# and that must not leak into any vulnerability scan run against the repo.
+#
+# The allowed licenses live in ci.yml (`--licenses=`); THIRD_PARTY_LICENSES.md
+# explains the policy and every non-MIT runtime dependency.
+
+# --- Licenses only: ignore vulnerability findings ---------------------------
+
+[[PackageOverrides]]
+ecosystem = "PyPI"
+vulnerability.ignore = true
+reason = "This job checks licenses only."
+
+[[PackageOverrides]]
+ecosystem = "npm"
+vulnerability.ignore = true
+reason = "This job checks licenses only."
+
+# --- Packages whose published metadata has no SPDX license id --------------
+# Each override was checked against the LICENSE file shipped in the package.
+# Pin the version so a new release gets re-checked instead of inheriting it.
+
+[[PackageOverrides]]
+name = "colorama"
+version = "0.4.6"
+ecosystem = "PyPI"
+license.override = ["BSD-3-Clause"]
+reason = "Metadata says 'BSD'; the LICENSE file is BSD-3-Clause."
+
+[[PackageOverrides]]
+name = "libcst"
+version = "1.8.6"
+ecosystem = "PyPI"
+license.override = ["MIT", "PSF-2.0", "Apache-2.0"]
+reason = "MIT, with a few files derived from CPython (PSF-2.0) and dataclasses (Apache-2.0)."
+
+[[PackageOverrides]]
+name = "nodeenv"
+version = "1.10.0"
+ecosystem = "PyPI"
+license.override = ["BSD-3-Clause"]
+reason = "Metadata says 'BSD'; the LICENSE file is BSD-3-Clause."
+
+[[PackageOverrides]]
+name = "pywin32"
+version = "311"
+ecosystem = "PyPI"
+license.override = ["PSF-2.0"]
+reason = "No license in metadata; pywin32 is PSF-2.0. Windows-only transitive dep of docker."
+
+# --- Known exception ---------------------------------------------------------
+
+[[PackageOverrides]]
+name = "pglast"
+ecosystem = "PyPI"
+license.ignore = true
+reason = "GPL-3.0-or-later runtime dependency. Known exception pending its removal; see THIRD_PARTY_LICENSES.md."
