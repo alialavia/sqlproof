@@ -8,6 +8,7 @@ from pglast.enums import ConstrType
 from pglast.stream import RawStream
 
 from sqlproof.exceptions import SqlProofSchemaError
+from sqlproof.schema.checks import parse_check_expression
 from sqlproof.schema.model import (
     CheckConstraint,
     Column,
@@ -334,7 +335,8 @@ def _parse_foreign_key(constraint: Any, *, columns: tuple[str, ...] | None = Non
 
 
 def _parse_check(constraint: Any) -> CheckConstraint:
-    return CheckConstraint(_render(constraint.raw_expr))
+    expression = _render(constraint.raw_expr)
+    return CheckConstraint(expression, parsed=parse_check_expression(expression))
 
 
 def _constraint_keys(constraint: Any) -> tuple[str, ...]:

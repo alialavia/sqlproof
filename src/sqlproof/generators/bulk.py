@@ -23,6 +23,7 @@ from uuid import UUID
 from hypothesis.strategies import SearchStrategy
 
 from sqlproof.exceptions import SqlProofGenerationError, SqlProofUsageError
+from sqlproof.generators.constraints import warn_unhonored_checks
 from sqlproof.generators.narrowing import narrow_spec_for_checks
 
 # These four are private to rows.py, but they are the exact functions
@@ -38,8 +39,14 @@ from sqlproof.generators.rows import (
     _is_single_column_unique,  # pyright: ignore[reportPrivateUsage]
     _unique_value,  # pyright: ignore[reportPrivateUsage]
 )
-from sqlproof.generators.typespec import TypeSpec, spec_for_column
-from sqlproof.schema.model import Column, ForeignKey, Table
+from sqlproof.generators.typespec import (
+    TypeSpec,
+    float32_ceil,
+    float32_floor,
+    spec_for_column,
+    spec_is_empty,
+)
+from sqlproof.schema.model import CheckConstraint, Column, ForeignKey, Table
 
 # Excludes \x00 (Postgres rejects it in text) and stays inside ASCII,
 # which keeps COPY output compact. The Hypothesis path deliberately
@@ -91,7 +98,45 @@ _RANGE_RETRY_LIMIT = 100
 _EPOCH_DATE = date(2000, 1, 1)
 
 
+# Bound for rejecting draws that hit a CHECK-excluded value (see
+# TypeSpec.excluded_values). Excluded values are a handful of points in
+# a large domain, so needing more than a few retries means the domain
+# is (nearly) all excluded -- fail loudly instead of spinning.
+_EXCLUDED_RETRY_LIMIT = 100
+
+
 def sampler_for_spec(spec: TypeSpec, rng: random.Random) -> Callable[[], Any]:
+    _raise_if_empty(spec)
+    base = _base_sampler_for_spec(spec, rng)
+    if not spec.excluded_values:
+        return base
+    excluded = spec.excluded_values
+
+    def draw_allowed() -> Any:
+        for _ in range(_EXCLUDED_RETRY_LIMIT):
+            value = base()
+            if value not in excluded:
+                return value
+        msg = (
+            f"Cannot generate a value for {_describe_spec(spec)}: every draw in "
+            f"{_EXCLUDED_RETRY_LIMIT} attempts hit a CHECK-excluded value "
+            f"{excluded!r}."
+        )
+        raise SqlProofGenerationError(msg)
+
+    return draw_allowed
+
+
+def _raise_if_empty(spec: TypeSpec) -> None:
+    if spec_is_empty(spec):
+        msg = (
+            f"Cannot generate a value for {_describe_spec(spec)}: its CHECK "
+            "constraints admit no value of the column's type."
+        )
+        raise SqlProofGenerationError(msg)
+
+
+def _base_sampler_for_spec(spec: TypeSpec, rng: random.Random) -> Callable[[], Any]:
     kind = spec.kind
     if kind == "integer":
         # An integer spec's bounds are always plain `int` -- only a
@@ -125,7 +170,7 @@ def sampler_for_spec(spec: TypeSpec, rng: random.Random) -> Callable[[], Any]:
 
         return draw_decimal
     if kind == "float":
-        return lambda: rng.uniform(-1e6, 1e6)
+        return _float_sampler(spec, rng)
     if kind == "boolean":
         return lambda: rng.random() < 0.5
     if kind == "text":
@@ -217,6 +262,30 @@ def sampler_for_spec(spec: TypeSpec, rng: random.Random) -> Callable[[], Any]:
         f"sampler_for_spec: unhandled SpecKind {kind!r}; "
         "ensure typespec.py's KNOWN_TYPE_NAMES has a handler in this interpreter"
     )
+
+
+def _float_sampler(spec: TypeSpec, rng: random.Random) -> Callable[[], float]:
+    # Unbounded floats stay in a realistic +-1e6 window. A CHECK bound
+    # replaces the matching side of that window; a one-sided bound
+    # beyond the window's far edge gets a window of its own width.
+    lo = float(spec.min_value) if spec.min_value is not None else None
+    hi = float(spec.max_value) if spec.max_value is not None else None
+    if spec.float_width == 32:
+        lo = None if lo is None else float32_ceil(lo)
+        hi = None if hi is None else float32_floor(hi)
+    low = lo if lo is not None else (min(-1e6, hi - 2e6) if hi is not None else -1e6)
+    high = hi if hi is not None else (max(1e6, low + 2e6) if lo is not None else 1e6)
+    width32 = spec.float_width == 32
+
+    def draw_float() -> float:
+        value = rng.uniform(low, high)
+        if width32:
+            # A `real` column stores float32; round here so the CHECK
+            # Postgres evaluates sees the same value we clamped.
+            value = min(max(float32_ceil(value), low), high)
+        return min(max(value, low), high)
+
+    return draw_float
 
 
 def sampler_for_column(
@@ -541,6 +610,7 @@ def bulk_table_rows(
 
     single_pk = table.primary_key[0] if len(table.primary_key) == 1 else None
     samplers: dict[str, Callable[[], Any]] = {}
+    unhonored_scope: list[CheckConstraint] = list(table.check_constraints)
     for column in table.columns:
         if column.name in table.primary_key or column.is_generated:
             continue
@@ -563,14 +633,17 @@ def bulk_table_rows(
         # the narrowed spec (rather than re-deriving null-wrapping here)
         # keeps null handling in exactly one place.
         spec, _nullable = spec_for_column(column)
+        domain_checks = _domain_checks_as_column_checks(column)
+        unhonored_scope.extend(domain_checks)
         spec = narrow_spec_for_checks(
             spec,
             column,
-            table.check_constraints + _domain_checks_as_column_checks(column),
+            table.check_constraints + domain_checks,
         )
         samplers[column.name] = sampler_for_column(
             column, rng, null_frac=null_frac, spec=spec
         )
+    warn_unhonored_checks(table, unhonored_scope, samplers)
 
     for index in range(count):
         row: dict[str, Any] = {}

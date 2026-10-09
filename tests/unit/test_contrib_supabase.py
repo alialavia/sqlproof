@@ -14,6 +14,7 @@ from sqlproof.contrib.supabase import (
     seed_test_users_directly,
     supabase_test_user_ids,
 )
+from sqlproof.exceptions import SqlProofSchemaError
 
 
 class FakeClaimsClient:
@@ -208,12 +209,53 @@ def test_supabase_test_user_ids_returns_empty_when_no_match() -> None:
     assert supabase_test_user_ids(db) == []
 
 
+def _column(
+    name: str,
+    *,
+    nullable: bool = True,
+    default: str | None = None,
+    identity: bool = False,
+    generated: bool = False,
+) -> dict[str, Any]:
+    return {
+        "column_name": name,
+        "is_nullable": "YES" if nullable else "NO",
+        "column_default": default,
+        "is_identity": "YES" if identity else "NO",
+        "is_generated": "ALWAYS" if generated else "NEVER",
+    }
+
+
+# A representative slice of the real Supabase `auth.users` shape.
+SUPABASE_AUTH_USERS_COLUMNS = [
+    _column("instance_id"),
+    _column("id", nullable=False),
+    _column("aud"),
+    _column("role"),
+    _column("email"),
+    _column("confirmed_at", generated=True),
+    _column("is_sso_user", nullable=False, default="false"),
+]
+
+# The stub from #115: `auth.users (id uuid primary key, email text not null unique)`.
+STUB_AUTH_USERS_COLUMNS = [
+    _column("id", nullable=False),
+    _column("email", nullable=False),
+]
+
+
 class FakeAuthUsersClient:
     """SqlProofClient stand-in that simulates `auth.users` writes for direct seeding."""
 
-    def __init__(self, prepopulated: list[dict[str, str]] | None = None) -> None:
+    def __init__(
+        self,
+        prepopulated: list[dict[str, str]] | None = None,
+        *,
+        columns: list[dict[str, Any]] | None = None,
+    ) -> None:
         self.users: list[dict[str, str]] = list(prepopulated or [])
         self.executes: list[tuple[str, tuple[Any, ...]]] = []
+        self.columns = SUPABASE_AUTH_USERS_COLUMNS if columns is None else columns
 
     def execute(self, sql: str, *params: Any) -> int:
         self.executes.append((sql, params))
@@ -229,6 +271,8 @@ class FakeAuthUsersClient:
         raise AttributeError(name)
 
     def query(self, sql: str, *params: Any) -> list[dict[str, Any]]:
+        if "information_schema.columns" in sql:
+            return list(self.columns)
         if "FROM auth.users" in sql and "LIKE" in sql:
             import re
 
@@ -283,6 +327,77 @@ def test_seed_test_users_directly_with_custom_prefix_and_domain() -> None:
         "probe_0@example.test",
         "probe_1@example.test",
     }
+
+
+def _insert_sql(db: FakeAuthUsersClient) -> str:
+    inserts = [sql for sql, _ in db.executes if "INSERT INTO auth.users" in sql]
+    assert inserts
+    return inserts[0]
+
+
+def test_seed_test_users_directly_fills_aud_and_role_on_full_supabase_shape() -> None:
+    db = FakeAuthUsersClient()
+    seed_test_users_directly(db, count=1)
+    assert "INSERT INTO auth.users (id, aud, role, email)" in _insert_sql(db)
+
+
+def test_seed_test_users_directly_only_inserts_columns_present_on_stub() -> None:
+    db = FakeAuthUsersClient(columns=STUB_AUTH_USERS_COLUMNS)
+    ids = seed_test_users_directly(db, count=3)
+    sql = _insert_sql(db)
+    assert "INSERT INTO auth.users (id, email)" in sql
+    assert "aud" not in sql
+    assert "'authenticated'" not in sql
+    assert len(ids) == 3
+    # Generated emails stay unique so a `email ... NOT NULL UNIQUE` stub is satisfied.
+    emails = [u["email"] for u in db.users]
+    assert len(set(emails)) == len(emails) == 3
+
+
+def test_seed_test_users_directly_supports_aud_without_role() -> None:
+    db = FakeAuthUsersClient(
+        columns=[_column("id", nullable=False), _column("aud"), _column("email")]
+    )
+    seed_test_users_directly(db, count=1)
+    assert "INSERT INTO auth.users (id, aud, email)" in _insert_sql(db)
+
+
+def test_seed_test_users_directly_errors_when_auth_users_missing() -> None:
+    db = FakeAuthUsersClient(columns=[])
+    with pytest.raises(SqlProofSchemaError, match=r"auth\.users not found.*`proof`"):
+        seed_test_users_directly(db, count=1)
+    assert db.executes == []
+
+
+@pytest.mark.parametrize("missing", ["id", "email"])
+def test_seed_test_users_directly_errors_when_required_column_missing(missing: str) -> None:
+    columns = [c for c in STUB_AUTH_USERS_COLUMNS if c["column_name"] != missing]
+    db = FakeAuthUsersClient(columns=columns)
+    with pytest.raises(SqlProofSchemaError, match=rf"missing required column\(s\) {missing}"):
+        seed_test_users_directly(db, count=1)
+    assert db.executes == []
+
+
+def test_seed_test_users_directly_errors_on_unfillable_not_null_column() -> None:
+    db = FakeAuthUsersClient(
+        columns=[
+            *STUB_AUTH_USERS_COLUMNS,
+            _column("display_name", nullable=False),
+            _column("created_at", nullable=False, default="now()"),
+            _column("seq", nullable=False, identity=True),
+            _column("lower_email", nullable=False, generated=True),
+        ]
+    )
+    with pytest.raises(SqlProofSchemaError) as excinfo:
+        seed_test_users_directly(db, count=1)
+    message = str(excinfo.value)
+    assert "display_name" in message
+    assert "created_at" not in message
+    assert "seq" not in message
+    assert "lower_email" not in message
+    assert "`proof`" in message
+    assert "sqlproof.pytest_plugin" in message
+    assert db.executes == []
 
 
 def test_seed_supabase_test_users_replaces_test_invalid_users(monkeypatch) -> None:

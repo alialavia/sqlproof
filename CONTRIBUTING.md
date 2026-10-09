@@ -65,6 +65,13 @@ uv run mypy src/sqlproof/
 
 CI runs all three; fix any reported issues before opening a PR.
 
+## Dependency licenses
+
+CI fails if a new dependency uses a license outside the project's
+allowlist (permissive licenses, plus MPL-2.0 and LGPL-3.0; no GPL or
+AGPL). See [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) for the
+policy, the known exceptions and how to run the check locally.
+
 ## Commit and PR title convention
 
 sqlproof uses [Conventional Commits](https://www.conventionalcommits.org/)
@@ -302,6 +309,7 @@ following on `main` in GitHub repo settings:
 - **Require status checks to pass before merging:**
   - `python (3.11)`, `python (3.12)`, `python (3.13)`
   - `website`
+  - `licenses` (dependency license check)
   - `pr-title` (the PR title linter)
 - **Require branches to be up to date before merging.**
 - **Require linear history.**

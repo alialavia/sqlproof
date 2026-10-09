@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Generator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
@@ -12,7 +13,12 @@ from hypothesis.strategies import SearchStrategy
 from psycopg.rows import dict_row
 from psycopg.types.json import Json, Jsonb
 
-from sqlproof.client import InMemorySqlProofClient, PsycopgSqlProofClient, SqlProofClient
+from sqlproof.client import (
+    InMemorySqlProofClient,
+    PsycopgSqlProofClient,
+    SqlProofClient,
+    normalize_identifier,
+)
 from sqlproof.config import ExternalSeed, ExternalTableSpec, SqlProofConfig
 from sqlproof.exceptions import SqlProofPropertyFailure, SqlProofUsageError
 from sqlproof.generators.graph import ColumnOverrides, Dataset, SizeSpec, dataset_strategy
@@ -117,10 +123,20 @@ class SqlProof:
         sizes: Mapping[str, SizeSpec],
         columns: ColumnOverrides | None,
     ) -> SearchStrategy[Dataset]:
+        # An external table named in `sizes` (e.g. `{"auth.users": 2}`) sets
+        # how many of its sampled rows this dataset uses for FK draws, and
+        # those rows are returned under that key so a test can pick, say, a
+        # non-owner. External tables left out of `sizes` stay FK-only.
+        external_tables = self.config.external_tables or {}
+        external_sizes = {name: size for name, size in sizes.items() if name in external_tables}
+
         @st.composite
         def dataset(draw: st.DrawFn) -> Dataset:
-            external_parent_rows = self._external_parent_rows(draw=draw)
-            return draw(
+            external_parent_rows = self._external_parent_rows(
+                draw=draw,
+                size_overrides=external_sizes,
+            )
+            generated = draw(
                 dataset_strategy(
                     self.schema_info,
                     sizes=sizes,
@@ -128,6 +144,9 @@ class SqlProof:
                     columns=columns,
                 )
             )
+            for name in external_sizes:
+                generated[name] = [dict(row) for row in external_parent_rows[name]]
+            return generated
 
         return dataset()
 
@@ -209,18 +228,41 @@ class SqlProof:
         seed: int | None = None,
         timeout_ms: int = 5000,
     ) -> None:
+        """Assert that ``query`` returns no rows (or some rows) on every dataset.
+
+        Each run draws a dataset, loads it through ``client_for_dataset``
+        (the same path ``check()`` uses, so with a database connection the
+        rows are INSERTed inside a savepoint that is rolled back afterwards)
+        and executes ``query`` against it. With ``expect_empty=True`` the
+        invariant fails when the query returns any row; with
+        ``expect_empty=False`` it fails when the query returns none.
+
+        Errors raised while executing ``query`` (unknown table, syntax
+        error, ...) propagate unchanged: a query that cannot run is never
+        reported as a passing invariant.
+
+        Without a database connection (``from_schema_file`` and no DSN)
+        there is nothing to execute SQL on, so only a plain
+        ``SELECT <columns> FROM <table>`` -- no WHERE, JOIN, GROUP BY,
+        expressions, etc. -- over a table in the schema is accepted. Any
+        other query raises ``SqlProofUsageError`` rather than being
+        evaluated with its predicates silently ignored.
+        """
         del seed, timeout_ms
+        if self._db_manager is None:
+            _require_in_memory_evaluable(query, self.schema_info)
         strategy = self.dataset_strategy(sizes=sizes)
         for run_index in range(runs):
-            client = InMemorySqlProofClient(draw_example(strategy))
-            rows = client.query(query)
+            dataset = draw_example(strategy)
+            with self.client_for_dataset(dataset) as client:
+                rows = client.query(query)
             failed = bool(rows) if expect_empty else not rows
             if failed:
                 payload = {
                     "property_name": name,
                     "runs": run_index + 1,
                     "row_context": {},
-                    "dataset": client.get_generated_data(),
+                    "dataset": dataset,
                     "schema_fingerprint": self.schema_fingerprint,
                 }
                 raise SqlProofPropertyFailure(
@@ -265,6 +307,7 @@ class SqlProof:
         self,
         *,
         draw: st.DrawFn | None = None,
+        size_overrides: Mapping[str, SizeSpec] | None = None,
     ) -> dict[str, list[dict[str, Any]]]:
         if not self.config.external_tables:
             return {}
@@ -284,9 +327,75 @@ class SqlProof:
                 client,
                 draw=draw,
                 sample_cache=self._external_sample_cache,
+                size_overrides=size_overrides,
             )
         finally:
             connection.close()
+
+
+_IDENTIFIER = r'(?:[A-Za-z_][A-Za-z0-9_$]*|"(?:[^"]|"")+")'
+_PLAIN_SELECT = re.compile(
+    rf"""
+    \A\s*SELECT\s+
+    (?P<columns>\*|{_IDENTIFIER}(?:\s*\.\s*{_IDENTIFIER})?
+        (?:\s*,\s*{_IDENTIFIER}(?:\s*\.\s*{_IDENTIFIER})?)*)
+    \s+FROM\s+
+    (?P<table>{_IDENTIFIER})
+    \s*;?\s*\Z
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+_IDENTIFIER_LIST_ITEM = re.compile(
+    rf"(?:({_IDENTIFIER})\s*\.\s*)?({_IDENTIFIER})(?:\s*,|\s*\Z)",
+)
+
+
+def _require_in_memory_evaluable(query: str, schema_info: SchemaInfo) -> None:
+    """Refuse invariant queries the in-memory client cannot evaluate faithfully.
+
+    ``InMemorySqlProofClient.query`` only understands the projection and
+    the table name of a ``SELECT``; it would silently ignore a WHERE
+    clause, JOINs, aggregates and so on, turning the invariant into a
+    check of "does the table have rows". See #112.
+    """
+    hint = (
+        "invariant() without a database connection can only evaluate a plain "
+        "'SELECT <columns> FROM <table>' query (no WHERE, JOIN, GROUP BY, "
+        "expressions, etc.). Use SqlProof.from_connection_string(...) (or set "
+        "connection_string) so the query runs on a real Postgres database."
+    )
+    match = _PLAIN_SELECT.match(query)
+    if match is None:
+        msg = f"Cannot evaluate invariant query {query!r} in memory. {hint}"
+        raise SqlProofUsageError(msg)
+    table_name = normalize_identifier(match.group("table"))
+    table = next((t for t in schema_info.tables if t.name == table_name), None)
+    if table is None:
+        msg = (
+            f"Invariant query {query!r} references table {table_name!r}, which is "
+            f"not in the schema. {hint}"
+        )
+        raise SqlProofUsageError(msg)
+    columns_sql = match.group("columns")
+    if columns_sql == "*":
+        return
+    known_columns = {column.name for column in table.columns}
+    for selected in _IDENTIFIER_LIST_ITEM.findall(columns_sql):
+        qualifier, column = selected
+        if qualifier and normalize_identifier(qualifier) != table_name:
+            msg = (
+                f"Invariant query {query!r} qualifies a column with "
+                f"{normalize_identifier(qualifier)!r}, not the selected table "
+                f"{table_name!r}. {hint}"
+            )
+            raise SqlProofUsageError(msg)
+        if normalize_identifier(column) not in known_columns:
+            msg = (
+                f"Invariant query {query!r} selects column "
+                f"{normalize_identifier(column)!r}, which table {table_name!r} "
+                f"does not have. {hint}"
+            )
+            raise SqlProofUsageError(msg)
 
 
 def _insert_dataset(
@@ -427,10 +536,21 @@ def _external_parent_rows(
     *,
     draw: st.DrawFn | None = None,
     sample_cache: dict[str, list[object]] | None = None,
+    size_overrides: Mapping[str, SizeSpec] | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
+    """Seed and sample each external table's parent rows.
+
+    ``size_overrides`` maps a table to a requested row count (from the
+    caller's ``sizes``). It replaces the spec's ``seed_count``, and a
+    sample smaller than the request raises instead of silently
+    returning fewer rows.
+    """
+    size_overrides = size_overrides or {}
     rows_by_table: dict[str, list[dict[str, Any]]] = {}
     for table_name, spec in specs.items():
-        seed_count = _draw_seed_count(spec.seed_count, draw=draw)
+        requested = table_name in size_overrides
+        size = size_overrides[table_name] if requested else spec.seed_count
+        seed_count = _draw_seed_count(size, draw=draw)
         if spec.seed is not None:
             _call_external_seed(spec.seed, client, seed_count)
         sampled_values = _sample_external_values(
@@ -440,6 +560,12 @@ def _external_parent_rows(
             sample_cache=sample_cache,
         )
         if seed_count is not None:
+            if requested and len(sampled_values) < seed_count:
+                msg = (
+                    f"sizes[{table_name!r}] asks for {seed_count} rows, but the external "
+                    f"table's sample returned only {len(sampled_values)}."
+                )
+                raise SqlProofUsageError(msg)
             sampled_values = sampled_values[:seed_count]
         rows = [{spec.primary_key: value} for value in sampled_values]
         rows_by_table[table_name] = rows

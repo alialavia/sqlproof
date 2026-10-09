@@ -58,6 +58,23 @@ jobs:
           # and add as repo secret CODECOV_TOKEN.
           token: ${{ secrets.CODECOV_TOKEN }}
 
+  licenses:
+    # Fails when a dependency in uv.lock or website/package-lock.json uses a
+    # license outside this allowlist (permissive licenses, plus MPL-2.0 and
+    # LGPL-3.0, which are fine to depend on from MIT code). Vulnerabilities
+    # are not checked here. Policy and exceptions: THIRD_PARTY_LICENSES.md
+    # and .github/osv-scanner-licenses.toml.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: google/osv-scanner-action/osv-scanner-action@v2.6.0
+        with:
+          scan-args: |-
+            --config=.github/osv-scanner-licenses.toml
+            --licenses=MIT,0BSD,ISC,BSD-2-Clause,BSD-3-Clause,Apache-2.0,PSF-2.0,Python-2.0,BlueOak-1.0.0,CC0-1.0,MPL-2.0,LGPL-3.0-only,LGPL-3.0-or-later
+            --lockfile=uv.lock
+            --lockfile=website/package-lock.json
+
   website:
     runs-on: ubuntu-latest
     steps:

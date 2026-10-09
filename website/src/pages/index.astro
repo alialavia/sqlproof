@@ -8,6 +8,14 @@ const docsBase = `${base}getting-started/`;
 const apiBase = `${base}api/sqlproof-class/`;
 const examplesBase = `${base}examples/orders/`;
 const githubUrl = 'https://github.com/alialavia/sqlproof';
+const agentsUrl = `${githubUrl}/blob/main/AGENTS.md`;
+const supabaseGuide = `${base}guides/supabase/`;
+const llmsTxt = `${base}llms.txt`;
+const inboxExample = `${base}examples/inbox/`;
+const siteUrl = 'https://sqlproof.com/';
+const pageTitle = 'SqlProof: catch the SQL bugs your agent wrote';
+const pageDescription =
+  'SqlProof generates hundreds of valid test datasets for your Postgres or Supabase app, runs your queries as different users, and finds the one that breaks it.';
 
 // PostHog is configured in astro.config.mjs for Starlight pages; this
 // custom landing page builds its own <head>, so emit the same snippet
@@ -23,16 +31,21 @@ const posthogScript = posthogScriptContent({
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>SqlProof — Property-based testing for PostgreSQL</title>
-    <meta name="description" content="Automatically generate valid test data that respects your schema constraints, then find the minimal counterexample when your queries break." />
+    <title>{pageTitle}</title>
+    <meta name="description" content={pageDescription} />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content={siteUrl} />
+    <meta property="og:title" content={pageTitle} />
+    <meta property="og:description" content={pageDescription} />
     <link rel="icon" type="image/svg+xml" href={`${base}favicon.svg`} />
+    <link rel="alternate" type="text/plain" title="llms.txt" href={llmsTxt} />
     {posthogScript && <script set:html={posthogScript} />}
     <style>
       *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
       html { scroll-behavior: smooth; }
       body {
-        background: #0d1f12;
-        color: #f0fdf4;
+        background: #0e0f0c;
+        color: #f4f1ea;
         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
         line-height: 1.6;
       }
@@ -53,57 +66,191 @@ const posthogScript = posthogScriptContent({
     </nav>
 
     <!-- Hero -->
-    <div class="sp-hero">
-      <h1>Find SQL bugs<br />before your <span>users</span> do</h1>
-      <p>
-        Property-based testing for PostgreSQL. Generates random valid datasets
-        that respect your schema — then tries to break your queries.
+    <div class="sp-hero sp-hero-split">
+      <div class="sp-hero-copy">
+        <div class="sp-section-label">Find SQL bugs before your users do</div>
+        <h1>Catch the SQL bugs <span>your agent</span> wrote.</h1>
+        <p>
+          SqlProof generates hundreds of valid test datasets for your Postgres or
+          Supabase app, runs your queries as different users, and finds the one
+          that breaks it.
+        </p>
+        <div class="sp-chips">
+          <span class="sp-badge">Leaky RLS policies</span>
+          <span class="sp-badge">Wrong query results</span>
+          <span class="sp-badge">Broken RPCs &amp; triggers</span>
+          <span class="sp-badge">Migrations that change results</span>
+        </div>
+        <div class="sp-install-row">
+          <div class="sp-install-group">
+            <div class="sp-install-label">Install</div>
+            <div class="sp-install">
+              <span class="prompt">$</span>
+              <span>pip install sqlproof</span>
+            </div>
+          </div>
+          <div class="sp-install-group">
+            <div class="sp-install-label">Or ask your coding agent</div>
+            <div class="sp-install">
+              <span class="prompt">&gt;</span>
+              <span>test and fix my RLS and queries with sqlproof.com</span>
+            </div>
+          </div>
+        </div>
+        <div class="sp-install-group">
+          <div class="sp-install-label">Claude Code plugins</div>
+          <div class="sp-install sp-install-agent">
+            <span><span class="prompt">&gt;</span> /plugin install alialavia/pbt-skills</span>
+            <span><span class="prompt">&gt;</span> /plugin install alialavia/sqlproof-skills</span>
+          </div>
+          <div class="sp-install-note">
+            Cursor and other agents: add <a href={agentsUrl}>AGENTS.md</a> to your repo,
+            or point them at <a href={llmsTxt}>/llms.txt</a>.
+          </div>
+        </div>
+      </div>
+
+      <div class="sp-code-block sp-hero-terminal">
+        <div class="sp-code-header">
+          <div class="sp-code-dot" style="background:#ff5f57"></div>
+          <div class="sp-code-dot" style="background:#febc2e"></div>
+          <div class="sp-code-dot" style="background:#28c840"></div>
+          <span class="sp-code-filename">pytest output (trimmed)</span>
+        </div>
+        <pre class="sp-code-body"><span class="sp-fn">$</span> pytest tests/test_rls_projects.py
+
+<span class="sp-num">AssertionError:</span> user db8a6d46-… can read another
+user's row via project_summaries:
+  &#123;'id': '00000000-…-000000000001',
+   'user_id': 'b51c2c58-…'&#125;
+
+Falsifying example: test_users_only_see_their_own_rows(…)
+Draw 1: &#123;'projects': [&#123;'id': '00000000-…-000000000001',
+          'user_id': 'b51c2c58-…', 'name': ''&#125;]&#125;
+
+<span class="sp-num">FAILED</span> test_users_only_see_their_own_rows
+<span class="sp-num">1 failed</span> in 5.07s
+
+<span class="sp-cm"># user db8a6d46 reads a row owned by b51c2c58 through</span>
+<span class="sp-cm"># the project_summaries view. The projects table was fine.</span>
+<span class="sp-cm"># Shrunk to the smallest case: 1 project.</span></pre>
+      </div>
+    </div>
+
+    <!-- Proof line -->
+    <p class="sp-proof-line">
+      Catches all 10 bugs planted in a multi-tenant Supabase app: RLS leaks, RPCs,
+      triggers and queries. <a href={inboxExample}>See the example →</a>
+    </p>
+
+    <hr class="sp-divider" />
+
+    <!-- The problem -->
+    <div class="sp-section">
+      <div class="sp-section-label">// the problem</div>
+      <h2>Your agent wrote the SQL.<br />Did anyone check who can see what?</h2>
+      <p class="sp-lead">
+        Coding agents write RLS policies, views, RPCs and migrations fast, and nobody
+        reads them closely. The bugs that matter, like one user reading another user's
+        rows or a report that quietly drops a row, don't show up in happy-path tests
+        with one hand-made user. SqlProof generates hundreds of valid datasets, runs
+        your queries as each test user, and finds the one that breaks your rules.
       </p>
-      <div class="sp-install">
-        <span class="prompt">$</span>
-        <span>pip install sqlproof</span>
-      </div>
-      <div class="sp-hero-buttons">
-        <a href={docsBase} class="sp-btn-primary">Get Started →</a>
-        <a href={githubUrl} target="_blank" rel="noopener" class="sp-btn-secondary">View on GitHub</a>
-      </div>
     </div>
 
     <hr class="sp-divider" />
 
-    <!-- Why SqlProof -->
-    <div class="sp-section">
-      <div class="sp-section-label">// why sqlproof</div>
-      <h2>Your queries work on your fixtures.<br />Do they work on real data?</h2>
+    <!-- Supabase -->
+    <div class="sp-code-section">
+      <div class="sp-section-label">// using with supabase</div>
+      <h2 style="font-size:32px;font-weight:700;color:var(--sp-text);">Prove your RLS policies don't leak</h2>
       <p class="sp-lead">
-        Hand-crafted test data misses edge cases. SqlProof generates thousands of valid
-        random datasets and finds the one that breaks your invariants.
+        <code>as_rls_user</code> sets the JWT claims so <code>auth.uid()</code> resolves to the user,
+        and switches to the <code>authenticated</code> role so policies actually apply. This test
+        checks that every row a user can read, through a table and a view, is theirs.
       </p>
-      <div class="sp-why-grid">
-        <div class="sp-why-card">
-          <h3>Schema-aware generation</h3>
-          <p>Respects foreign keys, CHECK constraints, UNIQUE, NOT NULL, and enum types automatically. No invalid data, no constraint violations.</p>
+      <div class="sp-code-block">
+        <div class="sp-code-header">
+          <div class="sp-code-dot" style="background:#ff5f57"></div>
+          <div class="sp-code-dot" style="background:#febc2e"></div>
+          <div class="sp-code-dot" style="background:#28c840"></div>
+          <span class="sp-code-filename">tests/test_rls_projects.py</span>
         </div>
-        <div class="sp-why-card">
-          <h3>Minimal counterexamples</h3>
-          <p>When a property fails, Hypothesis shrinks the dataset to the smallest possible example — so you fix the bug, not hunt for it.</p>
-        </div>
-        <div class="sp-why-card">
-          <h3>Zero infrastructure</h3>
-          <p>Spins up a disposable Postgres via testcontainers. No external DB needed. Each run gets its own isolated schema — fast and clean.</p>
-        </div>
-        <div class="sp-why-card">
-          <h3>Works with your test runner</h3>
-          <p>Drop it into pytest. Decorate a test with <code>@sqlproof(...)</code> or call <code>proof.check()</code> directly. No new runner to learn.</p>
-        </div>
+        <pre class="sp-code-body"><span class="sp-kw">from</span> hypothesis <span class="sp-kw">import</span> given, strategies <span class="sp-kw">as</span> st
+<span class="sp-kw">from</span> sqlproof.contrib.supabase <span class="sp-kw">import</span> as_rls_user
+
+@<span class="sp-fn">given</span>(data=st.<span class="sp-fn">data</span>())
+<span class="sp-kw">def</span> <span class="sp-fn">test_users_only_see_their_own_rows</span>(supabase_proof, data):
+    dataset = data.<span class="sp-fn">draw</span>(supabase_proof.<span class="sp-fn">dataset_strategy</span>(
+        sizes=&#123;<span class="sp-str">"projects"</span>: st.<span class="sp-fn">integers</span>(min_value=<span class="sp-num">1</span>, max_value=<span class="sp-num">6</span>)&#125;,
+    ))
+    <span class="sp-kw">with</span> supabase_proof.<span class="sp-fn">client_for_dataset</span>(dataset) <span class="sp-kw">as</span> db:
+        users = db.<span class="sp-fn">query</span>(<span class="sp-str">"SELECT id::text FROM auth.users"</span>)
+        <span class="sp-kw">for</span> user <span class="sp-kw">in</span> users:
+            <span class="sp-kw">for</span> source <span class="sp-kw">in</span> (<span class="sp-str">"projects"</span>, <span class="sp-str">"project_summaries"</span>):  <span class="sp-cm"># a table and a view</span>
+                <span class="sp-kw">with</span> <span class="sp-fn">as_rls_user</span>(db, user[<span class="sp-str">"id"</span>]):
+                    rows = db.<span class="sp-fn">query</span>(<span class="sp-str">f"SELECT id::text, user_id::text FROM &#123;source&#125;"</span>)
+                leaked = [r <span class="sp-kw">for</span> r <span class="sp-kw">in</span> rows <span class="sp-kw">if</span> r[<span class="sp-str">"user_id"</span>] != user[<span class="sp-str">"id"</span>]]
+                <span class="sp-kw">assert not</span> leaked, (
+                    <span class="sp-str">f"user &#123;user['id']&#125; can read another user's row via &#123;source&#125;: &#123;leaked[0]&#125;"</span>
+                )</pre>
       </div>
+      <div class="sp-code-block">
+        <div class="sp-code-header">
+          <div class="sp-code-dot" style="background:#ff5f57"></div>
+          <div class="sp-code-dot" style="background:#febc2e"></div>
+          <div class="sp-code-dot" style="background:#28c840"></div>
+          <span class="sp-code-filename">pytest output, view created without security_invoker (trimmed)</span>
+        </div>
+        <pre class="sp-code-body"><span class="sp-num">E   AssertionError:</span> user db8a6d46-6d97-42c0-8251-c65688ff061d can read another user's row via project_summaries: &#123;'id': '00000000-0000-0000-0000-000000000001', 'user_id': 'b51c2c58-9898-4d69-a148-82525e2556dd'&#125;
+E   Falsifying example: test_users_only_see_their_own_rows(
+E       supabase_proof=&lt;sqlproof.core.SqlProof object at 0x7f6961573490&gt;,
+E       data=data(...),
+E   )
+E   Draw 1: &#123;'projects': [&#123;'id': '00000000-0000-0000-0000-000000000001',
+E      'user_id': 'b51c2c58-9898-4d69-a148-82525e2556dd',
+E      'name': ''&#125;]&#125;
+
+<span class="sp-num">FAILED</span> tests/test_rls_projects.py::test_users_only_see_their_own_rows - Asser...
+<span class="sp-num">1 failed</span> in 5.07s
+
+<span class="sp-cm"># After ALTER VIEW project_summaries SET (security_invoker = true): 1 passed</span></pre>
+      </div>
+      <p class="sp-code-footnote">
+        <code>supabase_proof</code> ships with the pytest plugin and seeds a test pool of
+        <code>auth.users</code>. Views must be created <code>WITH (security_invoker = true)</code>
+        or they bypass the table's RLS. More in <a href={supabaseGuide}>Testing Supabase apps</a>.
+      </p>
     </div>
 
     <!-- How it works -->
     <div class="sp-how-section">
       <div class="sp-how-inner">
         <div class="sp-section-label">// how it works</div>
-        <h2 style="font-size:32px;font-weight:700;color:#f0fdf4;margin-bottom:0;">Four steps, zero boilerplate</h2>
+        <h2 style="font-size:32px;font-weight:700;color:var(--sp-text);margin-bottom:16px;">Property-based testing for your database</h2>
+        <p class="sp-lead sp-how-lead">
+          Instead of one fixture and one expected answer, you state a rule that must
+          always hold. SqlProof generates valid datasets with Hypothesis and tries to
+          break it.
+        </p>
+        <div class="sp-why-grid">
+          <div class="sp-why-card">
+            <h3>Schema-aware generation</h3>
+            <p>Respects foreign keys, CHECK constraints, UNIQUE, NOT NULL, and enum types automatically. No invalid data, no constraint violations.</p>
+          </div>
+          <div class="sp-why-card">
+            <h3>Minimal counterexamples</h3>
+            <p>When a rule breaks, Hypothesis shrinks the dataset to the smallest one that still fails, like the single project above, so you fix the bug instead of hunting for it.</p>
+          </div>
+          <div class="sp-why-card">
+            <h3>No test infrastructure to write</h3>
+            <p>Point it at your local Supabase with one environment variable, or let testcontainers start a throwaway Postgres. Each test runs in a savepoint that rolls back.</p>
+          </div>
+          <div class="sp-why-card">
+            <h3>Works with your test runner</h3>
+            <p>Drop it into pytest. Decorate a test with <code>@sqlproof(...)</code> or call <code>proof.check()</code> directly. No new runner to learn.</p>
+          </div>
+        </div>
         <div class="sp-steps">
           <div class="sp-step">
             <div class="sp-step-num">1</div>
@@ -118,21 +265,21 @@ const posthogScript = posthogScriptContent({
           <div class="sp-step">
             <div class="sp-step-num">3</div>
             <h3>Insert &amp; run</h3>
-            <p>Inserts into an isolated Postgres schema, runs your property, then drops the schema. Repeats up to N times.</p>
+            <p>Inserts the rows inside a savepoint, runs your test, then rolls back. Repeats for each generated dataset.</p>
           </div>
           <div class="sp-step">
             <div class="sp-step-num">4</div>
             <h3>Report</h3>
-            <p>On failure, shrinks to the minimal counterexample and reports it with a reproducible seed.</p>
+            <p>On failure, shrinks to the smallest dataset that still fails and shows it to you.</p>
           </div>
         </div>
       </div>
     </div>
 
-    <!-- Code example -->
+    <!-- Plain Postgres example -->
     <div class="sp-code-section">
-      <div class="sp-section-label">// example</div>
-      <h2 style="font-size:32px;font-weight:700;color:#f0fdf4;">See it in action</h2>
+      <div class="sp-section-label">// plain postgres</div>
+      <h2 style="font-size:32px;font-weight:700;color:var(--sp-text);">Not on Supabase? Point it at a schema file</h2>
       <div class="sp-code-block">
         <div class="sp-code-header">
           <div class="sp-code-dot" style="background:#ff5f57"></div>
@@ -149,8 +296,36 @@ proof = SqlProof.<span class="sp-fn">from_schema_file</span>(<span class="sp-str
     rows = db.<span class="sp-fn">query</span>(<span class="sp-str">'SELECT total FROM orders'</span>)
     <span class="sp-kw">assert</span> all(row[<span class="sp-str">'total'</span>] >= <span class="sp-num">0</span> <span class="sp-kw">for</span> row <span class="sp-kw">in</span> rows)
 
-<span class="sp-cm"># On failure, SqlProof writes a minimal counterexample JSON.</span>
-<span class="sp-cm"># Reproduce with: pytest ... --sqlproof-seed=1708891234</span></pre>
+<span class="sp-cm"># On failure, SqlProof saves the shrunk counterexample under .sqlproof/failures/.</span>
+<span class="sp-cm"># Replay it with: sqlproof replay .sqlproof/failures/&lt;test&gt;.json</span></pre>
+      </div>
+    </div>
+
+    <hr class="sp-divider" />
+
+    <!-- Final call to action -->
+    <div class="sp-section sp-cta">
+      <div class="sp-section-label">// get started</div>
+      <h2>Find the bug before your users do.</h2>
+      <div class="sp-install-row">
+        <div class="sp-install-group">
+          <div class="sp-install-label">Install</div>
+          <div class="sp-install">
+            <span class="prompt">$</span>
+            <span>pip install sqlproof</span>
+          </div>
+        </div>
+        <div class="sp-install-group">
+          <div class="sp-install-label">Or ask your coding agent</div>
+          <div class="sp-install">
+            <span class="prompt">&gt;</span>
+            <span>test and fix my RLS and queries with sqlproof.com</span>
+          </div>
+        </div>
+      </div>
+      <div class="sp-hero-buttons">
+        <a href={docsBase} class="sp-btn-primary">Read the docs →</a>
+        <a href={githubUrl} target="_blank" rel="noopener" class="sp-btn-secondary">View on GitHub</a>
       </div>
     </div>
 
@@ -162,6 +337,8 @@ proof = SqlProof.<span class="sp-fn">from_schema_file</span>(<span class="sp-str
       </div>
       <div class="sp-footer-links">
         <a href={docsBase}>Docs</a>
+        <a href={llmsTxt}>llms.txt</a>
+        <a href={agentsUrl} target="_blank" rel="noopener">AGENTS.md</a>
         <a href={githubUrl} target="_blank" rel="noopener">GitHub</a>
         <a href="https://pypi.org/project/sqlproof/" target="_blank" rel="noopener">PyPI</a>
       </div>

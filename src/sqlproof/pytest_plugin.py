@@ -207,6 +207,11 @@ def supabase_proof(sqlproof_database_url: str) -> Generator[SqlProof]:
     projects with RLS / auth.users-keyed RPCs. For non-Supabase
     projects, use the plain `proof` / `db` instead.
 
+    Works with the full Supabase `auth.users` table and with minimal
+    stubs (at least `id` and `email`; any other NOT NULL columns need
+    defaults). For other shapes, override `proof` as shown in its
+    docstring.
+
     Requires the test connection to have INSERT privilege on
     `auth.users`. Local Supabase grants this; managed Supabase does
     not. For managed environments, run `seed_supabase_test_users` via

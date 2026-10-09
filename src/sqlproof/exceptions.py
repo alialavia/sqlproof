@@ -55,3 +55,12 @@ class SqlProofScaleError(SqlProofError):
     """A scale measurement could not produce the answer that was asked
     for -- an inconclusive fit, or no stable plan regime. Raised rather
     than returning None so the reason travels with the failure."""
+
+
+class UnhonoredCheckWarning(UserWarning):
+    """A CHECK constraint sqlproof cannot interpret at generation time.
+
+    Generated rows may violate it, in which case Postgres rejects the
+    INSERT with a CheckViolation. Supply a ``columns={...}`` override
+    for the affected column(s) to generate valid values explicitly.
+    """

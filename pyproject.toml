@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sqlproof"
-version = "0.11.0"
+version = "0.11.2"
 description = "Property-based testing for PostgreSQL schemas and SQL behavior. Pre-1.0; APIs may change between minor versions."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -109,6 +109,10 @@ packages = ["sqlproof"]
 source = ["src/sqlproof"]
 omit = [
   "src/sqlproof/__init__.py",
+  # __main__.py: only runs under `python -m sqlproof`, which is exercised
+  # via a subprocess in tests/unit/test_cli_smoke.py (not captured by
+  # pytest-cov). It just delegates to cli.main, itself omitted below.
+  "src/sqlproof/__main__.py",
   "src/sqlproof/_version.py",
   "src/sqlproof/cli.py",
   "src/sqlproof/coverage/plpgsql.py",

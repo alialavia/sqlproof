@@ -25,7 +25,7 @@ the project's working deprecation policy.
 
 ## 2. Point SqlProof at your database
 
-`pytest start` for Supabase brings up Postgres on
+`supabase start` brings up Postgres on
 `127.0.0.1:54322`. Tell SqlProof about it:
 
 ```bash
@@ -89,7 +89,7 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from sqlproof import SqlProof
-from sqlproof.contrib.supabase import as_supabase_user
+from sqlproof.contrib.supabase import as_rls_user
 
 
 @given(data=st.data(), event_count=st.integers(min_value=1, max_value=20))
@@ -101,7 +101,7 @@ def test_owner_sees_event_count_for_their_project(
     ))
     with supabase_proof.client_for_dataset(dataset) as db:
         project = dataset["projects"][0]
-        with as_supabase_user(db, project["user_id"]):
+        with as_rls_user(db, project["user_id"]):
             payload = db.scalar(
                 "SELECT get_dashboard_summary(%s::uuid)", project["id"]
             )
@@ -123,7 +123,7 @@ def test_non_member_sees_zero_event_count(
         non_member = next(
             u for u in dataset["auth.users"] if u["id"] != project["user_id"]
         )
-        with as_supabase_user(db, non_member["id"]):
+        with as_rls_user(db, non_member["id"]):
             payload = db.scalar(
                 "SELECT get_dashboard_summary(%s::uuid)", project["id"]
             )
@@ -204,7 +204,7 @@ Once you have the basics working:
 - **More test patterns:** [Five Property Patterns](/examples/property-patterns/) — aggregation invariants, idempotency, round-trip serialization.
 - **Function testing in depth:** [Testing SQL Functions](/examples/testing-sql-functions/) — a realistic pricing function with stacked discounts and country-specific rounding, tested two ways.
 - **The data generator:** [Realistic Data Generation](/examples/data-generation/) — schema-aware multi-table generation that respects FKs, CHECKs, UNIQUEs. Useful for seeding dev DBs too.
-- **Supabase-specific helpers:** [Testing Supabase Apps](/guides/supabase/) — `as_supabase_user`, direct-insert auth-user seeding, external table specs.
+- **Supabase-specific helpers:** [Testing Supabase Apps](/guides/supabase/) — `as_rls_user`, direct-insert auth-user seeding, external table specs.
 
 ## When you hit something the docs don't cover
 

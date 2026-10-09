@@ -72,24 +72,55 @@ proof = SqlProof.from_connection_string(
 Now any FK column referencing `auth.users(id)` in your generated dataset
 draws from the seeded test users.
 
-## Acting as a user (RLS testing)
-
-`as_supabase_user` is a context manager that sets `request.jwt.claims` for
-the current transaction so PostgREST/Supabase auth helpers (`auth.uid()`,
-`auth.jwt()`, `auth.role()`) resolve to the given user:
+To get at those users in a test, name the external table in `sizes`:
 
 ```python
-from sqlproof.contrib.supabase import as_supabase_user
+dataset = data.draw(proof.dataset_strategy(sizes={"projects": 1, "auth.users": 2}))
+owner_id = dataset["projects"][0]["user_id"]
+non_owner = next(u for u in dataset["auth.users"] if u["id"] != owner_id)
+```
 
-with as_supabase_user(db, user_id):
-    # Inside the block, RLS policies that check auth.uid() see `user_id`.
+The dataset then uses exactly that many sampled rows for every FK into the
+external table, and returns them under its key. Each row holds only the
+primary key. A count larger than the sample raises `SqlProofUsageError`;
+an external table left out of `sizes` has no key in the dataset.
+
+## Acting as a user (RLS testing)
+
+`as_rls_user` is a context manager that runs a block as a Supabase user
+**with RLS enforced**. It sets `request.jwt.claims` for the current
+transaction so PostgREST/Supabase auth helpers (`auth.uid()`, `auth.jwt()`,
+`auth.role()`) resolve to the given user, and runs
+`SET LOCAL ROLE authenticated` so policies actually apply:
+
+```python
+from sqlproof.contrib.supabase import as_rls_user
+
+with as_rls_user(db, user_id):
+    # Inside the block, queries run as `authenticated` and RLS policies
+    # that check auth.uid() see `user_id`.
     rows = db.query("SELECT * FROM projects")  # filtered by RLS
 ```
 
-Important properties:
+The role switch is the important part. The test connection is normally the
+`postgres` superuser, which has `BYPASSRLS`: setting JWT claims alone
+leaves every policy unevaluated, so "non-owner is blocked" tests fail on a
+correct schema and "owner can read" tests pass even with RLS disabled. Pass
+`role="anon"` (or another role) to test a different Postgres role.
+`SET LOCAL` needs a transaction, which `client_for_dataset` and the
+`supabase_db` fixture already provide.
 
-- **Restores prior claim on exit.** Nested `as_supabase_user` calls stack
-  and unwind correctly.
+### Claims only: `as_supabase_user`
+
+`as_supabase_user(db, user_id)` sets the same JWT claims but does **not**
+change role. Use it only when you need `auth.uid()` resolved without
+enforcing policies — for example, asserting what a function returns for a
+given caller. Don't use it to test RLS.
+
+Important properties (both helpers):
+
+- **Restores prior claim on exit.** Nested calls stack and unwind
+  correctly; `as_rls_user` also runs `RESET ROLE` on exit.
 - **Safe under exceptions.** Implemented with `try/finally`.
 - **Composable with `db.savepoint()`** — wrap whichever you want to take
   precedence first.
@@ -101,16 +132,17 @@ Important properties:
 Pass `extra_claims` to merge additional JWT fields:
 
 ```python
-with as_supabase_user(
+with as_rls_user(
     db, user_id,
-    role="service_role",  # or pass via extra_claims; explicit arg wins
     extra_claims={"app_metadata": {"plan": "pro"}},
 ):
     ...
 ```
 
-Order: `{"sub": user_id, "role": role, **extra_claims}`. Pass `role` in
-`extra_claims` to override the default `"authenticated"`.
+Order: `{"sub": user_id, "role": role, **extra_claims}`. For `as_rls_user`,
+`role=` sets both the `role` claim and the Postgres role it switches to
+(default `"authenticated"`); prefer `role=` over a `role` key in
+`extra_claims`, which would change only the claim.
 
 ## Stateful + RLS
 
@@ -125,10 +157,11 @@ covering `get_member_project_ids` / `get_editor_project_ids` against
 - `seed_test_users_directly` requires the DB connection to have INSERT
   privilege on `auth.users`. Local Supabase grants this by default; managed
   Supabase typically does not — use the admin-API path there.
-- Setting `request.jwt.claims` only changes what `auth.uid()` returns for
-  the transaction; it does not bypass RLS or change the connection's
-  Postgres role. Assume your tests run as the connection's role
-  (typically `postgres` or `service_role`) for non-RLS queries.
+- Setting `request.jwt.claims` (what `as_supabase_user` does) only
+  changes what `auth.uid()` returns for the transaction; it does not
+  change the connection's Postgres role, so a superuser connection still
+  bypasses RLS. Queries outside `as_rls_user` run as the connection's role
+  (typically `postgres` or `service_role`).
 - The `auth.users` schema can drift across Supabase versions. The helpers
   insert minimal columns (`id`, `aud`, `role`, `email`); if your test data
   needs richer auth metadata, insert directly with raw SQL.

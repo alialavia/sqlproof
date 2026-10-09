@@ -34,10 +34,13 @@ class InMemorySqlProofClient:
 
     def query(self, sql: str, *params: Any) -> list[dict[str, Any]]:
         del params
-        match = re.search(r"SELECT\s+(?P<columns>.*?)\s+FROM\s+(?P<table>\w+)", sql, re.I | re.S)
+        match = re.search(
+            r'SELECT\s+(?P<columns>.*?)\s+FROM\s+(?P<table>"(?:[^"]|"")+"|\w+)', sql, re.I | re.S
+        )
         if match is None:
             return []
         table = match.group("table")
+        table = normalize_identifier(table)
         rows = self._dataset.get(table, [])
         columns_sql = match.group("columns").strip()
         if columns_sql == "*":
@@ -130,7 +133,15 @@ def _clean_selected_column(sql: str) -> str:
         value = value.rsplit(".", 1)[1]
     if " AS " in value.upper():
         value = re.split(r"\s+AS\s+", value, flags=re.I)[-1]
-    return value.strip().strip('"')
+    return normalize_identifier(value)
+
+
+def normalize_identifier(identifier: str) -> str:
+    """Resolve an identifier the way Postgres does: unquoted folds to lower case."""
+    value = identifier.strip()
+    if len(value) >= 2 and value.startswith('"') and value.endswith('"'):
+        return value[1:-1].replace('""', '"')
+    return value.lower()
 
 
 def _map_row(row: dict[str, Any], model: type[T]) -> T:

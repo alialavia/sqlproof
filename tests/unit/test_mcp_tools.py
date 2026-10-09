@@ -166,6 +166,20 @@ def test_list_recipes_recipe_has_optional_template_field() -> None:
             assert isinstance(recipe["template"], str)
 
 
+def test_rls_recipe_template_enforces_rls_via_as_rls_user() -> None:
+    """Invariant: the RLS recipe switches role with `as_rls_user`.
+
+    Failure case (#111): the template used `as_supabase_user`, which only
+    sets JWT claims. The test connection is a BYPASSRLS superuser, so
+    queries never hit the policies and the generated test's outcome is
+    independent of the schema.
+    """
+    recipe = next(r for r in list_recipes() if r["name"] == "rls-policy-test")
+    template = recipe["template"]
+    assert "as_rls_user(" in template
+    assert "as_supabase_user" not in template
+
+
 # ---------------------------------------------------------------------------
 # generate_dataset
 # ---------------------------------------------------------------------------
