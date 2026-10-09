@@ -5,6 +5,13 @@ All notable changes to SqlProof will be documented here. The format is based on
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While SqlProof
 remains in `0.x`, minor versions may include breaking changes.
 
+## [0.12.0](https://github.com/alialavia/sqlproof/compare/v0.11.2...v0.12.0) (2026-10-09)
+
+
+### Added
+
+* **scale:** scale measurement for SQL functions (Phase 2) ([#110](https://github.com/alialavia/sqlproof/issues/110)) ([d05e444](https://github.com/alialavia/sqlproof/commit/d05e444d66e7c81ec00c261119ff9a7b1e75ca44))
+
 ## [0.11.2](https://github.com/alialavia/sqlproof/compare/v0.11.1...v0.11.2) (2026-10-02)
 
 
