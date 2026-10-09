@@ -288,20 +288,33 @@ def analyze(conn: psycopg.Connection, schema: SchemaInfo) -> None:
         conn.execute(sql.SQL(cast(LiteralString, f"ANALYZE {qualified}")))  # type: ignore[redundant-cast]
 
 
-def row_counts(conn: psycopg.Connection, schema: SchemaInfo) -> dict[str, int]:
+def row_counts(conn: psycopg.Connection, schema: SchemaInfo) -> dict[str, int | None]:
     """Rows currently in each modelled table, keyed by table name -- the
-    keys `sizes` uses.
+    keys `sizes` uses. `None` means the count could not be verified.
 
     `run_sweep` calls it before its first TRUNCATE, so it can refuse to
     empty tables holding rows it did not put there. Identifiers are
     quoted exactly as `truncate` and `analyze` quote them. The cursor
     always yields tuples, whatever row factory the connection uses.
+
+    Each count runs under `SET LOCAL row_security = off`. Row-level
+    security filters `count(*)` but not `TRUNCATE`, so a table whose
+    rows are all hidden from this role (FORCE ROW LEVEL SECURITY on its
+    owner, or a role holding TRUNCATE without BYPASSRLS) would otherwise
+    count as empty and then be wiped. With `row_security` off, Postgres
+    raises instead of filtering; that table is reported as `None`.
     """
-    counts: dict[str, int] = {}
+    counts: dict[str, int | None] = {}
     with conn.cursor(row_factory=tuple_row) as cur:
         for table in schema.tables:
             qualified = f"{_quote(table.schema)}.{_quote(table.name)}"
-            cur.execute(sql.SQL(cast(LiteralString, f"SELECT count(*) FROM {qualified}")))  # type: ignore[redundant-cast]
-            row = cur.fetchone()
+            try:
+                with conn.transaction():
+                    cur.execute("SET LOCAL row_security = off")
+                    cur.execute(sql.SQL(cast(LiteralString, f"SELECT count(*) FROM {qualified}")))  # type: ignore[redundant-cast]
+                    row = cur.fetchone()
+            except psycopg.errors.InsufficientPrivilege:
+                counts[table.name] = None
+                continue
             counts[table.name] = 0 if row is None else int(row[0])
     return counts

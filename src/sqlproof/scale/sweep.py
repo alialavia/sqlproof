@@ -178,15 +178,20 @@ def _validate(
 
 def _refuse_non_empty_tables(conn: psycopg.Connection, schema: SchemaInfo) -> None:
     counts = row_counts(conn, schema)
-    occupied = [
-        f"{table.qualified_name} ({counts[table.name]} rows)"
-        for table in schema.tables
-        if counts.get(table.name, 0) > 0
-    ]
+    occupied: list[str] = []
+    for table in schema.tables:
+        count = counts.get(table.name, 0)
+        if count is None:
+            occupied.append(
+                f"{table.qualified_name} (row-level security hides its rows "
+                "from this role, so it cannot be verified empty)"
+            )
+        elif count > 0:
+            occupied.append(f"{table.qualified_name} ({count} rows)")
     if occupied:
         msg = (
             "The sweep refused to start: it EMPTIES AND REPOPULATES every "
-            f"modelled table, and these already hold rows: {', '.join(occupied)}. "
+            f"modelled table, and these are not known to be empty: {', '.join(occupied)}. "
             "Nothing was truncated. Point the sweep at a dedicated test "
             "database, or pass truncate_existing=True to let it delete these "
             "rows."

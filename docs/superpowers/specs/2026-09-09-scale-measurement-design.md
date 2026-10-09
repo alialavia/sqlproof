@@ -418,7 +418,10 @@ reason and the raw points.
   it: the sweep runs the loader's own planning step before its first
   TRUNCATE and raises `SqlProofUsageError` carrying the loader's message.
 - **Tables that already hold rows** — refused, naming each, unless
-  `truncate_existing=True` (see "Data safety").
+  `truncate_existing=True` (see "Data safety"). The count runs under
+  `SET LOCAL row_security = off`, so a table whose rows row-level
+  security hides from the sweep's role is refused too, rather than
+  counted as empty and then truncated (follow-up 1).
 
 ## Testing strategy
 

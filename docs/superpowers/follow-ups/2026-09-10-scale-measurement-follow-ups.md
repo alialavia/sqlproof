@@ -23,7 +23,7 @@ Items 2 and 3 are the ones that decide whether `scale_analysis` can be advertise
 
 ## 1. Row-level security can hide rows from the sweep's emptiness check
 
-**Label:** `bug`. **When:** before merging #110.
+**Label:** `bug`. **When:** before merging #110. **Status:** fixed in #110, and reproduced live first: without the fix, both setups truncate the hidden rows and then fail on `COPY`.
 
 **Problem.** Before its first truncate, `run_sweep` refuses to touch non-empty tables unless `truncate_existing=True`. It decides "empty" with `load.row_counts`, which runs `count(*)` as the connection's role. Row-level security applies to that count but not to `TRUNCATE`. So a table whose rows are all hidden from that role looks empty and passes the check, and then every row is deleted. Two setups cause this:
 - a table with `FORCE ROW LEVEL SECURITY` (which applies to its owner);

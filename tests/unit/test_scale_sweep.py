@@ -45,7 +45,7 @@ def _install_db_stubs(
     probe_fn: Any,
     log: list[tuple[Any, ...]] | None = None,
     *,
-    counts: dict[str, int] | None = None,
+    counts: dict[str, int | None] | None = None,
     truncate_fn: Callable[[], None] | None = None,
 ) -> None:
     """Stub every database-touching name `sweep` imports. When `log` is
@@ -58,7 +58,7 @@ def _install_db_stubs(
     empty unless given); `truncate_fn`, when given, runs inside every
     truncate, so a test can make one fail."""
 
-    def _row_counts(conn: Any, schema: Any) -> dict[str, int]:
+    def _row_counts(conn: Any, schema: Any) -> dict[str, int | None]:
         if log is not None:
             log.append(("row_counts",))
         return {table.name: (counts or {}).get(table.name, 0) for table in schema.tables}
@@ -458,6 +458,23 @@ def test_tables_holding_rows_are_refused_and_nothing_is_truncated(
     assert "public.a (3 rows)" in message
     assert "public.b" not in message  # only the non-empty table is named
     assert "EMPTIES AND REPOPULATES" in message
+    assert "truncate_existing=True" in message
+    assert log == [("row_counts",)]
+
+
+def test_a_table_rls_hides_from_the_count_is_refused_and_nothing_is_truncated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`row_counts` reports None when row-level security would filter the
+    count: the table cannot be verified empty, and TRUNCATE ignores RLS,
+    so the sweep must refuse exactly as it does for a table with rows."""
+    log: list[tuple[Any, ...]] = []
+    _install_db_stubs(monkeypatch, _never_probe, log=log, counts={"a": None})
+    with pytest.raises(SqlProofUsageError) as exc_info:
+        run_sweep(object(), _schema("a", "b"), "fn", sizes={"a": 10, "b": 30})
+    message = str(exc_info.value)
+    assert "public.a (row-level security hides its rows" in message
+    assert "public.b" not in message
     assert "truncate_existing=True" in message
     assert log == [("row_counts",)]
 

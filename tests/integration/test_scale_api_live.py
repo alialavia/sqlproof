@@ -140,6 +140,62 @@ def test_a_modelled_table_holding_rows_is_refused_and_left_untouched(proof):
     assert _row_counts() == {"orgs": 3, "events": 0}
 
 
+RLS_ROLE = "sqlproof_scale_rls_test"
+
+
+@pytest.fixture
+def rls_role_dsn(proof):
+    """A non-superuser login role. Superusers bypass row-level security
+    even under FORCE, so only a plain role can see a table as empty
+    while TRUNCATE would still delete its rows."""
+    dsn = os.environ[DSN_ENV]
+    with psycopg.connect(dsn, autocommit=True) as connection:
+        connection.execute(f"DROP ROLE IF EXISTS {RLS_ROLE}")
+        connection.execute(f"CREATE ROLE {RLS_ROLE} LOGIN PASSWORD 'rls'")
+        try:
+            connection.execute(f"GRANT USAGE ON SCHEMA api_test TO {RLS_ROLE}")
+            yield psycopg.conninfo.make_conninfo(dsn, user=RLS_ROLE, password="rls")
+        finally:
+            connection.execute("DROP SCHEMA IF EXISTS api_test CASCADE")
+            connection.execute(f"DROP OWNED BY {RLS_ROLE}")
+            connection.execute(f"DROP ROLE IF EXISTS {RLS_ROLE}")
+
+
+@pytest.mark.parametrize("setup", ["force_rls_owner", "truncate_without_bypassrls"])
+def test_rows_hidden_by_rls_are_refused_and_left_untouched(rls_role_dsn, setup):
+    """Follow-up 1: RLS filters count(*) but not TRUNCATE. Each setup makes
+    the sweep's role see 0 rows in a table that holds 3: as the table's
+    owner under FORCE ROW LEVEL SECURITY, and as a role granted TRUNCATE
+    without BYPASSRLS. The sweep must refuse, and the rows must survive."""
+    _seed_three_orgs()
+    with psycopg.connect(os.environ[DSN_ENV], autocommit=True) as connection:
+        connection.execute("ALTER TABLE api_test.orgs ENABLE ROW LEVEL SECURITY")
+        if setup == "force_rls_owner":
+            connection.execute(f"ALTER TABLE api_test.orgs OWNER TO {RLS_ROLE}")
+            connection.execute(f"ALTER TABLE api_test.events OWNER TO {RLS_ROLE}")
+            connection.execute("ALTER TABLE api_test.orgs FORCE ROW LEVEL SECURITY")
+        else:
+            connection.execute(
+                f"GRANT SELECT, INSERT, TRUNCATE ON api_test.orgs, api_test.events TO {RLS_ROLE}"
+            )
+    with psycopg.connect(rls_role_dsn) as as_role:
+        visible = as_role.execute("SELECT count(*) FROM api_test.orgs").fetchone()
+    assert visible == (0,), "the setup must hide the rows from the sweep's role"
+
+    proof_as_role = SqlProof.from_config(
+        SqlProofConfig(connection_string=rls_role_dsn, schema="api_test")
+    )
+    with pytest.raises(SqlProofUsageError, match=r"api_test\.orgs \(row-level security"):
+        scale_analysis(
+            proof_as_role,
+            "api_test.events_for",
+            sizes={"orgs": 20, "events": 400},
+            args=[heaviest("api_test.orgs.id")],
+            artifact_dir=None,
+        )
+    assert _row_counts() == {"orgs": 3, "events": 0}
+
+
 def test_truncate_existing_runs_the_sweep_and_leaves_every_table_empty(proof):
     _seed_three_orgs()
     result = scale_analysis(
