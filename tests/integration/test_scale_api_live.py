@@ -153,7 +153,10 @@ def rls_role_dsn(proof):
         connection.execute(f"DROP ROLE IF EXISTS {RLS_ROLE}")
         connection.execute(f"CREATE ROLE {RLS_ROLE} LOGIN PASSWORD 'rls'")
         try:
-            connection.execute(f"GRANT USAGE ON SCHEMA api_test TO {RLS_ROLE}")
+            # CI's `postgres` is not a superuser (supabase/postgres), so it
+            # needs membership to hand tables to this role and to drop them.
+            connection.execute(f"GRANT {RLS_ROLE} TO CURRENT_USER")
+            connection.execute(f"GRANT USAGE, CREATE ON SCHEMA api_test TO {RLS_ROLE}")
             yield psycopg.conninfo.make_conninfo(dsn, user=RLS_ROLE, password="rls")
         finally:
             connection.execute("DROP SCHEMA IF EXISTS api_test CASCADE")
@@ -193,6 +196,11 @@ def test_rows_hidden_by_rls_are_refused_and_left_untouched(rls_role_dsn, setup):
             args=[heaviest("api_test.orgs.id")],
             artifact_dir=None,
         )
+    # Lift RLS before counting: CI's `postgres` is not a superuser, so
+    # the policy would hide the surviving rows from this check too.
+    with psycopg.connect(os.environ[DSN_ENV], autocommit=True) as connection:
+        connection.execute("ALTER TABLE api_test.orgs NO FORCE ROW LEVEL SECURITY")
+        connection.execute("ALTER TABLE api_test.orgs DISABLE ROW LEVEL SECURITY")
     assert _row_counts() == {"orgs": 3, "events": 0}
 
 
