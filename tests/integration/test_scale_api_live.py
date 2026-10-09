@@ -14,6 +14,7 @@ from itertools import pairwise
 
 import psycopg
 import pytest
+from psycopg import sql
 
 from sqlproof import SqlProof
 from sqlproof.config import SqlProofConfig
@@ -155,7 +156,13 @@ def rls_role_dsn(proof):
         try:
             # CI's `postgres` is not a superuser (supabase/postgres), so it
             # needs membership to hand tables to this role and to drop them.
-            connection.execute(f"GRANT {RLS_ROLE} TO CURRENT_USER")
+            # The grantee is named, not CURRENT_USER: supabase/postgres
+            # 15.8.1.040 segfaults on `GRANT <role> TO CURRENT_USER`.
+            connection.execute(
+                sql.SQL("GRANT {} TO {}").format(
+                    sql.Identifier(RLS_ROLE), sql.Identifier(connection.info.user)
+                )
+            )
             connection.execute(f"GRANT USAGE, CREATE ON SCHEMA api_test TO {RLS_ROLE}")
             yield psycopg.conninfo.make_conninfo(dsn, user=RLS_ROLE, password="rls")
         finally:
