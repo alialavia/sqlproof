@@ -121,6 +121,27 @@ def make_conninfo(dsn: str = "", **overrides: str) -> str:
     return " ".join(f"{key}='{_escape(value)}'" for key, value in parts.items())
 
 
+
+_SUPAVISOR_HOST = re.compile(r"(?:^|\.)pooler\.supabase\.com$", re.IGNORECASE)
+
+
+def with_user(dsn: str, user: str) -> str:
+    """`dsn` connecting as `user`, keeping a Supavisor tenant suffix.
+
+    Supabase's pooler (``*.pooler.supabase.com``) routes on the user name:
+    ``postgres.<project-ref>`` reaches role ``postgres`` of that project,
+    and a bare ``postgres`` is refused with ``ENOIDENTIFIER``. When the DSN
+    points at that pooler and its user carries a ``.<ref>`` suffix, the new
+    role gets the same suffix. Any other host is passed through unchanged,
+    since a dot is legal inside an ordinary role name.
+    """
+    params = conninfo_to_dict(dsn)
+    host = params.get("host", "")
+    current = params.get("user", "")
+    if "." in current and any(_SUPAVISOR_HOST.search(h.strip()) for h in host.split(",")):
+        user = f"{user}.{current.rsplit('.', 1)[1]}"
+    return make_conninfo(dsn, user=user)
+
 def _escape(value: str) -> str:
     return value.replace("\\", "\\\\").replace("'", "\\'")
 
