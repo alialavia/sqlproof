@@ -16,7 +16,7 @@ import pytest
 
 from sqlproof import SqlProof
 from sqlproof import _database as database
-from sqlproof._dsn import make_conninfo, quote_identifier
+from sqlproof._dsn import make_conninfo, quote_identifier, with_user
 from sqlproof.config import SqlProofConfig
 from sqlproof.exceptions import SqlProofUsageError
 from sqlproof.scale import heaviest, scale_analysis
@@ -165,7 +165,7 @@ def rls_role_dsn(proof):
                 )
             )
             connection.execute(f"GRANT USAGE, CREATE ON SCHEMA api_test TO {RLS_ROLE}")
-            yield make_conninfo(dsn, user=RLS_ROLE, password="rls")
+            yield make_conninfo(with_user(dsn, RLS_ROLE), password="rls")
         finally:
             connection.execute("DROP SCHEMA IF EXISTS api_test CASCADE")
             connection.execute(f"DROP OWNED BY {RLS_ROLE}")
