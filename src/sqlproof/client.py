@@ -113,9 +113,12 @@ class PostgresSqlProofClient:
         try:
             yield
         except BaseException:
+            # If the rollback itself fails, its error carries the caller's
+            # exception as direct __context__; no RELEASE is attempted on top.
             self.execute(f"ROLLBACK TO SAVEPOINT {name}")
+            self.execute(f"RELEASE SAVEPOINT {name}")
             raise
-        finally:
+        else:
             self.execute(f"RELEASE SAVEPOINT {name}")
 
     def get_generated_data(self) -> dict[str, list[dict[str, Any]]]:

@@ -21,7 +21,11 @@ RowFactory = Literal["dict", "tuple"]
 dict_row: RowFactory = "dict"
 tuple_row: RowFactory = "tuple"
 DatabaseError = pgdb.DatabaseError
+DataError = pgdb.DataError
 Error = pgdb.Error
+# PostgreSQL's own SQLSTATE for a NUL byte in text (character_not_in_repertoire),
+# which is what COPY reports; raising it client-side keeps both paths alike.
+NUL_SQLSTATE = "22021"
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,10 +39,38 @@ class Json:
 Jsonb = Json
 
 
+def _reject_nul(text: str) -> str:
+    """PyGreSQL inlines parameters into the SQL text, where a NUL byte ends
+    the C string early and silently truncates the value. Refuse it up front,
+    on every write path, with the error PostgreSQL itself gives for COPY."""
+    if "\x00" in text:
+        error = DataError("PostgreSQL text cannot contain NUL (\\x00); the value was not sent.")
+        error.sqlstate = NUL_SQLSTATE
+        raise error
+    return text
+
+
+def _json_without_nul(value: Json) -> str:
+    pending: list[Any] = [value.obj]
+    while pending:
+        current = pending.pop()
+        if isinstance(current, str):
+            _reject_nul(current)
+        elif isinstance(current, dict):
+            mapping = cast(dict[Any, Any], current)  # type: ignore[redundant-cast]
+            pending.extend(mapping.keys())
+            pending.extend(mapping.values())
+        elif isinstance(current, list | tuple):
+            pending.extend(cast(Sequence[Any], current))
+    return json.dumps(value.obj)
+
+
 def _adapt(value: Any) -> Any:
+    if isinstance(value, str):
+        return _reject_nul(value)
     if isinstance(value, Json):
         # PyGreSQL treats strings passed to Json as already serialized.
-        return pgdb.Json(json.dumps(value.obj))
+        return pgdb.Json(_json_without_nul(value))
     if isinstance(value, bytes):
         return pgdb.Binary(value)
     if isinstance(value, Range) or (isinstance(value, Decimal) and not value.is_finite()):
@@ -91,8 +123,10 @@ def _is_numeric_or_boolean_array(value: list[Any]) -> bool:
 
 
 def _text(value: Any) -> str:
+    if isinstance(value, str):
+        return _reject_nul(value)
     if isinstance(value, Json):
-        return json.dumps(value.obj)
+        return _json_without_nul(value)
     if isinstance(value, bytes):
         return "\\x" + value.hex()
     if isinstance(value, timedelta):
@@ -293,17 +327,20 @@ class Connection:
         try:
             yield
         except BaseException:
+            # Undo, then re-raise the caller's exception. If the undo itself
+            # fails (connection gone), that error propagates with the caller's
+            # exception as its direct __context__, and nothing else is tried.
             if nested:
                 self.execute("ROLLBACK TO SAVEPOINT sqlproof_transaction").close()
+                self.execute("RELEASE SAVEPOINT sqlproof_transaction").close()
             else:
                 self.rollback()
             raise
         else:
-            if not nested:
-                self.commit()
-        finally:
             if nested:
                 self.execute("RELEASE SAVEPOINT sqlproof_transaction").close()
+            else:
+                self.commit()
 
     def __enter__(self) -> Self:
         return self
@@ -350,6 +387,18 @@ def connect(
         }
         for name, typecast in range_casts.items():
             cast(Any, connection.type_cache).set_typecast(name, typecast)
+        # PyGreSQL returns ordinary timestamptz values timezone-aware but
+        # 'infinity' naive; make infinity aware so it equals a tstzrange bound.
+        default_timestamptz = cast(Any, connection.type_cache).get_typecast("timestamptz")
+
+        def cast_timestamptz(value: str) -> Any:
+            if value == "infinity":
+                return datetime.max.replace(tzinfo=UTC)
+            if value == "-infinity":
+                return datetime.min.replace(tzinfo=UTC)
+            return default_timestamptz(value)
+
+        cast(Any, connection.type_cache).set_typecast("timestamptz", cast_timestamptz)
     except BaseException:
         native.close()
         raise

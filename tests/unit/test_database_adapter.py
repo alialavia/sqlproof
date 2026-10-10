@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 import pgdb
@@ -153,3 +154,53 @@ def test_the_public_database_module_exposes_the_adapter_surface_examples_use() -
     assert public.sqlstate is database.sqlstate
     assert public.Range is Range
     assert set(public.__all__) >= {"connect", "Connection", "DatabaseError", "Json", "sqlstate"}
+
+
+# --- NUL in text (GROK-09) --------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "a\x00b",
+        ["ok", "a\x00b"],
+        [["nested", "a\x00b"]],
+        ("field", "a\x00b"),
+        database.Json("a\x00b"),
+        database.Json({"k": ["a\x00b"]}),
+        database.Json({"a\x00b": 1}),
+    ],
+)
+def test_nul_is_refused_on_both_write_paths_before_anything_is_sent(value: object) -> None:
+    """PyGreSQL inlines parameters, so a NUL would silently truncate the value
+    instead of failing. Both the parameter and COPY encoders must refuse it
+    with PostgreSQL's own SQLSTATE for the condition."""
+    for encode in (database._adapt, database.copy_text):  # pyright: ignore[reportPrivateUsage]
+        with pytest.raises(database.DataError, match="NUL") as exc:
+            encode(value)
+        assert database.sqlstate(exc.value) == database.NUL_SQLSTATE
+
+
+def test_text_without_nul_still_passes_through_unchanged() -> None:
+    assert database._adapt("plain \\x00 text") == "plain \\x00 text"  # pyright: ignore[reportPrivateUsage]
+    assert database.copy_text("tab\there") == "tab\\there"
+
+
+# --- Infinite bounds write back as infinity (GROK-11) -----------------------
+
+
+@pytest.mark.parametrize(
+    ("rng", "literal"),
+    [
+        (Range(date(2026, 1, 1), date.max), '["2026-01-01",infinity)'),
+        (Range(date.min, date(2026, 1, 1)), '[-infinity,"2026-01-01")'),
+        (Range(datetime(2026, 1, 1), datetime.max), '["2026-01-01 00:00:00",infinity)'),
+        (
+            Range(datetime.min.replace(tzinfo=UTC), datetime.max.replace(tzinfo=UTC)),
+            "[-infinity,infinity)",
+        ),
+        (Range(date(2026, 1, 1), date(9999, 12, 30)), '["2026-01-01","9999-12-30")'),
+    ],
+)
+def test_sentinel_bounds_render_as_infinity_so_ranges_round_trip(rng: Range, literal: str) -> None:
+    assert str(rng) == literal

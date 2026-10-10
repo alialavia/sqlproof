@@ -75,6 +75,17 @@ def test_a_failed_nested_transaction_preserves_the_outer_transaction() -> None:
         assert conn.in_transaction, "the caller's transaction must stay open"
 
 
+def test_a_successful_nested_transaction_keeps_its_rows_and_the_outer_transaction() -> None:
+    with database.connect(os.environ["SQLPROOF_TEST_DATABASE_URL"]) as conn:
+        conn.execute("CREATE TEMPORARY TABLE transaction_rows (id int PRIMARY KEY)")
+        with conn.transaction():
+            conn.execute("INSERT INTO transaction_rows VALUES (1)")
+        assert conn.in_transaction, "releasing the savepoint must not end the outer transaction"
+        assert conn.execute("SELECT id FROM transaction_rows").fetchall() == [(1,)]
+        conn.rollback()
+        assert not conn.in_transaction
+
+
 def test_a_generation_error_leaves_copy_and_the_connection_untouched() -> None:
     def failing_rows():
         yield {"id": 1, "value": "first"}
@@ -120,6 +131,9 @@ def test_json_null_and_sql_null_remain_distinct() -> None:
         ("int4range", Range(empty=True)),
         ("int4range", Range(None, 5, "()")),
         ("int4range[]", [Range(1, 5), Range(empty=True), None]),
+        ("date", date(2024, 2, 29)),
+        ("timestamp", datetime(2024, 2, 29, 12, 30, 15, 250000)),
+        ("timestamptz", datetime(2024, 2, 29, 12, 30, 15, 250000, tzinfo=UTC)),
     ],
 )
 def test_parameters_and_copy_each_preserve_postgresql_values(sql_type, value) -> None:
@@ -453,3 +467,139 @@ def test_text_list_parameters_take_their_type_from_the_context() -> None:
         with pytest.raises(database.DatabaseError) as exc, conn.transaction():
             conn.execute("SELECT array_length(%s, 1)", (["a"],))
         assert database.sqlstate(exc.value) == "42804", "a datatype mismatch, not a crash"
+
+
+# --- NUL in text (GROK-09) --------------------------------------------------
+
+NUL_CASES = [
+    ("text", "ab\x00cd"),
+    ("text[]", ["ok", "ab\x00cd"]),
+    ("jsonb", database.Json({"k": "ab\x00cd"})),
+]
+
+
+@pytest.mark.parametrize(("sql_type", "value"), NUL_CASES)
+def test_nul_raises_the_same_error_on_insert_and_copy_and_stores_nothing(sql_type, value) -> None:
+    """psycopg raised DataError on both paths; the adapter must too, rather than
+    letting INSERT store the prefix before the NUL while COPY fails."""
+    with database.connect(os.environ["SQLPROOF_TEST_DATABASE_URL"]) as conn:
+        conn.execute(f"CREATE TEMPORARY TABLE nul_rows (value {sql_type})")
+        schema = parse_schema_sql(f"CREATE TABLE nul_rows (value {sql_type})", schema="pg_temp")
+        with pytest.raises(database.DataError) as insert_error:
+            conn.execute("INSERT INTO nul_rows VALUES (%s)", (value,))
+        with pytest.raises(database.DataError) as copy_error:
+            copy_table(conn, schema.tables[0], [{"value": value}], ["value"])
+        assert database.sqlstate(insert_error.value) == database.sqlstate(copy_error.value)
+        assert str(insert_error.value) == str(copy_error.value)
+        assert conn.execute("SELECT count(*) FROM nul_rows").fetchone() == (0,)
+        assert conn.in_transaction, "refusing a value must not disturb the transaction"
+
+
+# Roughly one character in four is NUL, so most examples hit the refusal path
+# and the rest check that ordinary text still round-trips on both paths.
+TEXT_WITH_NUL = st.text(
+    alphabet=st.one_of(
+        st.just("\x00"),
+        st.characters(blacklist_categories=("Cs",), blacklist_characters="\x00"),
+        st.characters(blacklist_categories=("Cs",), blacklist_characters="\x00"),
+        st.characters(blacklist_categories=("Cs",), blacklist_characters="\x00"),
+    ),
+    max_size=12,
+)
+
+
+@settings(max_examples=40, deadline=None)
+@given(value=TEXT_WITH_NUL)
+def test_text_either_round_trips_exactly_or_is_refused_never_truncated(value) -> None:
+    """Property: for any text, both write paths store exactly the text or
+    raise and store nothing. Oracle: PostgreSQL's stored value."""
+    with database.connect(os.environ["SQLPROOF_TEST_DATABASE_URL"]) as conn:
+        conn.execute("CREATE TEMPORARY TABLE nul_rows (id int, value text)")
+        schema = parse_schema_sql("CREATE TABLE nul_rows (id int, value text)", schema="pg_temp")
+        try:
+            conn.execute("INSERT INTO nul_rows VALUES (1, %s)", (value,))
+            copy_table(conn, schema.tables[0], [{"id": 2, "value": value}], ["id", "value"])
+        except database.DataError:
+            assert "\x00" in value, "only NUL may be refused"
+            assert conn.execute("SELECT count(*) FROM nul_rows").fetchone() == (0,)
+        else:
+            assert "\x00" not in value, "NUL must never be accepted"
+            stored = conn.execute("SELECT value FROM nul_rows ORDER BY id").fetchall()
+            assert stored == [(value,), (value,)]
+
+
+# --- Infinity survives read then write, scalars agree with ranges (GROK-11) --
+
+
+@pytest.mark.parametrize(
+    "literal",
+    [
+        "daterange('2026-01-01', 'infinity')",
+        "daterange('-infinity', '2026-01-01')",
+        "tsrange('2026-01-01', 'infinity')",
+        "tsrange('-infinity', 'infinity')",
+        "tstzrange('2026-01-01 00:00+00', 'infinity')",
+        "tstzrange('-infinity', '2026-01-01 00:00+00')",
+    ],
+)
+def test_an_infinite_range_read_and_written_back_is_still_the_same_range(literal) -> None:
+    range_type = literal.split("(")[0]
+    with database.connect(os.environ["SQLPROOF_TEST_DATABASE_URL"]) as conn:
+        (value,) = conn.execute(f"SELECT {literal}").fetchone()
+        assert conn.execute(f"SELECT %s::{range_type} = {literal}", (value,)).fetchone() == (True,)
+        # upper_inf()/lower_inf() are for unbounded (NULL) ends; an 'infinity'
+        # bound is a value, and isfinite() is the predicate that sees it.
+        assert conn.execute(
+            f"SELECT isfinite(lower(%s::{range_type})) AND isfinite(upper(%s::{range_type}))",
+            (value, value),
+        ).fetchone() == (False,), "the infinite end must still be infinite after writing back"
+
+
+@pytest.mark.parametrize("sql_type", ["date", "timestamp", "timestamptz"])
+def test_scalar_infinity_equals_the_matching_range_bound(sql_type) -> None:
+    """A tstzrange bound and a timestamptz column holding infinity must be the
+    same Python value, including timezone-awareness, so they compare and sort."""
+    range_type = {"date": "daterange", "timestamp": "tsrange", "timestamptz": "tstzrange"}[sql_type]
+    with database.connect(os.environ["SQLPROOF_TEST_DATABASE_URL"]) as conn:
+        for sign in ("infinity", "-infinity"):
+            rng, scalar = conn.execute(
+                f"SELECT {range_type}('{sign}', '{sign}', '[]'), '{sign}'::{sql_type}"
+            ).fetchone()
+            bound = rng.lower if sign == "-infinity" else rng.upper
+            assert bound == scalar
+            assert type(bound) is type(scalar)
+            if sql_type == "timestamptz":
+                assert bound.tzinfo is not None and scalar.tzinfo is not None
+            assert sorted([bound, scalar]) == [bound, scalar], "must be orderable"
+
+
+# --- A failed rollback keeps the caller's exception in reach (GROK-07) -------
+
+
+def test_a_failed_rollback_raises_with_the_callers_exception_as_direct_context() -> None:
+    dsn = os.environ["SQLPROOF_TEST_DATABASE_URL"]
+    with database.connect(dsn) as conn, database.connect(dsn, autocommit=True) as killer:
+        (pid,) = conn.execute("SELECT pg_backend_pid()").fetchone()
+        with pytest.raises(database.Error) as exc, conn.transaction():
+            killer.execute("SELECT pg_terminate_backend(%s)", (pid,))
+            raise ValueError("the caller's original error")
+        assert isinstance(exc.value.__context__, ValueError), (
+            "the rollback failure must chain the caller's exception directly, "
+            "not bury it under a RELEASE error"
+        )
+
+
+def test_client_savepoint_failed_rollback_keeps_the_callers_exception_as_direct_context() -> None:
+    from sqlproof.client import PostgresSqlProofClient
+
+    dsn = os.environ["SQLPROOF_TEST_DATABASE_URL"]
+    with (
+        database.connect(dsn, row_factory=database.dict_row) as conn,
+        database.connect(dsn, autocommit=True) as killer,
+    ):
+        client = PostgresSqlProofClient(conn)
+        pid = client.scalar("SELECT pg_backend_pid()")
+        with pytest.raises(database.Error) as exc, client.savepoint():
+            killer.execute("SELECT pg_terminate_backend(%s)", (pid,))
+            raise ValueError("the caller's original error")
+        assert isinstance(exc.value.__context__, ValueError)

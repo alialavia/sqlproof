@@ -44,7 +44,7 @@ jobs:
         with:
           database-url: ${{ env.SQLPROOF_TEST_DATABASE_URL }}
           verbose: 'true'
-      - run: uv run ruff check src/ tests/
+      - run: uv run ruff check src/ tests/ examples/
       - run: uv run pyright
       - run: uv run mypy src/sqlproof/
       - run: uv run pytest --cov=sqlproof --cov-fail-under=94 --cov-report=xml

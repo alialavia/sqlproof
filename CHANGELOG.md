@@ -31,6 +31,21 @@ remains in `0.x`, minor versions may include breaking changes.
 * **database:** query parameters are inlined into the SQL text on the client
   with libpq escaping, rather than sent separately as psycopg did.
 * **client:** `PsycopgSqlProofClient` is renamed `PostgresSqlProofClient`.
+* **database:** text containing a NUL byte (`\x00`) is refused on both the
+  parameter and COPY paths with a `DataError` carrying SQLSTATE `22021`,
+  before anything is sent. psycopg also raised `DataError`; without this
+  check PyGreSQL's client-side inlining would silently store the text up to
+  the NUL. Applies to strings inside arrays, records and JSON values.
+* **database:** a `Range` whose bound is the `date`/`datetime` min or max
+  sentinel is written back as `-infinity`/`infinity`, so a range read from
+  PostgreSQL and written again keeps its infinite end. A scalar `date.max`
+  parameter still stores `9999-12-31`; only range bounds carry this meaning.
+  Scalar `'infinity'::timestamptz` now reads back timezone-aware, matching
+  `tstzrange` bounds.
+* **database:** when a savepoint rollback itself fails (connection lost),
+  `Connection.transaction()` and `PostgresSqlProofClient.savepoint()` no
+  longer attempt a `RELEASE` on top of it, so the error raised carries the
+  caller's original exception as its direct `__context__`.
 
 ### Added
 

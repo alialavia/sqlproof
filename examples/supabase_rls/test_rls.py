@@ -31,8 +31,7 @@ import pytest
 from hypothesis import assume
 from hypothesis import strategies as st
 
-from sqlproof import ExternalTableSpec, SqlProof, sqlproof
-from sqlproof import database
+from sqlproof import ExternalTableSpec, SqlProof, database, sqlproof
 from sqlproof.contrib.supabase import as_rls_user, supabase_test_user_ids
 
 DSN = os.environ.get("SQLPROOF_TEST_DATABASE_URL")

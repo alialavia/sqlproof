@@ -21,6 +21,7 @@ from sqlproof._database import (
     Connection,
     Cursor,
     DatabaseError,
+    DataError,
     Error,
     Json,
     Jsonb,
@@ -34,6 +35,7 @@ from sqlproof._range import Range
 __all__ = [
     "Connection",
     "Cursor",
+    "DataError",
     "DatabaseError",
     "Error",
     "Json",
