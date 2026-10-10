@@ -167,33 +167,60 @@ class LocalMutationRunner:
             except database.DatabaseError as exc:
                 if database.sqlstate(exc) != _OBJECT_IN_USE:
                     raise
-                self._release_template(connection, template, exc)
-                connection.execute(create)
+                self._clone_past_template_sessions(connection, template, create, exc)
         return self._dsn_for(clone_name)
 
-    def _release_template(
-        self, connection: database.Connection, template: str, error: BaseException
+    def _clone_past_template_sessions(
+        self,
+        connection: database.Connection,
+        template: str,
+        create: str,
+        error: BaseException,
     ) -> None:
         """Handle ``CREATE DATABASE ... TEMPLATE`` refused for other sessions.
 
         A connection pooler (Supavisor, PgBouncer) keeps idle server
         sessions open on every database a client used, including the
-        template, so the clone is refused even after the caller closed its
-        own connections. With ``release_template_sessions`` the runner
-        terminates *idle* sessions of its own role on the template and
-        retries once; otherwise it raises an error that names the sessions.
+        template, and Supavisor reopens one as soon as it is terminated.
+        With ``release_template_sessions`` the runner closes the template
+        to new connections (``ALLOW_CONNECTIONS false``), terminates the
+        *idle* sessions of its own role there, clones, and always reopens
+        the template. Otherwise, or when any blocking session is active or
+        belongs to another role, it raises an error naming the sessions.
         """
-        sessions = connection.execute(
-            "SELECT pid, coalesce(application_name, ''), state, "
-            "usename = session_user "
-            "FROM pg_stat_activity WHERE datname = %s AND pid <> pg_backend_pid()",
-            (template,),
-        ).fetchall()
+        quoted = quote_identifier(template)
+        sessions = self._template_sessions(connection, template)
         releasable = [pid for pid, _app, state, own in sessions if own and state == "idle"]
-        if self.release_template_sessions and releasable and len(releasable) == len(sessions):
+        if not (self.release_template_sessions and len(releasable) == len(sessions)):
+            raise self._template_busy_error(template, sessions) from error
+        connection.execute(f"ALTER DATABASE {quoted} ALLOW_CONNECTIONS false")
+        try:
             for pid in releasable:
                 connection.execute("SELECT pg_terminate_backend(%s, 5000)", (pid,))
-            return
+            remaining = self._template_sessions(connection, template)
+            if remaining:
+                raise self._template_busy_error(template, remaining) from error
+            connection.execute(create)
+        finally:
+            connection.execute(f"ALTER DATABASE {quoted} ALLOW_CONNECTIONS true")
+
+    @staticmethod
+    def _template_sessions(
+        connection: database.Connection, template: str
+    ) -> list[tuple[int, str, str, bool]]:
+        return [
+            tuple(row)
+            for row in connection.execute(
+                "SELECT pid, coalesce(application_name, ''), coalesce(state, ''), "
+                "usename = session_user "
+                "FROM pg_stat_activity WHERE datname = %s AND pid <> pg_backend_pid()",
+                (template,),
+            ).fetchall()
+        ]
+
+    def _template_busy_error(
+        self, template: str, sessions: Sequence[tuple[int, str, str, bool]]
+    ) -> SqlProofMutationError:
         apps = sorted({app or "<unnamed>" for _pid, app, _state, _own in sessions})
         hint = (
             "they are not all idle sessions of this role, so they were left alone"
@@ -202,11 +229,10 @@ class LocalMutationRunner:
             "release_template_sessions=True to terminate idle sessions of this "
             "role on the template, or connect to the server directly"
         )
-        msg = (
+        return SqlProofMutationError(
             f"cannot clone template database {template!r}: {len(sessions)} other "
             f"session(s) are connected (application_name: {', '.join(apps)}); {hint}."
         )
-        raise SqlProofMutationError(msg) from error
 
     def _drop_clone(self, clone_name: str) -> None:
         with self._clone_lock, database.connect(
@@ -314,11 +340,15 @@ def run_mutation_tests(
     outcomes. When ``None`` (the default) nothing is written. Point
     ``sqlproof mutation report`` at the same directory to visualize history.
 
-    `release_template_sessions` (default ``False``) lets the runner
-    terminate *idle* sessions of its own role on the template when
-    ``CREATE DATABASE ... TEMPLATE`` is refused because other sessions are
-    connected, then retry once. Connection poolers such as Supavisor keep
-    such sessions open after every client disconnects. Without it, or when
+    `release_template_sessions` (default ``False``) handles
+    ``CREATE DATABASE ... TEMPLATE`` refused because other sessions are
+    connected, which connection poolers such as Supavisor cause by keeping
+    (and immediately reopening) idle server sessions. The runner briefly
+    sets the template to ``ALLOW_CONNECTIONS false``, terminates *idle*
+    sessions of its own role there, clones, and reopens the template in a
+    ``finally``; it needs to own the template. A hard kill in that window
+    can leave the template closed: ``ALTER DATABASE ... ALLOW_CONNECTIONS
+    true`` reopens it. Without it, or when
     any blocking session is active or belongs to another role, the clone
     fails with a :class:`~sqlproof.exceptions.SqlProofMutationError` naming
     the sessions' ``application_name``.
