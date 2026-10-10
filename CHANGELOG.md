@@ -54,6 +54,14 @@ remains in `0.x`, minor versions may include breaking changes.
   `Range`) for scripts and examples that need a raw connection next to
   SqlProof, replacing direct psycopg usage.
 
+### Fixed
+
+* **database:** `-c name=value` settings in a connection string's `options`
+  (and `PGOPTIONS`) are read back after connecting and re-applied with
+  `set_config` when the server did not apply them. Session poolers such as
+  Supavisor drop startup `options`, so `-csearch_path=...` previously had no
+  effect through them.
+
 ## [0.11.2](https://github.com/alialavia/sqlproof/compare/v0.11.1...v0.11.2) (2026-10-02)
 
 

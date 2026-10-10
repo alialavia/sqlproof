@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Callable, Generator, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
@@ -15,7 +16,9 @@ from typing import Any, Literal, Self, cast
 import pg.core
 import pgdb
 
+from sqlproof._dsn import conninfo_to_dict
 from sqlproof._range import Range, quote_field
+from sqlproof.exceptions import SqlProofUsageError
 
 RowFactory = Literal["dict", "tuple"]
 dict_row: RowFactory = "dict"
@@ -361,6 +364,72 @@ class Connection:
             self.close()
 
 
+def startup_settings(options: str) -> list[tuple[str, str]]:
+    """The ``-c name=value`` / ``--name=value`` settings in a libpq
+    ``options`` string, split the way the server splits it (unescaped
+    whitespace separates arguments; a backslash escapes the next char).
+    Other command-line switches are ignored here and left to the server.
+    """
+    args: list[str] = []
+    current: list[str] = []
+    escaped = False
+    for char in options:
+        if escaped:
+            current.append(char)
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        elif char.isspace():
+            if current:
+                args.append("".join(current))
+                current = []
+        else:
+            current.append(char)
+    if current:
+        args.append("".join(current))
+    settings: list[tuple[str, str]] = []
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        assignment: str | None = None
+        if arg == "-c" and index + 1 < len(args):
+            index += 1
+            assignment = args[index]
+        elif arg.startswith("-c") and len(arg) > 2:
+            assignment = arg[2:]
+        elif arg.startswith("--") and len(arg) > 2:
+            assignment = arg[2:]
+        if assignment is not None and "=" in assignment:
+            name, value = assignment.split("=", 1)
+            if arg.startswith("--"):
+                name = name.replace("-", "_")
+            settings.append((name, value))
+        index += 1
+    return settings
+
+
+def _reapply_startup_settings(native: Any, conninfo: str) -> None:
+    """Re-apply ``options`` settings that did not survive the connection.
+
+    Transaction and session poolers (Supavisor, PgBouncer) drop or
+    rewrite the startup packet's ``options``, so ``-csearch_path=...``
+    silently never reaches the backend. Anything the server did apply
+    already reads back unchanged and is left alone; anything that did not
+    is set for the session with ``set_config``, which a session pooler
+    passes straight through.
+    """
+    try:
+        options = conninfo_to_dict(conninfo).get("options")
+    except SqlProofUsageError:
+        return
+    if options is None:
+        options = os.environ.get("PGOPTIONS", "")
+    for name, value in startup_settings(options):
+        current = native.query("SELECT current_setting($1, true)", (name,)).getresult()
+        if current[0][0] != value:
+            native.query("SELECT set_config($1, $2, false)", (name, value))
+
+
 def connect(
     conninfo: str, *, autocommit: bool = False, row_factory: RowFactory = tuple_row
 ) -> Connection:
@@ -369,6 +438,7 @@ def connect(
     # through pgdb.connect's legacy keyword argument escaping.
     native = pg.core.connect(conninfo)
     try:
+        _reapply_startup_settings(native, conninfo)
         connection = pgdb.Connection(native)
         # The adapter owns transaction boundaries using libpq's actual state,
         # including explicit BEGIN and savepoints. Disable pgdb's client flag.
