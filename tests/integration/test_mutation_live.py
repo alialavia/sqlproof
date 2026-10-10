@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 import textwrap
+from contextlib import suppress
 from pathlib import Path
 from uuid import uuid4
 
@@ -27,7 +28,7 @@ from sqlproof import _dsn as conninfo
 from sqlproof._dsn import quote_identifier
 from sqlproof.exceptions import SqlProofMutationError
 from sqlproof.mutation.model import MutationSet, Replace
-from sqlproof.mutation.runner import run_mutation_tests
+from sqlproof.mutation.runner import LocalMutationRunner, run_mutation_tests
 
 SCHEMA_SQL = """
 CREATE TABLE usage_events (
@@ -105,6 +106,10 @@ def test_mutation_run_kills_and_survives(tmp_path: Path) -> None:
             database_url=template_dsn,
             pytest_args=[str(test_file), "-q", "-p", "no:cacheprovider"],
             env_var="SQLPROOF_MUTATION_TEST_DSN",
+            # A pooler (Supavisor) keeps an idle session open on the
+            # template after the setup connection above closes. Directly
+            # connected there are no other sessions and this is a no-op.
+            release_template_sessions=True,
         )
 
         statuses = {o.description: o.status for o in result.outcomes}
@@ -131,5 +136,75 @@ def test_mutation_run_kills_and_survives(tmp_path: Path) -> None:
     finally:
         with database.connect(base_dsn, autocommit=True) as admin:
             admin.execute(
-                f"DROP DATABASE IF EXISTS {quote_identifier(template_name)}"
+                f"DROP DATABASE IF EXISTS {quote_identifier(template_name)} WITH (FORCE)"
             )
+
+
+@pytest.fixture
+def idle_template(tmp_path: Path):
+    """A template database with one idle session held open on it, the
+    way a connection pooler keeps one after its client disconnects."""
+    base_dsn = os.environ["SQLPROOF_TEST_DATABASE_URL"]
+    name = f"sqlproof_mut_idle_{uuid4().hex[:12]}"
+    with database.connect(base_dsn, autocommit=True) as admin:
+        admin.execute(f"CREATE DATABASE {quote_identifier(name)}")
+    dsn = conninfo.make_conninfo(base_dsn, dbname=name, application_name="fake-pooler")
+    holder = database.connect(dsn, autocommit=True)
+    holder.execute("SELECT 1")
+    try:
+        yield dsn, holder
+    finally:
+        with suppress(Exception):
+            holder.close()
+        with database.connect(base_dsn, autocommit=True) as admin:
+            admin.execute(f"DROP DATABASE IF EXISTS {quote_identifier(name)} WITH (FORCE)")
+            admin.execute("DROP DATABASE IF EXISTS sqlproof_baseline WITH (FORCE)")
+
+
+@pytest.mark.skipif(
+    "SQLPROOF_TEST_DATABASE_URL" not in os.environ,
+    reason="set SQLPROOF_TEST_DATABASE_URL to run Postgres integration tests",
+)
+def test_an_idle_session_on_the_template_is_named_in_the_error(idle_template) -> None:
+    dsn, _holder = idle_template
+    runner = LocalMutationRunner(database_url=dsn, pytest_args=[])
+    with pytest.raises(SqlProofMutationError, match=r"fake-pooler.*release_template_sessions"):
+        runner.run_baseline()
+
+
+@pytest.mark.skipif(
+    "SQLPROOF_TEST_DATABASE_URL" not in os.environ,
+    reason="set SQLPROOF_TEST_DATABASE_URL to run Postgres integration tests",
+)
+def test_release_template_sessions_clones_past_an_idle_session(idle_template) -> None:
+    dsn, holder = idle_template
+    runner = LocalMutationRunner(
+        database_url=dsn, pytest_args=[], release_template_sessions=True
+    )
+    clone_dsn = runner._create_clone("sqlproof_baseline")
+    try:
+        with database.connect(clone_dsn, autocommit=True) as clone:
+            assert clone.execute("SELECT 1").fetchone() == (1,)
+    finally:
+        runner._drop_clone("sqlproof_baseline")
+    with pytest.raises(database.DatabaseError):
+        holder.execute("SELECT 1")
+
+
+@pytest.mark.skipif(
+    "SQLPROOF_TEST_DATABASE_URL" not in os.environ,
+    reason="set SQLPROOF_TEST_DATABASE_URL to run Postgres integration tests",
+)
+def test_release_leaves_an_active_session_alone(idle_template) -> None:
+    dsn, _holder = idle_template
+    with database.connect(dsn, autocommit=True) as busy:
+        busy_pid = busy.execute("SELECT pg_backend_pid()").fetchone()[0]
+        busy.execute("BEGIN")
+        busy.execute("SELECT 1")  # idle in transaction: not plain idle
+        runner = LocalMutationRunner(
+            database_url=dsn, pytest_args=[], release_template_sessions=True
+        )
+        with pytest.raises(SqlProofMutationError, match="left alone"):
+            runner._create_clone("sqlproof_baseline")
+        assert busy.execute("SELECT pg_backend_pid()").fetchone()[0] == busy_pid
+        busy.execute("ROLLBACK")
