@@ -61,6 +61,12 @@ remains in `0.x`, minor versions may include breaking changes.
   `set_config` when the server did not apply them. Session poolers such as
   Supavisor drop startup `options`, so `-csearch_path=...` previously had no
   effect through them.
+* **mutation:** when `CREATE DATABASE ... TEMPLATE` is refused because other
+  sessions are on the template (SQLSTATE 55006, e.g. a pooler's idle server
+  session), the runner raises `SqlProofMutationError` naming them. New
+  `release_template_sessions=True` terminates idle sessions of the runner's own
+  role on the template and retries once; active or other-role sessions are
+  never touched.
 
 ## [0.11.2](https://github.com/alialavia/sqlproof/compare/v0.11.1...v0.11.2) (2026-10-02)
 
