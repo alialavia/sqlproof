@@ -96,3 +96,36 @@ def test_multi_host_urls_preserve_default_ports_ipv6_and_literal_plus_signs() ->
 
 def test_identifiers_with_quotes_cannot_break_out_of_the_identifier() -> None:
     assert quote_identifier('db"; DROP DATABASE other; --') == '"db""; DROP DATABASE other; --"'
+
+
+def test_url_host_names_keep_their_case_unlike_urlsplit() -> None:
+    """libpq passes host names through unchanged; a lowercasing parser would
+    break case-sensitive socket directories and some certificate checks."""
+    assert conninfo_to_dict("postgresql://u@Db.Example.COM:5433,%2FVar%2FRun/x") == {
+        "user": "u",
+        "host": "Db.Example.COM,/Var/Run",
+        "port": "5433,",
+        "dbname": "x",
+    }
+
+
+def test_url_query_parameters_without_an_equals_sign_are_rejected_like_libpq() -> None:
+    with pytest.raises(SqlProofUsageError, match="query parameter 'sslmode' has no '='"):
+        conninfo_to_dict("postgresql://localhost/db?sslmode")
+
+
+@pytest.mark.parametrize(
+    "dsn",
+    ["postgresql://[::1/db", "postgresql://[::1]x/db"],
+)
+def test_malformed_ipv6_hosts_are_rejected(dsn: str) -> None:
+    with pytest.raises(SqlProofUsageError, match="IPv6"):
+        conninfo_to_dict(dsn)
+
+
+def test_parse_errors_name_the_position_but_never_echo_the_value() -> None:
+    secret = "hunter2-secret"
+    with pytest.raises(SqlProofUsageError) as exc:
+        conninfo_to_dict(f"password={secret} 'broken")
+    assert secret not in str(exc.value)
+    assert "at character" in str(exc.value)

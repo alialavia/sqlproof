@@ -18,6 +18,15 @@ from sqlproof.generators.graph import dataset_strategy
 from sqlproof.scale.load import copy_table
 from sqlproof.schema.parse_sql import parse_schema_sql
 
+if "SQLPROOF_TEST_DATABASE_URL" not in os.environ and os.environ.get("CI"):
+    # Locally, no database means skip. In CI, a missing DSN would silently
+    # skip every adapter test while the job stays green, so fail collection.
+    pytest.fail(
+        "SQLPROOF_TEST_DATABASE_URL is unset in CI; the database adapter tests "
+        "would all be skipped. Start a PostgreSQL and export the DSN.",
+        pytrace=False,
+    )
+
 pytestmark = pytest.mark.skipif(
     "SQLPROOF_TEST_DATABASE_URL" not in os.environ,
     reason="set SQLPROOF_TEST_DATABASE_URL to run Postgres integration tests",
@@ -365,3 +374,82 @@ def test_a_top_level_transaction_block_rolls_back_on_error_and_commits_on_succes
             conn.execute("INSERT INTO transaction_rows VALUES (2)")
         assert not conn.in_transaction, "the block must commit, not leave it open"
         assert conn.execute("SELECT id FROM transaction_rows").fetchall() == [(2,)]
+
+
+# --- Infinite range bounds (GROK-01) ----------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("sql", "expected"),
+    [
+        ("daterange('2026-01-01', 'infinity')", Range(date(2026, 1, 1), date.max)),
+        ("daterange('-infinity', '2026-01-01')", Range(date.min, date(2026, 1, 1))),
+        ("tsrange('2026-01-01', 'infinity')", Range(datetime(2026, 1, 1), datetime.max)),
+        ("tsrange('-infinity', 'infinity')", Range(datetime.min, datetime.max)),
+        (
+            "tstzrange('2026-01-01 00:00+00', 'infinity')",
+            Range(datetime(2026, 1, 1, tzinfo=UTC), datetime.max.replace(tzinfo=UTC)),
+        ),
+        (
+            "tstzrange('-infinity', '2026-01-01 00:00+00')",
+            Range(datetime.min.replace(tzinfo=UTC), datetime(2026, 1, 1, tzinfo=UTC)),
+        ),
+        ("numrange(1, 'Infinity')", Range(Decimal(1), Decimal("Infinity"))),
+        ("numrange('-Infinity', 1, '(]')", Range(Decimal("-Infinity"), Decimal(1), "(]")),
+    ],
+)
+def test_infinite_range_bounds_read_back_as_sentinels_instead_of_crashing(sql, expected) -> None:
+    """Oracle: PyGreSQL's own scalar handling, which returns date.max and
+    datetime.max for infinite dates, so ranges agree with the columns next to them."""
+    dsn = make_conninfo(os.environ["SQLPROOF_TEST_DATABASE_URL"], options="-c timezone=UTC")
+    with database.connect(dsn) as conn:
+        assert conn.execute(f"SELECT {sql}").fetchone() == (expected,)
+
+
+def test_infinite_range_bounds_agree_with_scalar_infinite_dates() -> None:
+    with database.connect(os.environ["SQLPROOF_TEST_DATABASE_URL"]) as conn:
+        upper, scalar = conn.execute(
+            "SELECT upper(daterange('2026-01-01', 'infinity')), 'infinity'::date"
+        ).fetchone()
+        rng = conn.execute("SELECT daterange('2026-01-01', 'infinity')").fetchone()[0]
+        assert rng.upper == upper == scalar
+
+
+# --- Typed array parameters (GROK-02) ---------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("value", "pg_type"),
+    [
+        ([1, 2], "integer[]"),
+        ([1, None], "integer[]"),
+        ([2**40], "bigint[]"),
+        ([Decimal("1.5"), 2], "numeric[]"),
+        ([True, None], "boolean[]"),
+        ([[1, None], [3, 4]], "integer[]"),
+    ],
+)
+def test_numeric_and_boolean_list_parameters_are_typed_without_a_cast(value, pg_type) -> None:
+    """Defined behaviour for GROK-02: in a context with no column or cast,
+    these lists must still arrive as arrays of the expected type."""
+    with database.connect(os.environ["SQLPROOF_TEST_DATABASE_URL"]) as conn:
+        assert conn.execute("SELECT %s, pg_typeof(%s)::text", (value, value)).fetchone() == (
+            value,
+            pg_type,
+        )
+        assert conn.execute("SELECT array_length(%s, 1)", (value,)).fetchone() == (len(value),)
+
+
+def test_text_list_parameters_take_their_type_from_the_context() -> None:
+    """Defined behaviour for GROK-02: string lists are context-typed literals.
+    They work against a typed column or cast and fail, clearly, without one."""
+    with database.connect(os.environ["SQLPROOF_TEST_DATABASE_URL"]) as conn:
+        conn.execute("CREATE TYPE pg_temp.mood AS ENUM ('ok', 'sad')")
+        conn.execute("CREATE TEMPORARY TABLE moods (value pg_temp.mood[])")
+        conn.execute("INSERT INTO moods VALUES (%s)", (["ok", "sad"],))
+        assert conn.execute("SELECT value::text[] FROM moods").fetchone() == (["ok", "sad"],)
+        assert conn.execute("SELECT 'sad' = ANY(%s)", (["ok", "sad"],)).fetchone() == (True,)
+        assert conn.execute("SELECT %s::text[]", (["a"],)).fetchone() == (["a"],)
+        with pytest.raises(database.DatabaseError) as exc, conn.transaction():
+            conn.execute("SELECT array_length(%s, 1)", (["a"],))
+        assert database.sqlstate(exc.value) == "42804", "a datatype mismatch, not a crash"

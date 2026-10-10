@@ -89,8 +89,47 @@ jobs:
             throw "The runner's PostgreSQL client library is missing"
           }
           $env:PGBIN | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      # Each runner image ships a PostgreSQL server. Start it so the adapter's
+      # live tests run against the native libpq build on every OS; importing
+      # the extension alone proves little about COPY or type casts.
+      - name: Start the runner's PostgreSQL on Linux
+        if: runner.os == 'Linux'
+        run: |
+          sudo systemctl start postgresql.service
+          sudo -u postgres psql -v ON_ERROR_STOP=1 -c "ALTER USER postgres PASSWORD 'postgres'"
+          echo "SQLPROOF_TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/postgres" >> "$GITHUB_ENV"
+      - name: Start the runner's PostgreSQL on macOS
+        if: runner.os == 'macOS'
+        run: |
+          formula="$(brew list --formula | grep -E '^postgresql(@[0-9]+)?$' | sort -V | tail -1)"
+          brew services start "$formula"
+          for _ in $(seq 1 30); do pg_isready -h 127.0.0.1 && break; sleep 2; done
+          # Homebrew's initdb makes the runner user the superuser with trust auth.
+          psql -h 127.0.0.1 -d postgres -v ON_ERROR_STOP=1 -c "DO \$\$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'postgres') THEN
+              CREATE ROLE postgres SUPERUSER LOGIN PASSWORD 'postgres';
+            ELSE
+              ALTER ROLE postgres PASSWORD 'postgres';
+            END IF; END \$\$;"
+          echo "SQLPROOF_TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/postgres" >> "$GITHUB_ENV"
+      - name: Start the runner's PostgreSQL on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $service = Get-Service -Name postgresql*
+          Set-Service -InputObject $service -StartupType Manual
+          Start-Service -InputObject $service
+          foreach ($i in 1..30) {
+            & "$env:PGBIN\pg_isready" -h 127.0.0.1
+            if ($LASTEXITCODE -eq 0) { break }
+            Start-Sleep -Seconds 2
+          }
+          # The image documents the preinstalled server's credentials as postgres / root.
+          "SQLPROOF_TEST_DATABASE_URL=postgresql://postgres:root@127.0.0.1:5432/postgres" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - run: uv sync --locked --extra dev
-      - run: uv run pytest tests/unit tests/meta
+      # test_database_live.py fails collection, rather than skipping, when the
+      # DSN is missing under CI, so this step cannot pass with the adapter untested.
+      - run: uv run pytest tests/unit tests/meta tests/integration/test_database_live.py
       - run: uv build
 
   licenses:

@@ -6,8 +6,9 @@ import json
 from collections.abc import Callable, Generator, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from math import inf
 from types import TracebackType
 from typing import Any, Literal, Self, cast
 
@@ -43,13 +44,50 @@ def _adapt(value: Any) -> Any:
     if isinstance(value, Range) or (isinstance(value, Decimal) and not value.is_finite()):
         return str(value)
     if isinstance(value, list):
-        # An array literal lets PostgreSQL infer the element type from its
-        # column or explicit cast, including UUID and range arrays. pgdb's
-        # ARRAY constructor would infer text[] for those elements instead.
+        if _is_numeric_or_boolean_array(cast(list[Any], value)):
+            # PyGreSQL renders these as a typed ARRAY[...] constructor, so
+            # the array keeps its type even where PostgreSQL has no column
+            # or cast to infer it from (array_length, unnest, SELECT %s).
+            return [_adapt(item) for item in cast(Sequence[Any], value)]
+        # Other element types (text, UUID, ranges, JSON, dates) are sent as
+        # an array literal that takes its type from the column or an
+        # explicit cast. pgdb's ARRAY constructor would type them as text[].
         return _text(value)
     if isinstance(value, tuple):
         return tuple(_adapt(item) for item in cast(Sequence[Any], value))
     return value
+
+
+def _is_numeric_or_boolean_array(value: list[Any]) -> bool:
+    """True when every leaf is a finite number, or every leaf is a boolean.
+
+    Only these element types render to an unambiguous PostgreSQL array
+    type. Mixed booleans and numbers, all-NULL arrays, empty inner arrays
+    and non-finite values fall back to the context-typed literal.
+    """
+    leaves: list[Any] = []
+    pending: list[Any] = [value]
+    while pending:
+        current = pending.pop()
+        if not current:
+            return False
+        for item in cast(Sequence[Any], current):
+            if isinstance(item, list):
+                pending.append(item)
+            elif item is not None:
+                leaves.append(item)
+    if not leaves:
+        return False
+    if all(isinstance(leaf, bool) for leaf in leaves):
+        return True
+    return all(
+        not isinstance(leaf, bool)
+        and (
+            isinstance(leaf, int)
+            or (isinstance(leaf, float | Decimal) and leaf == leaf and leaf not in (inf, -inf))
+        )
+        for leaf in leaves
+    )
 
 
 def _text(value: Any) -> str:
@@ -98,7 +136,26 @@ def sqlstate(error: BaseException) -> str | None:
     return str(code) if code is not None else None
 
 
-def _range_cast(element: Callable[[str], Any]) -> Callable[[str], Range]:
+def _range_cast(
+    element: Callable[[str], Any],
+    negative_infinity: Any = None,
+    positive_infinity: Any = None,
+) -> Callable[[str], Range]:
+    """Build a parser for one range type.
+
+    Date and timestamp bounds may be ``infinity``; those map to the given
+    sentinels, mirroring PyGreSQL's handling of scalar infinite dates
+    (``date.max`` and ``datetime.max``). Numeric bounds parse ``Infinity``
+    natively through ``Decimal`` and integer ranges are never infinite.
+    """
+
+    def bound(text: str) -> Any:
+        if positive_infinity is not None and text == "infinity":
+            return positive_infinity
+        if negative_infinity is not None and text == "-infinity":
+            return negative_infinity
+        return element(text)
+
     def parse(value: str) -> Range:
         if value == "empty":
             return Range(empty=True)
@@ -108,8 +165,8 @@ def _range_cast(element: Callable[[str], Any]) -> Callable[[str], Range]:
             cast(Any, pg.core).cast_record("(" + value[1:-1] + ")"),
         )
         return Range(
-            None if lower is None else element(lower),
-            None if upper is None else element(upper),
+            None if lower is None else bound(lower),
+            None if upper is None else bound(upper),
             value[0] + value[-1],
         )
 
@@ -132,7 +189,16 @@ class Cursor:
         if stream is not None:
             # Use the source that started COPY, preserving our already-quoted
             # schema/table identifiers rather than splitting them on dots.
-            putdata = self._cursor._src.putdata
+            # This is the only place sqlproof relies on a PyGreSQL private
+            # attribute; fail with a clear message if a release removes it.
+            putdata = getattr(getattr(self._cursor, "_src", None), "putdata", None)
+            if putdata is None:
+                msg = (
+                    "sqlproof streams COPY data through PyGreSQL's cursor source "
+                    "(pgdb.Cursor._src.putdata), which this PyGreSQL version does "
+                    "not expose. Pin PyGreSQL to a supported release."
+                )
+                raise RuntimeError(msg)
             try:
                 while chunk := stream.read(8192):
                     putdata(chunk)
@@ -270,16 +336,20 @@ def connect(
         # The adapter owns transaction boundaries using libpq's actual state,
         # including explicit BEGIN and savepoints. Disable pgdb's client flag.
         connection.autocommit = True
-        range_casts: dict[str, Callable[[str], Any]] = {
-            "int4range": int,
-            "int8range": int,
-            "numrange": Decimal,
-            "daterange": date.fromisoformat,
-            "tsrange": datetime.fromisoformat,
-            "tstzrange": datetime.fromisoformat,
+        range_casts: dict[str, Callable[[str], Range]] = {
+            "int4range": _range_cast(int),
+            "int8range": _range_cast(int),
+            "numrange": _range_cast(Decimal),
+            "daterange": _range_cast(date.fromisoformat, date.min, date.max),
+            "tsrange": _range_cast(datetime.fromisoformat, datetime.min, datetime.max),
+            "tstzrange": _range_cast(
+                datetime.fromisoformat,
+                datetime.min.replace(tzinfo=UTC),
+                datetime.max.replace(tzinfo=UTC),
+            ),
         }
-        for name, element in range_casts.items():
-            cast(Any, connection.type_cache).set_typecast(name, _range_cast(element))
+        for name, typecast in range_casts.items():
+            cast(Any, connection.type_cache).set_typecast(name, typecast)
     except BaseException:
         native.close()
         raise

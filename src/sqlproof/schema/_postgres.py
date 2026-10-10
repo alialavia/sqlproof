@@ -18,7 +18,16 @@ def parse_sql(sql: str) -> tuple[Any, ...]:
 def node_message(node: AstNode) -> Any:
     # postgast's typed wrappers expose read-only properties. Keep access to
     # their underlying protobuf here, for rendering and function-body edits.
-    return node._pb  # pyright: ignore[reportPrivateUsage]
+    # This is the only place sqlproof relies on a postgast private attribute.
+    message = getattr(node, "_pb", None)
+    if message is None:
+        msg = (
+            "sqlproof renders SQL through postgast's underlying protobuf messages "
+            "(AstNode._pb), which this postgast version does not expose. "
+            "Pin postgast to a supported release."
+        )
+        raise RuntimeError(msg)
+    return message
 
 
 def _copy_node(target: Any, node: AstNode) -> None:

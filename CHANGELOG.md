@@ -7,15 +7,37 @@ remains in `0.x`, minor versions may include breaking changes.
 
 ## Unreleased
 
-### Changed
+### Breaking Changes
 
-* **dependencies:** replace pglast with postgast and psycopg with PyGreSQL.
+* **dependencies:** replace pglast (GPL-3.0) with postgast and psycopg
+  (LGPL-3.0) with PyGreSQL, leaving only permissive Python dependencies.
   SQL parsing and database calls remain synchronous. Linux and macOS installs
   need PostgreSQL client development tools; Windows needs `libpq.dll` on
   `PATH`. See the README for installation commands.
-* **database:** raw connection errors now use PyGreSQL exception classes.
-  Range values use `sqlproof.Range`, and the concrete client class is named
-  `PostgresSqlProofClient`.
+* **database:** raw database errors are PyGreSQL exception classes
+  (`pgdb.DatabaseError` and subclasses) instead of `psycopg.errors.*`. Code
+  that caught psycopg classes should match on
+  `sqlproof.database.sqlstate(exc)` instead.
+* **database:** range values are `sqlproof.Range` instead of psycopg's
+  `Range`. Infinite `daterange`, `tsrange` and `tstzrange` bounds read back as
+  `date.min`/`date.max` and `datetime.min`/`datetime.max` (timezone-aware for
+  `tstzrange`), matching how PyGreSQL returns scalar infinite dates; psycopg
+  raised on them.
+* **database:** list parameters. Lists of numbers or booleans are sent as
+  typed arrays and behave as before. Other lists (text, UUID, ranges, JSON,
+  dates) are sent as array literals typed by the target column or an explicit
+  cast; add `%s::uuid[]`-style casts in polymorphic contexts such as
+  `unnest` or `array_length`, where psycopg previously supplied the type.
+* **database:** query parameters are inlined into the SQL text on the client
+  with libpq escaping, rather than sent separately as psycopg did.
+* **client:** `PsycopgSqlProofClient` is renamed `PostgresSqlProofClient`.
+
+### Added
+
+* **database:** `sqlproof.database` exposes the connection adapter
+  (`connect`, `Connection`, `DatabaseError`, `Json`, `sqlstate`, `dict_row`,
+  `Range`) for scripts and examples that need a raw connection next to
+  SqlProof, replacing direct psycopg usage.
 
 ## [0.11.2](https://github.com/alialavia/sqlproof/compare/v0.11.1...v0.11.2) (2026-10-02)
 

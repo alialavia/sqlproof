@@ -249,8 +249,8 @@ dataset = strategy.example()
 
 # `client_for_dataset` rolls back by default. To commit:
 from sqlproof.client import PostgresSqlProofClient
-from sqlproof import _database as database
-from sqlproof._database import dict_row
+from sqlproof import database
+from sqlproof.database import dict_row
 from sqlproof.core import _insert_dataset
 
 with database.connect(os.environ["DATABASE_URL"], autocommit=True,

@@ -23,7 +23,14 @@ Requires Python 3.11+ and PostgreSQL 13+.
 Connections use PyGreSQL and the system's PostgreSQL client library (`libpq`).
 PostgreSQL URLs, keyword DSNs, SSL settings, service files and `PG*` environment
 variables are handled by libpq. Raw database errors are PyGreSQL exceptions;
-range values use `sqlproof.Range`.
+range values use `sqlproof.Range`. Scripts that need a raw connection next to
+SqlProof can use `sqlproof.database.connect`.
+
+Query parameters are inlined into the SQL text on the client with libpq
+escaping. Lists of numbers or booleans are sent as typed arrays; other lists
+(text, UUID, ranges, dates) are array literals that take their type from the
+column or an explicit cast, so write `%s::uuid[]` in contexts such as
+`unnest(...)` that give PostgreSQL nothing to infer from.
 
 Install the PostgreSQL client development tools before installing SqlProof
 from source (PyGreSQL currently supplies Windows wheels):
