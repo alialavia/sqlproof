@@ -98,19 +98,18 @@ jobs:
           sudo systemctl start postgresql.service
           sudo -u postgres psql -v ON_ERROR_STOP=1 -c "ALTER USER postgres PASSWORD 'postgres'"
           echo "SQLPROOF_TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/postgres" >> "$GITHUB_ENV"
-      - name: Start the runner's PostgreSQL on macOS
+      - name: Start a PostgreSQL server on macOS
         if: runner.os == 'macOS'
         run: |
-          formula="$(brew list --formula | grep -E '^postgresql(@[0-9]+)?$' | sort -V | tail -1)"
-          brew services start "$formula"
-          for _ in $(seq 1 30); do pg_isready -h 127.0.0.1 && break; sleep 2; done
-          # Homebrew's initdb makes the runner user the superuser with trust auth.
-          psql -h 127.0.0.1 -d postgres -v ON_ERROR_STOP=1 -c "DO \$\$ BEGIN
-            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'postgres') THEN
-              CREATE ROLE postgres SUPERUSER LOGIN PASSWORD 'postgres';
-            ELSE
-              ALTER ROLE postgres PASSWORD 'postgres';
-            END IF; END \$\$;"
+          # The macOS runner image ships no PostgreSQL server, only Homebrew.
+          # Install one and start it directly with pg_ctl, avoiding
+          # brew services and its launchd plumbing.
+          brew install postgresql@17
+          PG="$(brew --prefix postgresql@17)/bin"
+          "$PG/initdb" -D "$RUNNER_TEMP/pgdata" -U postgres --auth=trust >/dev/null
+          "$PG/pg_ctl" -D "$RUNNER_TEMP/pgdata" -l "$RUNNER_TEMP/postgres.log" \
+            -o "-p 5432 -k $RUNNER_TEMP" -w start
+          "$PG/pg_isready" -h 127.0.0.1 -p 5432
           echo "SQLPROOF_TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/postgres" >> "$GITHUB_ENV"
       - name: Start the runner's PostgreSQL on Windows
         if: runner.os == 'Windows'

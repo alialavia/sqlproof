@@ -8,7 +8,9 @@ these tests call ``PQconninfoParse`` through ctypes. No database is needed.
 from __future__ import annotations
 
 import ctypes
+import os
 from ctypes.util import find_library
+from pathlib import Path
 from urllib.parse import quote
 
 import pytest
@@ -34,10 +36,20 @@ class _Option(ctypes.Structure):
 def _load_libpq() -> ctypes.CDLL | None:
     import pg  # noqa: F401 - loads libpq into the process
 
-    for name in (None, find_library("pq"), find_library("libpq"), "libpq.so.5", "libpq.5.dylib"):
+    candidates: list[str | None] = [
+        # dlopen(NULL) sees libpq once PyGreSQL has loaded it (not on Windows,
+        # where ctypes rejects None).
+        None,
+        find_library("pq"),
+        find_library("libpq"),
+        "libpq.so.5",
+        "libpq.5.dylib",
+        str(Path(os.environ["PGBIN"]) / "libpq.dll") if os.environ.get("PGBIN") else None,
+    ]
+    for name in candidates:
         try:
             library = ctypes.CDLL(name)
-        except OSError:
+        except (OSError, TypeError):
             continue
         if hasattr(library, "PQconninfoParse"):
             library.PQconninfoParse.restype = ctypes.POINTER(_Option)
