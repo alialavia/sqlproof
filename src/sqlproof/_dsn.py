@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from urllib.parse import unquote, urlsplit
+from urllib.parse import unquote
 
 from sqlproof.exceptions import SqlProofUsageError
 
@@ -11,7 +11,8 @@ _PARAMETER = re.compile(
     r"\s*(?P<key>[a-zA-Z_][a-zA-Z_0-9]*)\s*=\s*"
     r"(?:'(?P<quoted>(?:\\.|[^'\\])*)'|(?!')(?P<plain>(?:\\.|[^\s\\])*))"
 )
-_URI = re.compile(r"postgres(?:ql)?://(?P<authority>[^/?#]*)(?P<suffix>.*)", re.DOTALL)
+_URI = re.compile(r"postgres(?:ql)?://(?P<authority>[^/?]*)(?P<suffix>.*)", re.DOTALL)
+_BAD_PERCENT = re.compile(r"%(?![0-9A-Fa-f]{2})|%00")
 
 
 def conninfo_to_dict(dsn: str) -> dict[str, str]:
@@ -42,42 +43,61 @@ def conninfo_to_dict(dsn: str) -> dict[str, str]:
 
 
 def _parse_uri(authority: str, suffix: str) -> dict[str, str]:
-    # Python rejects a multi-host authority containing IPv6, although libpq
-    # accepts it, and urlsplit lowercases host names. Parse the authority by
-    # hand and only use urlsplit for the path and query.
-    url = urlsplit("postgresql://localhost" + suffix)
+    """Mirror libpq's URI parser (conninfo_uri_parse_options).
+
+    Python's urlsplit is deliberately not used: it rejects a multi-host
+    authority containing IPv6, lowercases host names, and treats '#' as a
+    fragment, where libpq keeps it as part of the database name. Checked
+    against libpq itself in tests/unit/test_dsn_libpq_oracle.py.
+    """
     result: dict[str, str] = {}
     credentials, has_credentials, hosts_part = authority.rpartition("@")
     if has_credentials:
         user, has_password, password = credentials.partition(":")
-        result["user"] = unquote(user)
-        if has_password:
-            result["password"] = unquote(password)
+        # libpq ignores an empty user or password rather than storing "".
+        if user:
+            result["user"] = _decode(user)
+        if has_password and password:
+            result["password"] = _decode(password)
     else:
         hosts_part = authority
-    if url.path[1:]:
-        result["dbname"] = unquote(url.path[1:])
+    path, has_query, query = suffix.partition("?")
+    if path[1:]:
+        result["dbname"] = _decode(path[1:])
     if hosts_part:
         hosts: list[str] = []
         ports: list[str] = []
         for entry in hosts_part.split(","):
             host, port = _split_host_port(entry)
-            hosts.append(unquote(host))
+            hosts.append(_decode(host))
             ports.append(port)
         result["host"] = ",".join(hosts)
-        # Empty port entries mean the default port for that host.
-        if any(ports):
+        # Empty port entries mean the default port for that host. libpq
+        # emits the comma-joined list whenever there is more than one host,
+        # even if every entry is empty, and omits it for a lone host with
+        # no port.
+        if any(ports) or len(ports) > 1:
             result["port"] = ",".join(ports)
-    for option in url.query.split("&"):
+    for option in query.split("&") if has_query else ():
         if not option:
             continue
         key, has_value, value = option.partition("=")
-        if not has_value:
-            msg = f"Invalid PostgreSQL URI: query parameter {unquote(key)!r} has no '=' sign."
+        key = _decode(key)
+        if not has_value or not key:
+            # libpq rejects both with "invalid URI query parameter". A repeated
+            # key is accepted by libpq, last one wins, and it overrides the
+            # same option given in the authority (?host=... beats the URI host).
+            msg = f"Invalid PostgreSQL URI: invalid query parameter {key!r}."
             raise SqlProofUsageError(msg)
         # libpq decodes percent escapes, but preserves literal '+'.
-        result[unquote(key)] = unquote(value)
+        result[key] = _decode(value)
     return result
+
+
+def _decode(part: str) -> str:
+    if _BAD_PERCENT.search(part):
+        raise SqlProofUsageError("Invalid PostgreSQL URI: invalid percent-encoded token.")
+    return unquote(part)
 
 
 def _split_host_port(entry: str) -> tuple[str, str]:

@@ -110,7 +110,7 @@ def test_url_host_names_keep_their_case_unlike_urlsplit() -> None:
 
 
 def test_url_query_parameters_without_an_equals_sign_are_rejected_like_libpq() -> None:
-    with pytest.raises(SqlProofUsageError, match="query parameter 'sslmode' has no '='"):
+    with pytest.raises(SqlProofUsageError, match="invalid query parameter 'sslmode'"):
         conninfo_to_dict("postgresql://localhost/db?sslmode")
 
 

@@ -44,7 +44,7 @@ def _adapt(value: Any) -> Any:
     if isinstance(value, Range) or (isinstance(value, Decimal) and not value.is_finite()):
         return str(value)
     if isinstance(value, list):
-        if _is_numeric_or_boolean_array(cast(list[Any], value)):
+        if _is_numeric_or_boolean_array(cast(list[Any], value)):  # type: ignore[redundant-cast]
             # PyGreSQL renders these as a typed ARRAY[...] constructor, so
             # the array keeps its type even where PostgreSQL has no column
             # or cast to infer it from (array_length, unnest, SELECT %s).
