@@ -16,6 +16,7 @@ on the target server (the CI supabase/postgres service has them).
 from __future__ import annotations
 
 import os
+import re
 import textwrap
 from contextlib import suppress
 from pathlib import Path
@@ -150,9 +151,10 @@ def idle_template(tmp_path: Path):
         admin.execute(f"CREATE DATABASE {quote_identifier(name)}")
     dsn = conninfo.make_conninfo(base_dsn, dbname=name, application_name="fake-pooler")
     holder = database.connect(dsn, autocommit=True)
-    holder.execute("SELECT 1")
+    # The name the *server* sees: a pooler replaces it with its own.
+    seen_as = holder.execute("SHOW application_name").fetchone()[0]
     try:
-        yield dsn, holder
+        yield dsn, seen_as
     finally:
         with suppress(Exception):
             holder.close()
@@ -166,9 +168,11 @@ def idle_template(tmp_path: Path):
     reason="set SQLPROOF_TEST_DATABASE_URL to run Postgres integration tests",
 )
 def test_an_idle_session_on_the_template_is_named_in_the_error(idle_template) -> None:
-    dsn, _holder = idle_template
+    dsn, seen_as = idle_template
     runner = LocalMutationRunner(database_url=dsn, pytest_args=[])
-    with pytest.raises(SqlProofMutationError, match=r"fake-pooler.*release_template_sessions"):
+    with pytest.raises(
+        SqlProofMutationError, match=rf"{re.escape(seen_as)}.*release_template_sessions"
+    ):
         runner.run_baseline()
 
 
@@ -177,7 +181,7 @@ def test_an_idle_session_on_the_template_is_named_in_the_error(idle_template) ->
     reason="set SQLPROOF_TEST_DATABASE_URL to run Postgres integration tests",
 )
 def test_release_template_sessions_clones_past_an_idle_session(idle_template) -> None:
-    dsn, holder = idle_template
+    dsn, _seen_as = idle_template
     runner = LocalMutationRunner(
         database_url=dsn, pytest_args=[], release_template_sessions=True
     )
@@ -187,8 +191,11 @@ def test_release_template_sessions_clones_past_an_idle_session(idle_template) ->
             assert clone.execute("SELECT 1").fetchone() == (1,)
     finally:
         runner._drop_clone("sqlproof_baseline")
-    with pytest.raises(database.DatabaseError):
-        holder.execute("SELECT 1")
+    # The template is open to connections again afterwards.
+    with database.connect(dsn, autocommit=True) as template:
+        assert template.execute(
+            "SELECT datallowconn FROM pg_database WHERE datname = current_database()"
+        ).fetchone() == (True,)
 
 
 @pytest.mark.skipif(
@@ -196,7 +203,7 @@ def test_release_template_sessions_clones_past_an_idle_session(idle_template) ->
     reason="set SQLPROOF_TEST_DATABASE_URL to run Postgres integration tests",
 )
 def test_release_leaves_an_active_session_alone(idle_template) -> None:
-    dsn, _holder = idle_template
+    dsn, _seen_as = idle_template
     with database.connect(dsn, autocommit=True) as busy:
         busy_pid = busy.execute("SELECT pg_backend_pid()").fetchone()[0]
         busy.execute("BEGIN")
