@@ -289,5 +289,4 @@ keeps the library honest about the same invariants it asks users to write.
 
 ## License
 
-MIT. Some dependencies use other licenses, notably pglast (GPL-3.0) and
-psycopg (LGPL-3.0); see [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
+MIT. Dependencies include postgast (BSD-2-Clause) and psycopg (LGPL-3.0); see [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).

@@ -7,7 +7,7 @@ sampler consume an already-narrowed spec, so neither has to re-derive
 what a CHECK implies.
 
 Reading the CHECK text is `sqlproof.schema.checks`'s job: it parses
-the expression with pglast (so Postgres's introspected rendering and a
+the expression with postgast (so Postgres's introspected rendering and a
 schema file's source text land on the same facts) and splits it into
 per-column atoms -- numeric bounds, `length()`/`char_length()` bounds,
 allowed-value sets and excluded values. This module folds the atoms

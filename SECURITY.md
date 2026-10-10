@@ -52,7 +52,7 @@ Out of scope:
 - Issues that require write access to `pyproject.toml` or
   `release-please-config.json` (we trust maintainers).
 - Vulnerabilities in upstream dependencies (`hypothesis`, `psycopg`,
-  `pglast`) — report those to the respective projects.
+  `postgast`) — report those to the respective projects.
 - Test failures, false-positive property failures, or generator
   inefficiency — those are bugs; please use the regular bug report
   template.

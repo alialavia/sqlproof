@@ -82,7 +82,7 @@ authoring errors raise before a single database is cloned:
 - The target function must exist in the schema SQL, exactly once
   (overloads are not supported yet).
 - The pattern must match exactly once in the body.
-- The mutated body must parse (`pglast` for `LANGUAGE sql`,
+- The mutated body must parse (`postgast` for `LANGUAGE sql`,
   `plpgsql_check`'s parser for PL/pgSQL).
 - A mutated body whose AST equals the original's is rejected as a no-op
   mutant; two mutants producing the same AST are rejected as duplicates.

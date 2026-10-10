@@ -1,6 +1,6 @@
 """Turn a column's CHECK constraints into a Hypothesis strategy.
 
-The CHECK text is read by `sqlproof.schema.checks` (pglast, so live
+The CHECK text is read by `sqlproof.schema.checks` (postgast, so live
 introspection and schema files agree) and folded into the column's
 TypeSpec by `narrowing.narrow_spec_for_checks` -- the same narrowing
 the bulk path uses -- and the narrowed spec is interpreted by

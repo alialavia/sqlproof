@@ -6,7 +6,7 @@ SqlProof is a Python library for property-based testing of SQL queries, function
 
 **Core thesis:** Developers define _properties_ — universal invariants about their SQL — and SqlProof generates random valid datasets to try to falsify them. When a property fails, SqlProof reports the minimal counterexample with full reproduction information.
 
-**Built on:** [Hypothesis](https://hypothesis.works) (property-based testing engine), [psycopg](https://www.psycopg.org/psycopg3/) v3 (PostgreSQL client), [testcontainers-python](https://testcontainers-python.readthedocs.io/) (disposable Postgres instances), [pglast](https://github.com/lelit/pglast) (libpg_query bindings for SQL parsing), and [pytest](https://docs.pytest.org/) (test runner integration).
+**Built on:** [Hypothesis](https://hypothesis.works) (property-based testing engine), [psycopg](https://www.psycopg.org/psycopg3/) v3 (PostgreSQL client), [testcontainers-python](https://testcontainers-python.readthedocs.io/) (disposable Postgres instances), [postgast](https://github.com/eddieland/postgast) (libpg_query bindings for SQL parsing), and [pytest](https://docs.pytest.org/) (test runner integration).
 
 ## Package Info
 
@@ -28,7 +28,7 @@ sqlproof/
 │   ├── schema/
 │   │   ├── __init__.py
 │   │   ├── introspect.py           # Live Postgres introspection via pg_catalog
-│   │   ├── parse_sql.py            # Parse CREATE TABLE from .sql files via pglast
+│   │   ├── parse_sql.py            # Parse CREATE TABLE from .sql files via postgast
 │   │   ├── model.py                # Internal schema dataclasses
 │   │   ├── fingerprint.py          # Canonical schema fingerprint for caching
 │   │   └── dependency_graph.py     # FK topological sort
@@ -435,7 +435,7 @@ The plugin registers these CLI options:
 
 1. **Live introspection** (preferred): connect to Postgres and query `information_schema` and `pg_catalog`. Reflects the actual deployed schema.
 
-2. **SQL file parsing** (offline fallback): parse `CREATE TABLE`, `CREATE TYPE`, `ALTER TABLE`, `CREATE FUNCTION` from a `.sql` file via `pglast`. Recognized DDL is fully modeled; unrecognized DDL (e.g., `CREATE EXTENSION`, custom operators, `CREATE INDEX USING gin (...)`) is preserved as opaque blocks and replayed verbatim when bootstrapping a test database, but does not contribute to the schema model. Unparseable SQL raises `SqlProofSchemaError` with the offending statement and pglast error pointer; an opt-in `--ignore-unparseable` flag downgrades this to a warning.
+2. **SQL file parsing** (offline fallback): parse `CREATE TABLE`, `CREATE TYPE`, `ALTER TABLE`, `CREATE FUNCTION` from a `.sql` file via `postgast`. Recognized DDL is fully modeled; unrecognized DDL (e.g., `CREATE EXTENSION`, custom operators, `CREATE INDEX USING gin (...)`) is preserved as opaque blocks and replayed verbatim when bootstrapping a test database, but does not contribute to the schema model. Unparseable SQL raises `SqlProofSchemaError` with the offending statement and postgast error pointer; an opt-in `--ignore-unparseable` flag downgrades this to a warning.
 
 ### Internal Schema Representation
 
@@ -1020,7 +1020,7 @@ requires-python = ">=3.11"
 dependencies = [
   "hypothesis>=6.100",
   "psycopg[binary]>=3.1",
-  "pglast>=6.0",
+  "postgast>=0.2.0,<0.3",
   "rich>=13.0",
 ]
 
@@ -1131,7 +1131,7 @@ The schema parser is fuzzed against random and adversarial inputs:
 
 - **Random ASCII** — should never crash; either produces valid `SchemaInfo` or raises `SqlProofSchemaError`
 - **Real-world schemas** — a corpus of open-source Postgres schemas (Supabase examples, dbt-utils, popular OSS apps) parsed in CI on every commit
-- **pgsql-parser test corpus** — re-uses pglast's own test inputs as a baseline
+- **pgsql-parser test corpus** — re-uses postgast's own test inputs as a baseline
 
 Fuzz tests live in `tests/integration/fuzz/` and run for a fixed time budget per commit (default: 60 seconds), with discovered crashes saved to a regression corpus.
 
@@ -1205,7 +1205,7 @@ Items not on this list — including FK-aware cascade shrinking, exclusion-const
 
 1. Project scaffolding (`pyproject.toml`, `src/` layout, pytest config, pyright strict)
 2. Exception hierarchy
-3. Schema introspection via `pg_catalog`; SQL file parsing via `pglast`
+3. Schema introspection via `pg_catalog`; SQL file parsing via `postgast`
 4. Schema fingerprint
 5. Dependency graph + topological sort
 6. Column type → Hypothesis strategy mapping

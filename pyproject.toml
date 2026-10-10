@@ -39,7 +39,7 @@ classifiers = [
 dependencies = [
   "hypothesis>=6.100",
   "psycopg[binary]>=3.1",
-  "pglast>=6.0",
+  "postgast>=0.2.0,<0.3",
   "rich>=13.0",
 ]
 
@@ -62,6 +62,7 @@ dev = [
   "syrupy",
   "mutmut",
   "mypy",
+  "types-protobuf",
   "pyright",
   "ruff",
   "uv",
@@ -104,6 +105,13 @@ typeCheckingMode = "strict"
 python_version = "3.11"
 strict = true
 packages = ["sqlproof"]
+
+# postgast ships generated stubs containing PostgreSQL field names that
+# are Python keywords. Treat the parser API as untyped, like the old AST.
+[[tool.mypy.overrides]]
+module = ["postgast.*"]
+follow_imports = "skip"
+follow_imports_for_stubs = true
 
 [tool.coverage.run]
 source = ["src/sqlproof"]

@@ -14,7 +14,7 @@ cd sqlproof
 uv sync --extra dev
 ```
 
-That installs the runtime deps (`hypothesis`, `psycopg`, `pglast`, `rich`)
+That installs the runtime deps (`hypothesis`, `psycopg`, `postgast`, `rich`)
 and the dev toolchain (`pytest`, `ruff`, `mypy`, `pyright`, `syrupy`,
 `mutmut`).
 

@@ -51,11 +51,3 @@ version = "311"
 ecosystem = "PyPI"
 license.override = ["PSF-2.0"]
 reason = "No license in metadata; pywin32 is PSF-2.0. Windows-only transitive dep of docker."
-
-# --- Known exception ---------------------------------------------------------
-
-[[PackageOverrides]]
-name = "pglast"
-ecosystem = "PyPI"
-license.ignore = true
-reason = "GPL-3.0-or-later runtime dependency. Known exception pending its removal; see THIRD_PARTY_LICENSES.md."

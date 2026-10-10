@@ -13,7 +13,7 @@ ISC, PSF and similar).
 
 | Package | License | What it means |
 |---|---|---|
-| [pglast](https://github.com/lelit/pglast) | GPL-3.0-or-later | **Strong copyleft.** SqlProof's own code stays MIT, but if you redistribute SqlProof together with pglast (for example in a bundled application or image), the GPL applies to the combined work. Using SqlProof in your test suite, without redistributing it, is unaffected. Removal is planned. |
+| [postgast](https://github.com/eddieland/postgast) | BSD-2-Clause | Bundles libpg_query (BSD-3-Clause), PostgreSQL parser code (PostgreSQL License), protobuf-c (BSD-2-Clause), and xxHash (BSD-2-Clause). Preserve their notices when redistributing. |
 | [psycopg](https://github.com/psycopg/psycopg), psycopg-binary | LGPL-3.0-only | Fine to import from MIT or proprietary code. If you redistribute a *modified* psycopg, or bundle it so users can't swap it out, the LGPL terms apply to psycopg. |
 | [hypothesis](https://github.com/HypothesisWorks/hypothesis) | MPL-2.0 | File-level copyleft: only changes to Hypothesis's own files must be shared under MPL-2.0. Using it unmodified has no obligations. |
 | [sortedcontainers](https://github.com/grantjenks/python-sortedcontainers), tzdata | Apache-2.0 | Permissive. Keep the license and NOTICE file if you redistribute them. |
@@ -43,7 +43,6 @@ MPL-2.0 and LGPL-3.0. GPL and AGPL are not allowed.
 
 Exceptions and corrections live in `.github/osv-scanner-licenses.toml`:
 
-- **pglast** is a known exception until it is removed.
 - **colorama, libcst, nodeenv, pywin32** publish no standard license id in
   their package metadata, so their licenses are set by hand after reading
   each package's LICENSE file. The overrides are pinned to a version, so an
