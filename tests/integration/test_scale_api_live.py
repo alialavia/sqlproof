@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 from itertools import pairwise
+from uuid import uuid4
 
 import pytest
 
@@ -141,18 +142,30 @@ def test_a_modelled_table_holding_rows_is_refused_and_left_untouched(proof):
     assert _row_counts() == {"orgs": 3, "events": 0}
 
 
-RLS_ROLE = "sqlproof_scale_rls_test"
+RLS_ROLE_PREFIX = "sqlproof_scale_rls_"
 
 
 @pytest.fixture
-def rls_role_dsn(proof):
+def rls_role() -> str:
+    """A role name unique to this test. A session pooler (Supavisor) keeps
+    the server session it opened for a role after the client disconnects
+    and hands it to the next client with the same name. Recreating one
+    fixed name per test therefore reached a backend still bound to the
+    dropped role's OID ("invalid role OID", "permission denied for schema",
+    or a cached-password failure). A fresh name never matches a pooled
+    session."""
+    return f"{RLS_ROLE_PREFIX}{uuid4().hex[:12]}"
+
+
+@pytest.fixture
+def rls_role_dsn(proof, rls_role):
     """A non-superuser login role. Superusers bypass row-level security
     even under FORCE, so only a plain role can see a table as empty
     while TRUNCATE would still delete its rows."""
     dsn = os.environ[DSN_ENV]
     with database.connect(dsn, autocommit=True) as connection:
-        connection.execute(f"DROP ROLE IF EXISTS {RLS_ROLE}")
-        connection.execute(f"CREATE ROLE {RLS_ROLE} LOGIN PASSWORD 'rls'")
+        connection.execute(f"DROP ROLE IF EXISTS {rls_role}")
+        connection.execute(f"CREATE ROLE {rls_role} LOGIN PASSWORD 'rls'")
         try:
             # CI's `postgres` is not a superuser (supabase/postgres), so it
             # needs membership to hand tables to this role and to drop them.
@@ -160,20 +173,20 @@ def rls_role_dsn(proof):
             # 15.8.1.040 segfaults on `GRANT <role> TO CURRENT_USER`.
             connection.execute(
                 ("GRANT {} TO {}").format(
-                    quote_identifier(RLS_ROLE),
+                    quote_identifier(rls_role),
                     quote_identifier(connection.execute("SELECT current_user").fetchone()[0]),
                 )
             )
-            connection.execute(f"GRANT USAGE, CREATE ON SCHEMA api_test TO {RLS_ROLE}")
-            yield make_conninfo(with_user(dsn, RLS_ROLE), password="rls")
+            connection.execute(f"GRANT USAGE, CREATE ON SCHEMA api_test TO {rls_role}")
+            yield make_conninfo(with_user(dsn, rls_role), password="rls")
         finally:
             connection.execute("DROP SCHEMA IF EXISTS api_test CASCADE")
-            connection.execute(f"DROP OWNED BY {RLS_ROLE}")
-            connection.execute(f"DROP ROLE IF EXISTS {RLS_ROLE}")
+            connection.execute(f"DROP OWNED BY {rls_role}")
+            connection.execute(f"DROP ROLE IF EXISTS {rls_role}")
 
 
 @pytest.mark.parametrize("setup", ["force_rls_owner", "truncate_without_bypassrls"])
-def test_rows_hidden_by_rls_are_refused_and_left_untouched(rls_role_dsn, setup):
+def test_rows_hidden_by_rls_are_refused_and_left_untouched(rls_role, rls_role_dsn, setup):
     """Follow-up 1: RLS filters count(*) but not TRUNCATE. Each setup makes
     the sweep's role see 0 rows in a table that holds 3: as the table's
     owner under FORCE ROW LEVEL SECURITY, and as a role granted TRUNCATE
@@ -182,12 +195,12 @@ def test_rows_hidden_by_rls_are_refused_and_left_untouched(rls_role_dsn, setup):
     with database.connect(os.environ[DSN_ENV], autocommit=True) as connection:
         connection.execute("ALTER TABLE api_test.orgs ENABLE ROW LEVEL SECURITY")
         if setup == "force_rls_owner":
-            connection.execute(f"ALTER TABLE api_test.orgs OWNER TO {RLS_ROLE}")
-            connection.execute(f"ALTER TABLE api_test.events OWNER TO {RLS_ROLE}")
+            connection.execute(f"ALTER TABLE api_test.orgs OWNER TO {rls_role}")
+            connection.execute(f"ALTER TABLE api_test.events OWNER TO {rls_role}")
             connection.execute("ALTER TABLE api_test.orgs FORCE ROW LEVEL SECURITY")
         else:
             connection.execute(
-                f"GRANT SELECT, INSERT, TRUNCATE ON api_test.orgs, api_test.events TO {RLS_ROLE}"
+                f"GRANT SELECT, INSERT, TRUNCATE ON api_test.orgs, api_test.events TO {rls_role}"
             )
     with database.connect(rls_role_dsn) as as_role:
         visible = as_role.execute("SELECT count(*) FROM api_test.orgs").fetchone()
