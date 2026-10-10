@@ -13,6 +13,14 @@ factor-1 base of 100 puts the first spilling factor at 4 -- mid-ladder,
 with two non-spilling points below it and two spilling points above --
 rather than at factor 1, where "a spill point exists" would hold even
 for a probe that reported temp blocks at every point.
+
+The sort carries two columns (`id, payload`), not `payload` alone. A
+single-column sort is a Datum sort, and PostgreSQL 17 stores those far
+more compactly: on 17.x, 1600 such rows still quicksort in ~49kB at
+`work_mem='64kB'`, so the whole 100..1600 ladder fits in memory and no
+spill point exists (16.x spills from 400 rows). A two-column sort uses
+tuple storage on both versions; measured on postgres:16.14 and 17.11 it
+first spills at factor 4 on each, which keeps the ladder shape above.
 """
 from __future__ import annotations
 
@@ -56,7 +64,7 @@ def conn():
             connection.execute(
                 "CREATE FUNCTION space_test.sort_everything() RETURNS bigint "
                 "LANGUAGE sql STABLE AS $$ "
-                "SELECT count(*) FROM (SELECT payload FROM space_test.wide_rows "
+                "SELECT count(*) FROM (SELECT id, payload FROM space_test.wide_rows "
                 "ORDER BY payload) s $$"
             )
             yield connection
