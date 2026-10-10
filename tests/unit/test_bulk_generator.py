@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import random
-import signal
+import threading
 from decimal import Decimal
 
 import pytest
@@ -96,20 +96,25 @@ def test_range_sampler_raises_instead_of_hanging_on_a_single_value_domain():
     # Regression: a range whose element domain has exactly one
     # possible value (e.g. a single-value enum) can never produce two
     # distinct draws, so the retry loop must give up loudly rather
-    # than spin forever. A SIGALRM guard bounds this test itself so a
-    # future regression to an unbounded loop fails fast instead of
-    # hanging the suite.
+    # than spin forever. The sampler runs in a daemon thread with a
+    # bounded join so a future regression to an unbounded loop fails
+    # fast instead of hanging the suite. (A SIGALRM guard would not
+    # work on Windows, where the CI matrix now runs this file.)
     spec = TypeSpec(kind="range", element=TypeSpec(kind="enum", enum_values=("only",)))
     sample = sampler_for_spec(spec, random.Random(1))
+    outcome: list[BaseException | None] = []
 
-    def _on_alarm(signum: int, frame: object) -> None:
-        raise TimeoutError("range sampler did not raise within the timeout guard")
-
-    previous_handler = signal.signal(signal.SIGALRM, _on_alarm)
-    signal.alarm(5)
-    try:
-        with pytest.raises(SqlProofGenerationError):
+    def run() -> None:
+        try:
             sample()
-    finally:
-        signal.alarm(0)
-        signal.signal(signal.SIGALRM, previous_handler)
+        except BaseException as error:  # re-raised on the main thread
+            outcome.append(error)
+        else:
+            outcome.append(None)
+
+    worker = threading.Thread(target=run, daemon=True)
+    worker.start()
+    worker.join(timeout=5)
+    if worker.is_alive():
+        pytest.fail("range sampler did not raise within the timeout guard")
+    assert isinstance(outcome[0], SqlProofGenerationError), outcome[0]

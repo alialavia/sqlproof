@@ -165,3 +165,11 @@ covering `get_member_project_ids` / `get_editor_project_ids` against
 - The `auth.users` schema can drift across Supabase versions. The helpers
   insert minimal columns (`id`, `aud`, `role`, `email`); if your test data
   needs richer auth metadata, insert directly with raw SQL.
+- Connect to hosted Supabase on the **direct** port (5432), not through
+  the connection pooler (port 6543, Supavisor). The pooler silently drops
+  the `application_name` and `options` (`search_path`) connection
+  settings, needs the `.<project-ref>` suffix on role names, and keeps the
+  template database open, so the mutation runner's
+  `CREATE DATABASE ... TEMPLATE` is refused. If only the pooler is
+  reachable (IPv6-only direct endpoints are common), expect those
+  features to fail even though the schema under test is fine.
