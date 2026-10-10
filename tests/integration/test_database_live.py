@@ -237,3 +237,131 @@ def test_autocommit_and_explicit_transactions_follow_the_server_state() -> None:
         conn.rollback()
         assert not conn.in_transaction
         assert conn.execute("SELECT id FROM transaction_rows").fetchall() == [(1,)]
+
+
+def _array_schema(sql_type: str):
+    return parse_schema_sql(
+        f"CREATE TABLE array_rows (id integer PRIMARY KEY, value {sql_type})", schema="pg_temp"
+    )
+
+
+@st.composite
+def rectangular_integer_grids(draw: st.DrawFn) -> list[list[int | None]]:
+    # PostgreSQL arrays are rectangular, and an outer array of empty inner
+    # arrays ('{{}}') is not a valid literal, so size the grid up front.
+    rows = draw(st.integers(0, 3))
+    if rows == 0:
+        return []
+    columns = draw(st.integers(1, 3))
+    element = st.one_of(st.none(), st.integers(-(2**31), 2**31 - 1))
+    return draw(
+        st.lists(
+            st.lists(element, min_size=columns, max_size=columns),
+            min_size=rows,
+            max_size=rows,
+        )
+    )
+
+
+# Half of every element's characters come from the set the array literal
+# grammar treats specially, so each example exercises the escaping paths
+# rather than relying on a rare draw from the full Unicode range.
+ARRAY_TEXT = st.one_of(
+    st.none(),
+    st.just("NULL"),
+    st.text(
+        alphabet=st.one_of(
+            st.sampled_from('\\"{},\t\n\r '),
+            st.characters(blacklist_categories=("Cs",), blacklist_characters="\x00"),
+        ),
+        max_size=12,
+    ),
+)
+ARRAY_COLUMNS = {
+    "text[]": st.one_of(st.none(), st.lists(ARRAY_TEXT, max_size=5)),
+    "integer[][]": st.one_of(st.none(), rectangular_integer_grids()),
+}
+
+
+@pytest.mark.parametrize("sql_type", sorted(ARRAY_COLUMNS))
+@settings(max_examples=30, deadline=None)
+@given(data=st.data())
+def test_generated_arrays_survive_parameters_and_copy_identically(sql_type, data) -> None:
+    """Property: for any generated array column, the rows PostgreSQL stores after
+    a parameterized INSERT and after COPY both equal the generated rows.
+
+    Oracle: PostgreSQL's stored values, read back through the driver. Catches
+    escaping bugs in the array literal encoder for NULL elements, empty
+    arrays, quotes, braces, backslashes and whitespace, in either transport.
+    """
+    schema = _array_schema(sql_type)
+    dataset = data.draw(
+        dataset_strategy(
+            schema,
+            sizes={"array_rows": st.integers(0, 8)},
+            columns={"array_rows.value": ARRAY_COLUMNS[sql_type]},
+        )
+    )
+    rows = dataset["array_rows"]
+    expected = sorted(rows, key=lambda row: row["id"])
+    with database.connect(os.environ["SQLPROOF_TEST_DATABASE_URL"]) as conn:
+        for table in ("param_rows", "array_rows"):
+            conn.execute(
+                f"CREATE TEMPORARY TABLE {table} (id integer PRIMARY KEY, value {sql_type})"
+            )
+        for row in rows:
+            conn.execute(
+                "INSERT INTO param_rows (id, value) VALUES (%s, %s)", (row["id"], row["value"])
+            )
+        assert copy_table(conn, schema.tables[0], rows, ["id", "value"]) == len(rows)
+        with conn.cursor(row_factory=database.dict_row) as cur:
+            cur.execute("SELECT id, value FROM param_rows ORDER BY id")
+            assert cur.fetchall() == expected, "parameterized INSERT changed a value"
+            cur.execute("SELECT id, value FROM array_rows ORDER BY id")
+            assert cur.fetchall() == expected, "COPY changed a value"
+
+
+def test_an_error_leaving_a_connection_block_discards_its_transaction() -> None:
+    """DDL is transactional in PostgreSQL, so a table created inside the block
+    exists afterwards only if the adapter committed on exit."""
+    dsn = os.environ["SQLPROOF_TEST_DATABASE_URL"]
+    table = "sqlproof_it_exit_rollback"
+    with pytest.raises(RuntimeError, match="abandon"), database.connect(dsn) as conn:
+        conn.execute(f"CREATE TABLE {table} (id int)")
+        assert conn.in_transaction
+        raise RuntimeError("abandon")
+    with database.connect(dsn, autocommit=True) as observer:
+        assert observer.execute("SELECT to_regclass(%s)", (table,)).fetchone() == (None,), (
+            "the table must have been rolled back with the failed block"
+        )
+
+
+def test_a_clean_exit_from_a_connection_block_commits_its_transaction() -> None:
+    dsn = os.environ["SQLPROOF_TEST_DATABASE_URL"]
+    table = "sqlproof_it_exit_commit"
+    try:
+        with database.connect(dsn) as conn:
+            conn.execute(f"CREATE TABLE {table} (id int)")
+        with database.connect(dsn, autocommit=True) as observer:
+            assert observer.execute("SELECT to_regclass(%s)", (table,)).fetchone() != (None,), (
+                "the table must be visible to other sessions after the block"
+            )
+    finally:
+        with database.connect(dsn, autocommit=True) as cleanup:
+            cleanup.execute(f"DROP TABLE IF EXISTS {table}")
+
+
+def test_a_top_level_transaction_block_rolls_back_on_error_and_commits_on_success() -> None:
+    with database.connect(os.environ["SQLPROOF_TEST_DATABASE_URL"], autocommit=True) as conn:
+        conn.execute("CREATE TEMPORARY TABLE transaction_rows (id int PRIMARY KEY)")
+        assert not conn.in_transaction
+        with pytest.raises(RuntimeError, match="abandon"), conn.transaction():
+            conn.execute("INSERT INTO transaction_rows VALUES (1)")
+            assert conn.in_transaction, "the block must open a real transaction"
+            raise RuntimeError("abandon")
+        assert not conn.in_transaction
+        assert conn.execute("SELECT id FROM transaction_rows").fetchall() == []
+        with conn.transaction():
+            conn.execute("INSERT INTO transaction_rows VALUES (2)")
+        assert not conn.in_transaction, "the block must commit, not leave it open"
+        assert conn.execute("SELECT id FROM transaction_rows").fetchall() == [(2,)]
