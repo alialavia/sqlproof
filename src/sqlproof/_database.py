@@ -395,9 +395,7 @@ def startup_settings(options: str) -> list[tuple[str, str]]:
         if arg == "-c" and index + 1 < len(args):
             index += 1
             assignment = args[index]
-        elif arg.startswith("-c") and len(arg) > 2:
-            assignment = arg[2:]
-        elif arg.startswith("--") and len(arg) > 2:
+        elif arg.startswith(("-c", "--")) and len(arg) > 2:
             assignment = arg[2:]
         if assignment is not None and "=" in assignment:
             name, value = assignment.split("=", 1)
