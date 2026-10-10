@@ -24,6 +24,7 @@ def test_a_failed_handshake_closes_the_native_connection(monkeypatch: pytest.Mon
 
     class FakeNative:
         closed = False
+        options = ""
 
         def close(self) -> None:
             self.closed = True

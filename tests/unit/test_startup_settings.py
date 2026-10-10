@@ -38,8 +38,9 @@ def test_startup_settings_are_split_like_the_server_splits_them(options, expecte
 class _FakeNative:
     """Answers like a pooled backend that never saw the startup options."""
 
-    def __init__(self, settings: dict[str, str]) -> None:
+    def __init__(self, settings: dict[str, str], options: str) -> None:
         self.settings = settings
+        self.options = options
         self.set_calls: list[tuple[str, str]] = []
 
     def query(self, sql: str, params: tuple[str, ...]) -> Any:
@@ -60,23 +61,19 @@ class _FakeNative:
 
 
 def test_a_setting_the_pooler_dropped_is_set_for_the_session() -> None:
-    native = _FakeNative({"search_path": '"$user", public'})
-    database._reapply_startup_settings(
-        native, "host=pooler dbname=postgres options='-csearch_path=sqlproof_inv'"
-    )
+    native = _FakeNative({"search_path": '"$user", public'}, "-csearch_path=sqlproof_inv")
+    database._reapply_startup_settings(native)
     assert native.set_calls == [("search_path", "sqlproof_inv")]
 
 
 def test_a_setting_the_server_applied_is_left_alone() -> None:
-    native = _FakeNative({"search_path": "sqlproof_inv"})
-    database._reapply_startup_settings(
-        native, "postgresql://h/postgres?options=-csearch_path%3Dsqlproof_inv"
-    )
+    native = _FakeNative({"search_path": "sqlproof_inv"}, "-csearch_path=sqlproof_inv")
+    database._reapply_startup_settings(native)
     assert native.set_calls == []
 
 
-def test_pgoptions_is_the_fallback_like_libpq(monkeypatch) -> None:
+def test_libpqs_resolved_options_take_precedence_over_the_environment(monkeypatch) -> None:
     monkeypatch.setenv("PGOPTIONS", "-c search_path=from_env")
-    native = _FakeNative({"search_path": "public"})
-    database._reapply_startup_settings(native, "host=pooler dbname=postgres")
-    assert native.set_calls == [("search_path", "from_env")]
+    native = _FakeNative({"search_path": "public"}, "-c search_path=from_service")
+    database._reapply_startup_settings(native)
+    assert native.set_calls == [("search_path", "from_service")]

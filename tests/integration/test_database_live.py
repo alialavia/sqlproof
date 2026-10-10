@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from configparser import ConfigParser
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from uuid import UUID
@@ -12,7 +13,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from sqlproof import _database as database
-from sqlproof._dsn import make_conninfo
+from sqlproof._dsn import conninfo_to_dict, make_conninfo
 from sqlproof._range import Range
 from sqlproof.generators.graph import dataset_strategy
 from sqlproof.scale.load import copy_table
@@ -45,6 +46,27 @@ TEXT = st.one_of(
 DATASETS = dataset_strategy(
     SCHEMA, sizes={"transport_rows": st.integers(0, 15)}, columns={"transport_rows.value": TEXT}
 )
+
+
+@pytest.mark.parametrize(
+    ("options", "expected"),
+    [(None, "from_service"), ("-csearch_path=from_dsn", "from_dsn")],
+)
+def test_startup_options_keep_libpq_service_and_environment_precedence(
+    tmp_path, monkeypatch, options, expected
+) -> None:
+    service = ConfigParser(interpolation=None)
+    service["sqlproof_review"] = conninfo_to_dict(os.environ["SQLPROOF_TEST_DATABASE_URL"])
+    service["sqlproof_review"]["options"] = "-csearch_path=from_service"
+    service_path = tmp_path / "pg_service.conf"
+    with service_path.open("w") as file:
+        service.write(file, space_around_delimiters=False)
+    monkeypatch.setenv("PGSERVICEFILE", str(service_path))
+    monkeypatch.setenv("PGOPTIONS", "-csearch_path=from_environment")
+    dsn = make_conninfo(service="sqlproof_review", **({"options": options} if options else {}))
+
+    with database.connect(dsn) as conn:
+        assert conn.execute("SHOW search_path").fetchone() == (expected,)
 
 
 @settings(max_examples=30, deadline=None)

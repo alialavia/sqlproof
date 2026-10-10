@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 from collections.abc import Callable, Generator, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
@@ -16,9 +15,7 @@ from typing import Any, Literal, Self, cast
 import pg.core
 import pgdb
 
-from sqlproof._dsn import conninfo_to_dict
 from sqlproof._range import Range, quote_field
-from sqlproof.exceptions import SqlProofUsageError
 
 RowFactory = Literal["dict", "tuple"]
 dict_row: RowFactory = "dict"
@@ -406,7 +403,7 @@ def startup_settings(options: str) -> list[tuple[str, str]]:
     return settings
 
 
-def _reapply_startup_settings(native: Any, conninfo: str) -> None:
+def _reapply_startup_settings(native: Any) -> None:
     """Re-apply ``options`` settings that did not survive the connection.
 
     Transaction and session poolers (Supavisor, PgBouncer) drop or
@@ -416,13 +413,8 @@ def _reapply_startup_settings(native: Any, conninfo: str) -> None:
     is set for the session with ``set_config``, which a session pooler
     passes straight through.
     """
-    try:
-        options = conninfo_to_dict(conninfo).get("options")
-    except SqlProofUsageError:
-        return
-    if options is None:
-        options = os.environ.get("PGOPTIONS", "")
-    for name, value in startup_settings(options):
+    # libpq has already resolved DSN, service-file and environment precedence.
+    for name, value in startup_settings(native.options or ""):
         current = native.query("SELECT current_setting($1, true)", (name,)).getresult()
         if current[0][0] != value:
             native.query("SELECT set_config($1, $2, false)", (name, value))
@@ -436,7 +428,7 @@ def connect(
     # through pgdb.connect's legacy keyword argument escaping.
     native = pg.core.connect(conninfo)
     try:
-        _reapply_startup_settings(native, conninfo)
+        _reapply_startup_settings(native)
         connection = pgdb.Connection(native)
         # The adapter owns transaction boundaries using libpq's actual state,
         # including explicit BEGIN and savepoints. Disable pgdb's client flag.
