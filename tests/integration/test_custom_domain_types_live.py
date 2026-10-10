@@ -16,9 +16,9 @@ from __future__ import annotations
 import os
 from uuid import uuid4
 
-import psycopg
 import pytest
 
+from sqlproof import _database as database
 from sqlproof.schema.introspect import introspect_schema
 from sqlproof.schema.parse_sql import parse_schema_sql
 
@@ -45,7 +45,7 @@ def test_domain_typed_column_round_trips_through_postgres() -> None:
 
     dsn = os.environ["SQLPROOF_TEST_DATABASE_URL"]
     schema_name = f"sqlproof_dom_{uuid4().hex}"
-    with psycopg.connect(dsn, autocommit=True) as connection:
+    with database.connect(dsn, autocommit=True) as connection:
         connection.execute(f'CREATE SCHEMA "{schema_name}"')
         try:
             connection.execute(f'SET search_path TO "{schema_name}"')
@@ -58,7 +58,7 @@ def test_domain_typed_column_round_trips_through_postgres() -> None:
             assert parsed.column("qty").type.kind == "domain"
 
             # Introspector-side
-            with connection.cursor(row_factory=psycopg.rows.dict_row) as cur:
+            with connection.cursor(row_factory=database.dict_row) as cur:
                 introspected = introspect_schema(cur, schema=schema_name).table(
                     "products", schema=schema_name
                 )

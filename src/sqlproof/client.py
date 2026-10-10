@@ -73,7 +73,7 @@ class InMemorySqlProofClient:
         return self._dataset
 
 
-class PsycopgSqlProofClient:
+class PostgresSqlProofClient:
     def __init__(
         self,
         connection: Any,

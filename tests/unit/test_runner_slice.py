@@ -7,10 +7,10 @@ from typing import Any, cast
 import pytest
 from hypothesis import find
 from hypothesis import strategies as st
-from psycopg.types.json import Jsonb
 
 from sqlproof import ExternalTableSpec, SqlProof, sqlproof
 from sqlproof import core as core_module
+from sqlproof._database import Jsonb
 from sqlproof.core import _external_parent_rows, _insert_dataset
 from sqlproof.exceptions import SqlProofPropertyFailure, SqlProofUsageError
 from sqlproof.runners import property as property_module
@@ -339,7 +339,7 @@ def _proof_with_fake_external_users(
         def close(self) -> None:
             pass
 
-    monkeypatch.setattr(core_module.psycopg, "connect", lambda **kwargs: FakeConnection())
+    monkeypatch.setattr(core_module.database, "connect", lambda **kwargs: FakeConnection())
     return proof
 
 

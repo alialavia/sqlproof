@@ -21,11 +21,11 @@ import os
 from collections.abc import Generator
 from uuid import uuid4
 
-import psycopg
 import pytest
-from psycopg.conninfo import make_conninfo
 
 from sqlproof import SqlProof
+from sqlproof import _database as database
+from sqlproof._dsn import make_conninfo
 from sqlproof.config import SqlProofConfig
 from sqlproof.exceptions import SqlProofPropertyFailure
 
@@ -41,7 +41,7 @@ pytestmark = pytest.mark.skipif(
 def live_proof() -> Generator[SqlProof]:
     dsn = os.environ[DSN_ENV]
     schema_name = f"sqlproof_inv_{uuid4().hex}"
-    with psycopg.connect(dsn, autocommit=True) as connection:
+    with database.connect(dsn, autocommit=True) as connection:
         connection.execute(f'CREATE SCHEMA "{schema_name}"')
         try:
             connection.execute(
@@ -68,13 +68,14 @@ def test_a_query_on_missing_table_raises_instead_of_passing(
     live_proof: SqlProof,
 ) -> None:
     proof = live_proof
-    with pytest.raises(psycopg.errors.UndefinedTable):
+    with pytest.raises(database.DatabaseError) as exc:
         proof.invariant(
             "missing table",
             sizes={"orders": 2},
             query="SELECT id FROM no_such_table",
             runs=1,
         )
+    assert database.sqlstate(exc.value) == "42P01"
 
 
 def test_b_where_false_with_expect_empty_passes(live_proof: SqlProof) -> None:
@@ -90,13 +91,14 @@ def test_b_where_false_with_expect_empty_passes(live_proof: SqlProof) -> None:
 
 def test_c_garbage_sql_raises_instead_of_passing(live_proof: SqlProof) -> None:
     proof = live_proof
-    with pytest.raises(psycopg.errors.SyntaxError):
+    with pytest.raises(database.DatabaseError) as exc:
         proof.invariant(
             "garbage",
             sizes={"orders": 2},
             query="this is not sql",
             runs=1,
         )
+    assert database.sqlstate(exc.value) == "42601"
 
 
 def test_passing_where_invariant(live_proof: SqlProof) -> None:
@@ -175,8 +177,9 @@ def test_connection_is_usable_after_a_query_error(live_proof: SqlProof) -> None:
     # A failed query aborts the transaction; the savepoint rollback in
     # client_for_dataset must leave the connection usable for the next call.
     proof = live_proof
-    with pytest.raises(psycopg.errors.SyntaxError):
+    with pytest.raises(database.DatabaseError) as exc:
         proof.invariant("garbage", sizes={"orders": 1}, query="SELEC nope", runs=1)
+    assert database.sqlstate(exc.value) == "42601"
     proof.invariant(
         "still works",
         sizes={"orders": 2},

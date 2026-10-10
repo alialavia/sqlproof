@@ -23,9 +23,9 @@ from __future__ import annotations
 
 import os
 
-import psycopg
 import pytest
 
+from sqlproof import _database as database
 from sqlproof.scale.load import analyze, load_dataset, truncate
 from sqlproof.scale.sweep import run_sweep
 from sqlproof.schema.parse_sql import parse_schema_sql
@@ -62,7 +62,7 @@ NEEDLE_COLUMNS = {"lookups.needle": lambda ctx: ctx.row_index % 1000}
 
 @pytest.fixture
 def conn():
-    with psycopg.connect(os.environ[DSN_ENV], autocommit=True) as connection:
+    with database.connect(os.environ[DSN_ENV], autocommit=True) as connection:
         try:
             # Ruling AH: all setup lives inside the try, so a failure
             # partway through still drops whatever schema/objects did

@@ -17,9 +17,9 @@ import os
 from decimal import Decimal
 from uuid import uuid4
 
-import psycopg
 import pytest
 
+from sqlproof import _database as database
 from sqlproof.schema.parse_sql import parse_schema_sql
 
 # Use smallint for qty and a small numeric for unit_price so the
@@ -52,7 +52,7 @@ def test_stored_generated_column_survives_full_dataset_insert() -> None:
 
     dsn = os.environ["SQLPROOF_TEST_DATABASE_URL"]
     schema_name = f"sqlproof_gen_{uuid4().hex}"
-    with psycopg.connect(dsn, autocommit=True) as connection:
+    with database.connect(dsn, autocommit=True) as connection:
         connection.execute(f'CREATE SCHEMA "{schema_name}"')
         try:
             for statement in SCHEMA_SQL.strip().split(";"):

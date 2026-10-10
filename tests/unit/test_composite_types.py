@@ -38,7 +38,7 @@ Failure cases each invariant addresses:
        generator has no signal that it should emit structured
        values.
   (ii): A flat text fallback can't produce values Postgres will
-        accept for a composite column — psycopg's adapter needs
+        accept for a composite column — database's adapter needs
         either a registered composite class or a properly-shaped
         tuple/dict.
   (iii): A non-recursive resolution would treat the nested

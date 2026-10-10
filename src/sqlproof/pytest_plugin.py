@@ -218,23 +218,23 @@ def supabase_proof(sqlproof_database_url: str) -> Generator[SqlProof]:
     the admin API in your own conftest override.
     """
     # Imports inside the fixture so that projects that never use this
-    # path (and don't have `psycopg` or the Supabase contrib in scope)
+    # path (and don't have PyGreSQL or the Supabase contrib in scope)
     # don't pay the import cost at plugin load.
-    import psycopg
     from hypothesis import strategies as st
-    from psycopg.rows import dict_row
 
     from sqlproof import ExternalTableSpec, SqlProof
-    from sqlproof.client import PsycopgSqlProofClient
+    from sqlproof import _database as database
+    from sqlproof._database import dict_row
+    from sqlproof.client import PostgresSqlProofClient
     from sqlproof.contrib.supabase import seed_test_users_directly
 
     seed_count = 5
-    with psycopg.connect(
+    with database.connect(
         sqlproof_database_url,
         autocommit=True,
-        row_factory=dict_row,  # pyright: ignore[reportArgumentType]
+        row_factory=dict_row,
     ) as conn:
-        seed_client = PsycopgSqlProofClient(conn)
+        seed_client = PostgresSqlProofClient(conn)
         seed_test_users_directly(seed_client, count=seed_count)
 
     def _sample_test_user_ids(db: SqlProofClient) -> list[object]:

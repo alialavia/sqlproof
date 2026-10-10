@@ -22,11 +22,11 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from uuid import uuid4
 
-import psycopg
 import pytest
-from psycopg.rows import dict_row
 
-from sqlproof.client import PsycopgSqlProofClient
+from sqlproof import _database as database
+from sqlproof._database import dict_row
+from sqlproof.client import PostgresSqlProofClient
 from sqlproof.contrib.plpgsql_coverage import (
     assert_nonzero_coverage,
     collect_coverage,
@@ -45,7 +45,7 @@ pytestmark = pytest.mark.skipif(
 
 
 @contextmanager
-def _temp_schema_with_functions() -> Generator[tuple[PsycopgSqlProofClient, str]]:
+def _temp_schema_with_functions() -> Generator[tuple[PostgresSqlProofClient, str]]:
     """Create a uniquely-named schema with a plpgsql function and a sql function.
 
     Skips the test if `plpgsql_check` isn't installed in the target DB —
@@ -58,8 +58,8 @@ def _temp_schema_with_functions() -> Generator[tuple[PsycopgSqlProofClient, str]
     dsn = os.environ[DSN_ENV]
     schema = f"sqlproof_cov_it_{uuid4().hex[:12]}"
 
-    with psycopg.connect(dsn, autocommit=True, row_factory=dict_row) as conn:
-        client = PsycopgSqlProofClient(conn)
+    with database.connect(dsn, autocommit=True, row_factory=dict_row) as conn:
+        client = PostgresSqlProofClient(conn)
 
         if not plpgsql_check_available(client):
             pytest.skip(

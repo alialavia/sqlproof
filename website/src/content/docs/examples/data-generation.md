@@ -248,14 +248,14 @@ strategy = proof.dataset_strategy(sizes={
 dataset = strategy.example()
 
 # `client_for_dataset` rolls back by default. To commit:
-from sqlproof.client import PsycopgSqlProofClient
-import psycopg
-from psycopg.rows import dict_row
+from sqlproof.client import PostgresSqlProofClient
+from sqlproof import _database as database
+from sqlproof._database import dict_row
 from sqlproof.core import _insert_dataset
 
-with psycopg.connect(os.environ["DATABASE_URL"], autocommit=True,
+with database.connect(os.environ["DATABASE_URL"], autocommit=True,
                      row_factory=dict_row) as conn:
-    client = PsycopgSqlProofClient(conn)
+    client = PostgresSqlProofClient(conn)
     _insert_dataset(client, proof.schema_info, dataset)
 
 print(f"Seeded {sum(len(rows) for rows in dataset.values())} rows.")

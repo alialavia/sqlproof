@@ -14,9 +14,9 @@ import os
 from decimal import Decimal
 from uuid import uuid4
 
-import psycopg
-import psycopg.rows
 import pytest
+
+from sqlproof import _database as database
 
 SCHEMA_SQL = """
 CREATE TABLE modifier_types (
@@ -37,7 +37,7 @@ pytestmark = pytest.mark.skipif(
 def schema_and_dsn():
     dsn = os.environ["SQLPROOF_TEST_DATABASE_URL"]
     schema_name = f"sqlproof_atttypmod_{uuid4().hex}"
-    with psycopg.connect(dsn, autocommit=True) as conn:
+    with database.connect(dsn, autocommit=True) as conn:
         conn.execute(f'CREATE SCHEMA "{schema_name}"')
         try:
             for stmt in SCHEMA_SQL.strip().split(";"):
@@ -57,7 +57,7 @@ def test_varchar_modifiers_round_trip(schema_and_dsn) -> None:
     from sqlproof.schema.introspect import introspect_schema
 
     dsn, schema_name = schema_and_dsn
-    with psycopg.connect(dsn) as conn, conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+    with database.connect(dsn) as conn, conn.cursor(row_factory=database.dict_row) as cur:
         schema = introspect_schema(cur, schema=schema_name)
     col = schema.table("modifier_types", schema=schema_name).column("name")
     assert col.type.name == "varchar"
@@ -68,7 +68,7 @@ def test_char_modifiers_round_trip(schema_and_dsn) -> None:
     from sqlproof.schema.introspect import introspect_schema
 
     dsn, schema_name = schema_and_dsn
-    with psycopg.connect(dsn) as conn, conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+    with database.connect(dsn) as conn, conn.cursor(row_factory=database.dict_row) as cur:
         schema = introspect_schema(cur, schema=schema_name)
     col = schema.table("modifier_types", schema=schema_name).column("code")
     assert col.type.name == "bpchar"
@@ -79,7 +79,7 @@ def test_numeric_modifiers_round_trip(schema_and_dsn) -> None:
     from sqlproof.schema.introspect import introspect_schema
 
     dsn, schema_name = schema_and_dsn
-    with psycopg.connect(dsn) as conn, conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+    with database.connect(dsn) as conn, conn.cursor(row_factory=database.dict_row) as cur:
         schema = introspect_schema(cur, schema=schema_name)
     col = schema.table("modifier_types", schema=schema_name).column("price")
     assert col.type.name == "numeric"

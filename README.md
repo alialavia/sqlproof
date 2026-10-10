@@ -6,7 +6,7 @@
 
 Property-based testing for PostgreSQL. Describe an invariant about your schema
 or SQL; SqlProof generates valid datasets with Hypothesis, runs your query
-through `psycopg`, and saves the shrunk counterexample when something breaks.
+through `PyGreSQL`, and saves the shrunk counterexample when something breaks.
 
 **Full docs: [sqlproof.com](https://sqlproof.com)**
 
@@ -19,6 +19,25 @@ uv add sqlproof
 ```
 
 Requires Python 3.11+ and PostgreSQL 13+.
+
+Connections use PyGreSQL and the system's PostgreSQL client library (`libpq`).
+PostgreSQL URLs, keyword DSNs, SSL settings, service files and `PG*` environment
+variables are handled by libpq. Raw database errors are PyGreSQL exceptions;
+range values use `sqlproof.Range`.
+
+Install the PostgreSQL client development tools before installing SqlProof
+from source (PyGreSQL currently supplies Windows wheels):
+
+```bash
+# Debian / Ubuntu
+sudo apt-get install build-essential libpq-dev
+# macOS
+brew install libpq
+export PATH="$(brew --prefix libpq)/bin:$PATH"
+```
+
+On Windows, install PostgreSQL's client tools and put the directory containing
+`libpq.dll` on `PATH`.
 
 Running in CI? See [the CI/CD guide](https://sqlproof.com/guides/ci-cd/) for
 copy-paste GitHub Actions workflows covering vanilla Postgres and the extra
@@ -289,4 +308,4 @@ keeps the library honest about the same invariants it asks users to write.
 
 ## License
 
-MIT. Dependencies include postgast (BSD-2-Clause) and psycopg (LGPL-3.0); see [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
+MIT. Dependencies include postgast (BSD-2-Clause) and PyGreSQL (PostgreSQL License); see [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).

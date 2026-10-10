@@ -22,10 +22,10 @@ from __future__ import annotations
 import os
 from uuid import uuid4
 
-import psycopg
 import pytest
 
 from sqlproof import SqlProof
+from sqlproof import _database as database
 from sqlproof.config import SqlProofConfig
 
 DSN_ENV = "SQLPROOF_TEST_DATABASE_URL"
@@ -66,7 +66,7 @@ def cyclic_schema(request: pytest.FixtureRequest) -> tuple[str, str]:
     dsn = os.environ[DSN_ENV]
     schema_name = f"sqlproof_fk_cycle_it_{uuid4().hex[:12]}"
 
-    with psycopg.connect(dsn, autocommit=True) as conn:
+    with database.connect(dsn, autocommit=True) as conn:
         conn.execute(f'CREATE SCHEMA "{schema_name}"')
         try:
             # Apply the cyclic schema inside the new schema. The
@@ -79,7 +79,7 @@ def cyclic_schema(request: pytest.FixtureRequest) -> tuple[str, str]:
             raise
 
     def cleanup() -> None:
-        with psycopg.connect(dsn, autocommit=True) as cleanup_conn:
+        with database.connect(dsn, autocommit=True) as cleanup_conn:
             cleanup_conn.execute(f'DROP SCHEMA IF EXISTS "{schema_name}" CASCADE')
 
     request.addfinalizer(cleanup)
@@ -156,7 +156,7 @@ def test_generated_dataset_round_trips_through_cycle_schema(
     def property_succeeds(db) -> None:
         # Invariants (a, b, c, d). If any FK was violated, we wouldn't
         # have reached this point — the inserter would have raised
-        # psycopg.errors.ForeignKeyViolation or NotNullViolation.
+        # database.DatabaseError or NotNullViolation.
         n_content_actual = db.scalar(f"SELECT count(*) FROM {q_content}")
         n_versions_actual = db.scalar(f"SELECT count(*) FROM {q_versions}")
         assert n_content_actual == n_content

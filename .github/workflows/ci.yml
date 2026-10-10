@@ -36,6 +36,8 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - uses: astral-sh/setup-uv@v7
+      - name: Install PostgreSQL client development tools
+        run: sudo apt-get update && sudo apt-get install -y libpq-dev
       - run: uv sync --extra dev
       - name: Bring Postgres surface into lockstep with managed Supabase
         uses: ./.github/actions/setup-supabase-test-db
@@ -58,6 +60,39 @@ jobs:
           # and add as repo secret CODECOV_TOKEN.
           token: ${{ secrets.CODECOV_TOKEN }}
 
+  native-dependencies:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: astral-sh/setup-uv@v7
+      - name: Install libpq on Linux
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libpq-dev
+      - name: Install libpq on macOS
+        if: runner.os == 'macOS'
+        run: |
+          brew install libpq
+          echo "$(brew --prefix libpq)/bin" >> "$GITHUB_PATH"
+      - name: Enable the runner's PostgreSQL client on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (!(Test-Path "$env:PGBIN/libpq.dll")) {
+            throw "The runner's PostgreSQL client library is missing"
+          }
+          $env:PGBIN | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - run: uv sync --locked --extra dev
+      - run: uv run pytest tests/unit tests/meta
+      - run: uv build
+
   licenses:
     # Fails when a dependency in uv.lock or website/package-lock.json uses a
     # license outside this allowlist (permissive licenses, plus MPL-2.0 and
@@ -71,7 +106,7 @@ jobs:
         with:
           scan-args: |-
             --config=.github/osv-scanner-licenses.toml
-            --licenses=MIT,0BSD,ISC,BSD-2-Clause,BSD-3-Clause,Apache-2.0,PSF-2.0,Python-2.0,BlueOak-1.0.0,CC0-1.0,MPL-2.0,LGPL-3.0-only,LGPL-3.0-or-later
+            --licenses=MIT,0BSD,ISC,BSD-2-Clause,BSD-3-Clause,PostgreSQL,Apache-2.0,PSF-2.0,Python-2.0,BlueOak-1.0.0,CC0-1.0,MPL-2.0,LGPL-3.0-only,LGPL-3.0-or-later
             --lockfile=uv.lock
             --lockfile=website/package-lock.json
 

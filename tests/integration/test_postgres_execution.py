@@ -3,10 +3,10 @@ from __future__ import annotations
 import os
 from uuid import uuid4
 
-import psycopg
 import pytest
 
 from sqlproof import SqlProof
+from sqlproof import _database as database
 from sqlproof.config import SqlProofConfig
 from sqlproof.exceptions import SqlProofPropertyFailure
 
@@ -18,7 +18,7 @@ from sqlproof.exceptions import SqlProofPropertyFailure
 def test_dsn_backed_property_runs_against_live_postgres() -> None:
     dsn = os.environ["SQLPROOF_TEST_DATABASE_URL"]
     schema_name = f"sqlproof_it_{uuid4().hex}"
-    with psycopg.connect(dsn, autocommit=True) as connection:
+    with database.connect(dsn, autocommit=True) as connection:
         connection.execute(f'CREATE SCHEMA "{schema_name}"')
         try:
             connection.execute(

@@ -235,7 +235,7 @@ def _base_sampler_for_spec(spec: TypeSpec, rng: random.Random) -> Callable[[], A
         element = sampler_for_spec(element_spec, rng)
 
         def draw_range() -> Any:
-            from psycopg.types.range import Range
+            from sqlproof._range import Range
 
             a, b = element(), element()
             attempts = 1

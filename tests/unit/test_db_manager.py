@@ -5,7 +5,7 @@ from typing import Any
 
 from sqlproof import SqlProof
 from sqlproof import core as core_module
-from sqlproof.client import PsycopgSqlProofClient
+from sqlproof.client import PostgresSqlProofClient
 from sqlproof.config import SqlProofConfig
 from sqlproof.runners import db as db_module
 from sqlproof.runners.db import DBManager
@@ -36,9 +36,9 @@ class FakeConnection:
         self.closed = True
 
 
-def test_psycopg_client_executes_queries_and_scalars() -> None:
+def test_database_client_executes_queries_and_scalars() -> None:
     connection = FakeConnection()
-    client = PsycopgSqlProofClient(connection, dataset={"users": [{"id": 1}]})
+    client = PostgresSqlProofClient(connection, dataset={"users": [{"id": 1}]})
 
     assert client.query("SELECT id, name FROM users WHERE id = %s", 1) == [{"id": 1, "name": "Ada"}]
     assert client.scalar("SELECT id FROM users") == 1
@@ -46,9 +46,9 @@ def test_psycopg_client_executes_queries_and_scalars() -> None:
     assert connection.executed[0] == ("SELECT id, name FROM users WHERE id = %s", (1,))
 
 
-def test_psycopg_client_executes_mutations_files_and_savepoints(tmp_path: Path) -> None:
+def test_database_client_executes_mutations_files_and_savepoints(tmp_path: Path) -> None:
     connection = FakeConnection()
-    client = PsycopgSqlProofClient(connection)
+    client = PostgresSqlProofClient(connection)
     sql_file = tmp_path / "seed.sql"
     sql_file.write_text(
         "INSERT INTO users VALUES (1);\nINSERT INTO users VALUES (2);",
@@ -80,14 +80,14 @@ def test_db_manager_connects_with_connection_string_and_closes(monkeypatch) -> N
         calls.append(kwargs)
         return connection
 
-    monkeypatch.setattr(db_module.psycopg, "connect", fake_connect)
+    monkeypatch.setattr(db_module.database, "connect", fake_connect)
     manager = DBManager(
         SqlProofConfig(connection_string="postgresql://localhost/postgres", schema="public")
     )
 
     manager.start()
     with manager.acquire() as client:
-        assert isinstance(client, PsycopgSqlProofClient)
+        assert isinstance(client, PostgresSqlProofClient)
         assert client.scalar("SELECT id") == 1
     manager.stop()
 
@@ -113,7 +113,7 @@ def test_sqlproof_from_connection_string_introspects_schema(monkeypatch) -> None
         assert schema == "public"
         return SchemaInfo()
 
-    monkeypatch.setattr(core_module.psycopg, "connect", fake_connect)
+    monkeypatch.setattr(core_module.database, "connect", fake_connect)
     monkeypatch.setattr(core_module, "introspect_schema", fake_introspect)
 
     proof = SqlProof.from_connection_string("postgresql://localhost/postgres")

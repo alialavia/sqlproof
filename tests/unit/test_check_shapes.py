@@ -1,7 +1,7 @@
 """Common CHECK shapes are honored by both generation paths (#113).
 
 Every shape is written twice: as a user writes it in a schema file
-(what `from_schema_file` sees after pglast's deparse) and as Postgres
+(what `from_schema_file` sees after postgast's deparse) and as Postgres
 renders it through `pg_get_constraintdef` (what
 `from_connection_string` sees -- extra parentheses, `::type` casts,
 `BETWEEN` rewritten to `>= AND <=`, `IN` rewritten to `= ANY

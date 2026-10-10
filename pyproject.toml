@@ -38,7 +38,7 @@ classifiers = [
 ]
 dependencies = [
   "hypothesis>=6.100",
-  "psycopg[binary]>=3.1",
+  "PyGreSQL>=6.2.3,<7",
   "postgast>=0.2.0,<0.3",
   "rich>=13.0",
 ]

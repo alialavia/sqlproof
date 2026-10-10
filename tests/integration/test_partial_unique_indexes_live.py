@@ -12,7 +12,7 @@ tests can't exercise:
 
 The unit tests assert these invariants against in-memory fakes; this
 test catches drift between ``pg_get_expr``'s predicate text and the
-parser's `_render` output, plus any psycopg-level surprises in the
+parser's `_render` output, plus any database-level surprises in the
 INSERT path.
 """
 
@@ -21,9 +21,9 @@ from __future__ import annotations
 import os
 from uuid import uuid4
 
-import psycopg
 import pytest
 
+from sqlproof import _database as database
 from sqlproof.schema.introspect import introspect_schema
 from sqlproof.schema.model import PartialUniqueConstraint
 from sqlproof.schema.parse_sql import parse_schema_sql
@@ -53,7 +53,7 @@ def test_introspect_partial_unique_index_round_trips_through_postgres() -> None:
     """
     dsn = os.environ["SQLPROOF_TEST_DATABASE_URL"]
     schema_name = f"sqlproof_part_uq_{uuid4().hex}"
-    with psycopg.connect(dsn, autocommit=True) as connection:
+    with database.connect(dsn, autocommit=True) as connection:
         connection.execute(f'CREATE SCHEMA "{schema_name}"')
         try:
             connection.execute(f'SET search_path TO "{schema_name}"')
@@ -70,7 +70,7 @@ def test_introspect_partial_unique_index_round_trips_through_postgres() -> None:
             )
 
             # Introspector-side
-            with connection.cursor(row_factory=psycopg.rows.dict_row) as cur:
+            with connection.cursor(row_factory=database.dict_row) as cur:
                 introspected = introspect_schema(cur, schema=schema_name).table(
                     "users", schema=schema_name
                 )

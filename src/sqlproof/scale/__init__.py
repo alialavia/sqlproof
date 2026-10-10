@@ -20,8 +20,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-import psycopg
-
+from sqlproof import _database as database
 from sqlproof.exceptions import SqlProofUsageError
 from sqlproof.mutation.persist import capture_git_info
 from sqlproof.scale.args import heaviest, median_key, random_key
@@ -98,7 +97,7 @@ def scale_analysis(
     git_dirty = False
     if artifact_dir is not None:
         git_sha, git_dirty = capture_git_info()
-    with psycopg.connect(dsn, autocommit=True) as conn:
+    with database.connect(dsn, autocommit=True) as conn:
         result = run_sweep(
             conn, proof.schema_info, function,
             sizes=sizes, args=args, truncate_existing=truncate_existing, **kwargs,

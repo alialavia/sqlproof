@@ -107,7 +107,7 @@ pgTAP only finds what you remembered to assert.
 
 pgTAP runs *inside* Postgres. If your team's expertise is SQL and you
 don't want a Python toolchain, pgTAP is the right choice. SqlProof
-requires Python 3.11+, `psycopg`, `Hypothesis`, and (usually) pytest.
+requires Python 3.11+, `PyGreSQL`, `Hypothesis`, and (usually) pytest.
 
 ### 2. Schema introspection helpers
 
@@ -184,4 +184,4 @@ that go subtly wrong on data you didn't have when you wrote the test.
 
 If you're starting fresh on a Postgres-heavy project that has Python
 in the loop anyway — backend service, data pipeline, anything calling
-`psycopg` — SqlProof tends to find more bugs per line of test code.
+`PyGreSQL` — SqlProof tends to find more bugs per line of test code.

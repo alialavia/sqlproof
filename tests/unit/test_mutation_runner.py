@@ -106,6 +106,7 @@ def test_pytest_command_omits_seed_flag_by_default() -> None:
 # Fix 1: subprocess timeout → "error" outcome, clone still dropped
 # ---------------------------------------------------------------------------
 
+
 def test_timeout_expired_yields_error_outcome_and_drops_clone() -> None:
     class TimeoutRunner(FakeRunner):
         def _run_pytest(self, clone_dsn: str) -> tuple[int, str]:
@@ -122,6 +123,7 @@ def test_timeout_expired_yields_error_outcome_and_drops_clone() -> None:
 # ---------------------------------------------------------------------------
 # Fix 3: _resolve_seed helper
 # ---------------------------------------------------------------------------
+
 
 def test_resolve_seed_returns_given_value_unchanged() -> None:
     assert _resolve_seed(7) == 7
@@ -142,6 +144,7 @@ def test_resolve_seed_none_generates_distinct_values() -> None:
 # ---------------------------------------------------------------------------
 # Fix 4: unmasked root cause when finally-drop raises
 # ---------------------------------------------------------------------------
+
 
 def test_drop_exception_includes_root_cause_in_detail() -> None:
     class DoubleFaultRunner(FakeRunner):
@@ -166,15 +169,23 @@ def test_drop_exception_includes_root_cause_in_detail() -> None:
 # Fix 6: cheap unit tests for untested seams
 # ---------------------------------------------------------------------------
 
+
 def test_dsn_for_preserves_port_and_ssl() -> None:
     runner = LocalMutationRunner(
         database_url="postgresql://u:p@h:5433/base?sslmode=disable",
         pytest_args=[],
     )
     dsn = runner._dsn_for("clone1")
-    assert "dbname=clone1" in dsn
-    assert "port=5433" in dsn
-    assert "sslmode=disable" in dsn
+    from sqlproof._dsn import conninfo_to_dict
+
+    assert conninfo_to_dict(dsn) == {
+        "user": "u",
+        "password": "p",
+        "host": "h",
+        "port": "5433",
+        "dbname": "clone1",
+        "sslmode": "disable",
+    }
 
 
 def test_dbname_on_dsn_without_dbname_raises() -> None:

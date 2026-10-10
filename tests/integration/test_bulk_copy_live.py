@@ -10,11 +10,10 @@ from __future__ import annotations
 
 import os
 
-import psycopg
-import psycopg.errors
 import pytest
-from psycopg.rows import dict_row
 
+from sqlproof import _database as database
+from sqlproof._database import dict_row
 from sqlproof.exceptions import SqlProofGenerationError
 from sqlproof.scale.load import analyze, load_dataset, truncate
 from sqlproof.schema.introspect import introspect_schema
@@ -44,7 +43,7 @@ CREATE TABLE orders (
 
 @pytest.fixture
 def conn():
-    with psycopg.connect(os.environ[DSN_ENV], autocommit=True) as connection:
+    with database.connect(os.environ[DSN_ENV], autocommit=True) as connection:
         connection.execute("DROP SCHEMA IF EXISTS bulk_test CASCADE")
         connection.execute("CREATE SCHEMA bulk_test")
         connection.execute("SET search_path TO bulk_test")
@@ -90,7 +89,7 @@ def test_cyclic_schema_raises_rather_than_loading_null_relationships(conn):
     exact cyclic SQL it returns `content.foreign_keys == ()`), which
     would make the cycle invisible to `resolve_insertion_plan` and
     fail this test for the wrong reason (either no raise at all, or a
-    `psycopg` error from the tables never having been introspected
+    `database` error from the tables never having been introspected
     correctly, instead of the `SqlProofGenerationError` this test is
     actually about). Introspecting the live schema after applying the
     ALTER TABLE picks the FK up the same way a real caller's schema
@@ -107,7 +106,7 @@ def test_cyclic_schema_raises_rather_than_loading_null_relationships(conn):
     """
     conn.execute(cyclic)
 
-    with psycopg.connect(
+    with database.connect(
         os.environ[DSN_ENV], autocommit=True, row_factory=dict_row
     ) as introspect_conn:
         schema = introspect_schema(introspect_conn, schema="bulk_test")
@@ -127,7 +126,7 @@ def test_truncate_refuses_a_table_outside_the_modelled_schema(conn):
     The exact exception class was checked empirically rather than
     assumed: Postgres raises SQLSTATE 0A000
     ("cannot truncate a table referenced in a foreign key constraint"),
-    which psycopg maps to `FeatureNotSupported`, not the more
+    which database maps to `FeatureNotSupported`, not the more
     intuitive-sounding `ForeignKeyViolation` (that class is for DML --
     INSERT/UPDATE/DELETE -- violating a constraint, not for TRUNCATE
     refusing to run at all).
@@ -148,8 +147,9 @@ def test_truncate_refuses_a_table_outside_the_modelled_schema(conn):
         before = conn.execute("SELECT count(*) FROM bulk_test.audit_log").fetchone()[0]
         assert before == 5
 
-        with pytest.raises(psycopg.errors.FeatureNotSupported):
+        with pytest.raises(database.DatabaseError) as exc:
             truncate(conn, schema)
+        assert database.sqlstate(exc.value) == "0A000"
 
         after = conn.execute("SELECT count(*) FROM bulk_test.audit_log").fetchone()[0]
         assert after == before  # the outside table's rows survive
@@ -180,14 +180,14 @@ CREATE TABLE docs (
 def test_nullable_json_columns_load_as_real_sql_null_not_json_null(conn):
     """Regression for a bug the review caught: `_adapt_insert_value`
     used to wrap every value in `Jsonb`/`Json`, including `None`,
-    which psycopg serializes to the jsonb/json *scalar* `null` -- a
+    which database serializes to the jsonb/json *scalar* `null` -- a
     real, non-NULL value for which `IS NULL` is false. Every row
     where the generator drew `None` for a nullable json/jsonb column
     was silently landing as `'null'::jsonb`/`'null'::json` instead of
     SQL `NULL`.
 
     Must assert with `IS NULL` / `::text` in SQL, not by reading the
-    value back into Python: psycopg deserializes both a real SQL
+    value back into Python: database deserializes both a real SQL
     `NULL` and the jsonb scalar `null` to Python `None` on the way
     out, so comparing Python values round-trips right past the bug --
     which is exactly how it went unnoticed the first time.

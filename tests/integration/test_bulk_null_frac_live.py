@@ -43,7 +43,7 @@ whichever single value equals its hardcoded behavior.
 
 Always asserted via SQL against `pg_stats`, never by reading generated
 values back into Python (see test_bulk_copy_live.py's docstring for
-why: psycopg deserialises jsonb `null` and real SQL NULL to the same
+why: database deserialises jsonb `null` and real SQL NULL to the same
 Python `None`, so a Python-side count can silently agree when the
 database disagrees. Not directly applicable to this plain `text`
 column, but pg_stats is the actual oracle either way -- it's what the
@@ -54,9 +54,9 @@ from __future__ import annotations
 
 import os
 
-import psycopg
 import pytest
 
+from sqlproof import _database as database
 from sqlproof.scale.load import analyze, load_dataset
 from sqlproof.schema.parse_sql import parse_schema_sql
 
@@ -91,7 +91,7 @@ TOLERANCE = 0.05
 
 @pytest.fixture
 def conn():
-    with psycopg.connect(os.environ[DSN_ENV], autocommit=True) as connection:
+    with database.connect(os.environ[DSN_ENV], autocommit=True) as connection:
         connection.execute(f"DROP SCHEMA IF EXISTS {SCHEMA_NAME} CASCADE")
         connection.execute(f"CREATE SCHEMA {SCHEMA_NAME}")
         connection.execute(f"SET search_path TO {SCHEMA_NAME}")
@@ -104,7 +104,7 @@ def conn():
 
 @pytest.mark.parametrize("configured_null_frac", [0.1, 0.4])
 def test_bulk_null_frac_is_honoured_in_pg_stats(
-    conn: psycopg.Connection, configured_null_frac: float
+    conn: database.Connection, configured_null_frac: float
 ) -> None:
     schema = parse_schema_sql(SCHEMA_SQL, schema=SCHEMA_NAME)
     load_dataset(conn, schema, {"items": N}, seed=1, null_frac=configured_null_frac)

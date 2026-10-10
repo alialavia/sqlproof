@@ -1,0 +1,286 @@
+"""Synchronous PostgreSQL connections and value adaptation through PyGreSQL."""
+
+from __future__ import annotations
+
+import json
+from collections.abc import Callable, Generator, Sequence
+from contextlib import contextmanager, suppress
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta
+from decimal import Decimal
+from types import TracebackType
+from typing import Any, Literal, Self, cast
+
+import pg.core
+import pgdb
+
+from sqlproof._range import Range, quote_field
+
+RowFactory = Literal["dict", "tuple"]
+dict_row: RowFactory = "dict"
+tuple_row: RowFactory = "tuple"
+DatabaseError = pgdb.DatabaseError
+Error = pgdb.Error
+
+
+@dataclass(frozen=True, slots=True)
+class Json:
+    """Distinguish a JSON value from an SQL array or SQL NULL."""
+
+    obj: Any
+
+
+# Both json and jsonb accept serialized JSON text.
+Jsonb = Json
+
+
+def _adapt(value: Any) -> Any:
+    if isinstance(value, Json):
+        # PyGreSQL treats strings passed to Json as already serialized.
+        return pgdb.Json(json.dumps(value.obj))
+    if isinstance(value, bytes):
+        return pgdb.Binary(value)
+    if isinstance(value, Range) or (isinstance(value, Decimal) and not value.is_finite()):
+        return str(value)
+    if isinstance(value, list):
+        # An array literal lets PostgreSQL infer the element type from its
+        # column or explicit cast, including UUID and range arrays. pgdb's
+        # ARRAY constructor would infer text[] for those elements instead.
+        return _text(value)
+    if isinstance(value, tuple):
+        return tuple(_adapt(item) for item in cast(Sequence[Any], value))
+    return value
+
+
+def _text(value: Any) -> str:
+    if isinstance(value, Json):
+        return json.dumps(value.obj)
+    if isinstance(value, bytes):
+        return "\\x" + value.hex()
+    if isinstance(value, timedelta):
+        return f"{value.days} days {value.seconds} seconds {value.microseconds} microseconds"
+    if isinstance(value, list):
+        return (
+            "{"
+            + ",".join(
+                "NULL"
+                if item is None
+                else _text(item)
+                if isinstance(item, list)
+                else quote_field(_text(item))
+                for item in cast(Sequence[Any], value)
+            )
+            + "}"
+        )
+    if isinstance(value, tuple):
+        return (
+            "("
+            + ",".join(
+                "" if item is None else quote_field(_text(item))
+                for item in cast(Sequence[Any], value)
+            )
+            + ")"
+        )
+    return str(value)
+
+
+def copy_text(value: Any) -> str:
+    """Encode one value for PostgreSQL's text COPY format."""
+    if value is None:
+        return r"\N"
+    text = _text(value)
+    return text.replace("\\", "\\\\").replace("\t", r"\t").replace("\n", r"\n").replace("\r", r"\r")
+
+
+def sqlstate(error: BaseException) -> str | None:
+    """Read the server's SQLSTATE without depending on driver exception names."""
+    code = getattr(error, "sqlstate", None)
+    return str(code) if code is not None else None
+
+
+def _range_cast(element: Callable[[str], Any]) -> Callable[[str], Range]:
+    def parse(value: str) -> Range:
+        if value == "empty":
+            return Range(empty=True)
+        # PyGreSQL's stub leaves the record parser's return type unspecified.
+        lower, upper = cast(
+            tuple[str | None, str | None],
+            cast(Any, pg.core).cast_record("(" + value[1:-1] + ")"),
+        )
+        return Range(
+            None if lower is None else element(lower),
+            None if upper is None else element(upper),
+            value[0] + value[-1],
+        )
+
+    return parse
+
+
+class Cursor:
+    def __init__(self, cursor: Any, row_factory: RowFactory, connection: Connection) -> None:
+        self._cursor = cursor
+        self._row_factory: RowFactory = row_factory
+        self._connection = connection
+
+    @property
+    def rowcount(self) -> int:
+        return int(self._cursor.rowcount)
+
+    def execute(self, sql: str, params: Sequence[Any] | None = None, *, stream: Any = None) -> Self:
+        self._connection._begin()  # pyright: ignore[reportPrivateUsage]
+        self._cursor.execute(sql, tuple(_adapt(value) for value in params or ()))
+        if stream is not None:
+            # Use the source that started COPY, preserving our already-quoted
+            # schema/table identifiers rather than splitting them on dots.
+            putdata = self._cursor._src.putdata
+            try:
+                while chunk := stream.read(8192):
+                    putdata(chunk)
+            except BaseException as error:
+                # PyGreSQL finishes the COPY protocol, then raises OSError
+                # for the cancellation. Preserve the stream's original error.
+                with suppress(OSError):
+                    putdata(error)
+                raise
+            self._cursor.rowcount = putdata(None)
+        return self
+
+    def _row(self, values: Sequence[Any]) -> Any:
+        if self._row_factory == "dict":
+            names = [column[0] for column in self._cursor.description]
+            return dict(zip(names, values, strict=True))
+        return tuple(values)
+
+    def fetchone(self) -> Any:
+        values = self._cursor.fetchone()
+        return None if values is None else self._row(values)
+
+    def fetchall(self) -> list[Any]:
+        return [self._row(values) for values in self._cursor.fetchall()]
+
+    def close(self) -> None:
+        self._cursor.close()
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        self.close()
+
+
+class Connection:
+    def __init__(
+        self,
+        connection: Any,
+        native: pg.core.Connection,
+        row_factory: RowFactory,
+        autocommit: bool,
+    ) -> None:
+        self._connection = connection
+        self._row_factory: RowFactory = row_factory
+        self._native = native
+        self._autocommit = autocommit
+
+    @property
+    def in_transaction(self) -> bool:
+        return self._native.transaction() in {pg.core.TRANS_INTRANS, pg.core.TRANS_INERROR}
+
+    def _begin(self) -> None:
+        if not self._autocommit and self._native.transaction() == pg.core.TRANS_IDLE:
+            self._native.source().execute("BEGIN")
+
+    def cursor(self, *, row_factory: RowFactory | None = None) -> Cursor:
+        return Cursor(
+            self._connection.cursor(),
+            self._row_factory if row_factory is None else row_factory,
+            self,
+        )
+
+    def execute(self, sql: str, params: Sequence[Any] | None = None) -> Cursor:
+        cursor = self.cursor()
+        try:
+            return cursor.execute(sql, params)
+        except BaseException:
+            cursor.close()
+            raise
+
+    def commit(self) -> None:
+        if self.in_transaction:
+            self._native.source().execute("COMMIT")
+
+    def rollback(self) -> None:
+        if self.in_transaction:
+            self._native.source().execute("ROLLBACK")
+
+    def close(self) -> None:
+        self._connection.close()
+
+    @contextmanager
+    def transaction(self) -> Generator[None]:
+        nested = self.in_transaction
+        self._native.source().execute("SAVEPOINT sqlproof_transaction" if nested else "BEGIN")
+        try:
+            yield
+        except BaseException:
+            if nested:
+                self.execute("ROLLBACK TO SAVEPOINT sqlproof_transaction").close()
+            else:
+                self.rollback()
+            raise
+        else:
+            if not nested:
+                self.commit()
+        finally:
+            if nested:
+                self.execute("RELEASE SAVEPOINT sqlproof_transaction").close()
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        try:
+            if self.in_transaction:
+                if exc_type is None:
+                    self.commit()
+                else:
+                    self.rollback()
+        finally:
+            self.close()
+
+
+def connect(
+    conninfo: str, *, autocommit: bool = False, row_factory: RowFactory = tuple_row
+) -> Connection:
+    # Pass the complete DSN directly to libpq. This preserves its URL,
+    # SSL, service-file and environment handling without reconstructing it
+    # through pgdb.connect's legacy keyword argument escaping.
+    native = pg.core.connect(conninfo)
+    try:
+        connection = pgdb.Connection(native)
+        # The adapter owns transaction boundaries using libpq's actual state,
+        # including explicit BEGIN and savepoints. Disable pgdb's client flag.
+        connection.autocommit = True
+        range_casts: dict[str, Callable[[str], Any]] = {
+            "int4range": int,
+            "int8range": int,
+            "numrange": Decimal,
+            "daterange": date.fromisoformat,
+            "tsrange": datetime.fromisoformat,
+            "tstzrange": datetime.fromisoformat,
+        }
+        for name, element in range_casts.items():
+            cast(Any, connection.type_cache).set_typecast(name, _range_cast(element))
+    except BaseException:
+        native.close()
+        raise
+    return Connection(connection, native, row_factory, autocommit)

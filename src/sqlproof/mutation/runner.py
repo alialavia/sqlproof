@@ -11,11 +11,10 @@ from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import LiteralString, cast
 
-import psycopg
-from psycopg import conninfo, sql
-
+from sqlproof import _database as database
+from sqlproof import _dsn as conninfo
+from sqlproof._dsn import quote_identifier
 from sqlproof._version import __version__
 from sqlproof.exceptions import SqlProofMutationError
 from sqlproof.mutation.apply import PreparedMutant, prepare_mutants
@@ -147,36 +146,29 @@ class LocalMutationRunner:
 
     def _create_clone(self, clone_name: str) -> str:
         template = self._dbname(self.database_url)
-        with self._clone_lock, psycopg.connect(
+        with self._clone_lock, database.connect(
             self._dsn_for(self.maintenance_db), autocommit=True
         ) as connection:
             connection.execute(
-                sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(
-                    sql.Identifier(clone_name)
-                )
+                f"DROP DATABASE IF EXISTS {quote_identifier(clone_name)} WITH (FORCE)"
             )
             connection.execute(
-                sql.SQL("CREATE DATABASE {} TEMPLATE {}").format(
-                    sql.Identifier(clone_name), sql.Identifier(template)
-                )
+                f"CREATE DATABASE {quote_identifier(clone_name)} "
+                f"TEMPLATE {quote_identifier(template)}"
             )
         return self._dsn_for(clone_name)
 
     def _drop_clone(self, clone_name: str) -> None:
-        with self._clone_lock, psycopg.connect(
+        with self._clone_lock, database.connect(
             self._dsn_for(self.maintenance_db), autocommit=True
         ) as connection:
             connection.execute(
-                sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(
-                    sql.Identifier(clone_name)
-                )
+                f"DROP DATABASE IF EXISTS {quote_identifier(clone_name)} WITH (FORCE)"
             )
 
     def _apply_ddl(self, clone_dsn: str, ddl: str) -> None:
-        # ddl is program-generated (from build_mutated_ddl), not user input;
-        # cast to LiteralString satisfies pyright strict's sql.SQL() requirement.
-        with psycopg.connect(clone_dsn, autocommit=True) as connection:
-            connection.execute(sql.SQL(cast(LiteralString, ddl)))  # type: ignore[redundant-cast]
+        with database.connect(clone_dsn, autocommit=True) as connection:
+            connection.execute(ddl)
 
     def _run_pytest(self, clone_dsn: str) -> tuple[int, str]:
         env: dict[str, str] = dict(os.environ) | {self.env_var: clone_dsn}
@@ -199,9 +191,7 @@ class LocalMutationRunner:
         return command
 
     def _dsn_for(self, dbname: str) -> str:
-        # make_conninfo accepts an existing conninfo/URL string and overrides;
-        # passing dbname= as a keyword arg avoids unpacking ConnDict which
-        # mypy strict does not accept as **kwargs: ConnParam.
+        # Keep credentials and transport options when switching databases.
         return conninfo.make_conninfo(self.database_url, dbname=dbname)
 
     def _dbname(self, dsn: str) -> str:

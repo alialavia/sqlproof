@@ -132,7 +132,7 @@ def _vector(t: PgType) -> TypeSpec:
 def _timestamp(_t: PgType) -> TypeSpec:
     # Plain timestamptz columns use naive datetimes, matching the
     # existing behaviour in columns.py. Only tstzrange elements need
-    # tz-aware values for psycopg's adapter to type them correctly.
+    # tz-aware values for PyGreSQL's adapter to type them correctly.
     return TypeSpec(kind="datetime", tz_aware=False)
 
 

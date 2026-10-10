@@ -20,10 +20,11 @@ import textwrap
 from pathlib import Path
 from uuid import uuid4
 
-import psycopg
 import pytest
-from psycopg import conninfo, sql
 
+from sqlproof import _database as database
+from sqlproof import _dsn as conninfo
+from sqlproof._dsn import quote_identifier
 from sqlproof.exceptions import SqlProofMutationError
 from sqlproof.mutation.model import MutationSet, Replace
 from sqlproof.mutation.runner import run_mutation_tests
@@ -47,12 +48,12 @@ INNER_TEST = """
 
     import os
 
-    import psycopg
+    from sqlproof import _database as database
 
 
     def test_total_usage_matches_python_sum() -> None:
         dsn = os.environ["SQLPROOF_MUTATION_TEST_DSN"]
-        with psycopg.connect(dsn, autocommit=True) as connection:
+        with database.connect(dsn, autocommit=True) as connection:
             connection.execute("DELETE FROM usage_events")
             rows = [(1, 10), (1, 32), (2, 5)]
             for user_id, amount in rows:
@@ -73,15 +74,15 @@ def test_mutation_run_kills_and_survives(tmp_path: Path) -> None:
     base_dsn = os.environ["SQLPROOF_TEST_DATABASE_URL"]
     template_name = f"sqlproof_mut_tmpl_{uuid4().hex[:12]}"
 
-    with psycopg.connect(base_dsn, autocommit=True) as admin:
+    with database.connect(base_dsn, autocommit=True) as admin:
         admin.execute(
-            sql.SQL("CREATE DATABASE {}").format(sql.Identifier(template_name))
+            f"CREATE DATABASE {quote_identifier(template_name)}"
         )
     try:
         parts = conninfo.conninfo_to_dict(base_dsn)
         parts["dbname"] = template_name
         template_dsn = conninfo.make_conninfo(**parts)
-        with psycopg.connect(template_dsn, autocommit=True) as connection:
+        with database.connect(template_dsn, autocommit=True) as connection:
             connection.execute(SCHEMA_SQL)
         # The template must have zero connections during cloning -> the
         # context managers above are closed before run_mutation_tests.
@@ -121,16 +122,14 @@ def test_mutation_run_kills_and_survives(tmp_path: Path) -> None:
         # ids — a shared server may hold orphans from previously
         # interrupted runs, which are not this test's concern).
         expected_clones = [f"sqlproof_mutant_{o.mutant_id}" for o in result.outcomes]
-        with psycopg.connect(base_dsn, autocommit=True) as admin:
+        with database.connect(base_dsn, autocommit=True) as admin:
             cursor = admin.execute(
                 "SELECT datname FROM pg_database WHERE datname = ANY(%s)",
                 (expected_clones,),
             )
             assert cursor.fetchall() == []
     finally:
-        with psycopg.connect(base_dsn, autocommit=True) as admin:
+        with database.connect(base_dsn, autocommit=True) as admin:
             admin.execute(
-                sql.SQL("DROP DATABASE IF EXISTS {}").format(
-                    sql.Identifier(template_name)
-                )
+                f"DROP DATABASE IF EXISTS {quote_identifier(template_name)}"
             )

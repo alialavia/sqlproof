@@ -12,9 +12,9 @@ from __future__ import annotations
 import os
 from uuid import uuid4
 
-import psycopg
 import pytest
 
+from sqlproof import _database as database
 from sqlproof.surface import SurfaceRegistry, SurfaceRegistryDrift
 
 
@@ -30,7 +30,7 @@ def test_assert_no_drift_against_real_pg_proc() -> None:
     """
     dsn = os.environ["SQLPROOF_TEST_DATABASE_URL"]
     schema_name = f"sqlproof_surface_{uuid4().hex}"
-    with psycopg.connect(dsn, autocommit=True) as connection:
+    with database.connect(dsn, autocommit=True) as connection:
         connection.execute(f'CREATE SCHEMA "{schema_name}"')
         try:
             connection.execute(
@@ -47,11 +47,11 @@ def test_assert_no_drift_against_real_pg_proc() -> None:
             )
 
             class _Db:
-                def __init__(self, conn: psycopg.Connection) -> None:
+                def __init__(self, conn: database.Connection) -> None:
                     self._conn = conn
 
                 def query(self, sql: str, *params: object) -> list[dict[str, str]]:
-                    with self._conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+                    with self._conn.cursor(row_factory=database.dict_row) as cur:
                         cur.execute(sql, params)
                         return [dict(row) for row in cur.fetchall()]
 

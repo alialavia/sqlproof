@@ -51,3 +51,10 @@ version = "311"
 ecosystem = "PyPI"
 license.override = ["PSF-2.0"]
 reason = "No license in metadata; pywin32 is PSF-2.0. Windows-only transitive dep of docker."
+
+[[PackageOverrides]]
+name = "pygresql"
+version = "6.2.3"
+ecosystem = "PyPI"
+license.override = ["PostgreSQL"]
+reason = "The shipped LICENSE.txt grants the PostgreSQL License; metadata uses its older non-SPDX name."

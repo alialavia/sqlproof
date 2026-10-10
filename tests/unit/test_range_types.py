@@ -12,7 +12,7 @@ type tstzrange``.
 
 After this change, columns typed as a built-in range surface as
 ``PgType(kind=\"range\", name=\"<range>\", base=PgType(scalar,
-<element>))``, and the generator produces psycopg
+<element>))``, and the generator produces database
 ``Range`` objects with ``lower < upper`` and default ``'[)'``
 bounds (matching Postgres's canonical form for discrete-element
 ranges like ``int4range`` / ``daterange``).
@@ -21,7 +21,7 @@ Invariants pinned down here:
 
   (i) Columns declared with a built-in range type resolve to
       ``kind=\"range\"`` with the element type as ``base``.
-  (ii) Generated values for a range column are psycopg ``Range``
+  (ii) Generated values for a range column are database ``Range``
        instances.
   (iii) The lower bound is strictly less than the upper bound
         (no empty or inverted ranges in v1; Postgres accepts
@@ -44,8 +44,8 @@ from datetime import date, datetime
 
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
-from psycopg.types.range import Range
 
+from sqlproof._range import Range
 from sqlproof.generators.rows import table_rows_strategy
 from sqlproof.schema.parse_sql import parse_schema_sql
 
@@ -145,7 +145,7 @@ def test_generator_produces_tstzrange_with_datetime_endpoints(
     """Invariant (ii) for tstzrange: the endpoints must be
     datetime objects (not strings, not None). Failure case: a
     text fallback would put strings into the Range constructor,
-    causing psycopg INSERT-side errors that don't point at the
+    causing database INSERT-side errors that don't point at the
     schema."""
     schema = parse_schema_sql(
         """

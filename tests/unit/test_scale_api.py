@@ -5,7 +5,7 @@ has nowhere for the sweep to run TRUNCATE/COPY/EXPLAIN against, so
 `scale_analysis` must refuse before ever attempting a connection.
 
 The rest of this module pins the artifact-writing wiring (Task 10) by
-faking out `psycopg.connect` and `run_sweep`, so it runs without a live
+faking out `database.connect` and `run_sweep`, so it runs without a live
 database too.
 """
 from __future__ import annotations
@@ -94,7 +94,7 @@ def _stub_proof(fingerprint: str = "fp-123") -> SqlProof:
 def test_scale_analysis_writes_artifact_with_the_proofs_schema_fingerprint(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("sqlproof.scale.psycopg.connect", _fake_connect)
+    monkeypatch.setattr("sqlproof.scale.database.connect", _fake_connect)
     monkeypatch.setattr("sqlproof.scale.run_sweep", _fake_run_sweep)
 
     scale_analysis(
@@ -113,7 +113,7 @@ def test_scale_analysis_writes_artifact_with_the_proofs_schema_fingerprint(
 def test_scale_analysis_with_artifact_dir_none_writes_nothing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("sqlproof.scale.psycopg.connect", _fake_connect)
+    monkeypatch.setattr("sqlproof.scale.database.connect", _fake_connect)
     monkeypatch.setattr("sqlproof.scale.run_sweep", _fake_run_sweep)
     monkeypatch.chdir(tmp_path)
 
@@ -125,7 +125,7 @@ def test_scale_analysis_with_artifact_dir_none_writes_nothing(
 def test_scale_analysis_default_artifact_dir_is_dot_sqlproof_scale_runs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("sqlproof.scale.psycopg.connect", _fake_connect)
+    monkeypatch.setattr("sqlproof.scale.database.connect", _fake_connect)
     monkeypatch.setattr("sqlproof.scale.run_sweep", _fake_run_sweep)
     monkeypatch.chdir(tmp_path)
 
@@ -138,7 +138,7 @@ def test_scale_analysis_default_artifact_dir_is_dot_sqlproof_scale_runs(
 def test_scale_analysis_warns_and_still_returns_when_artifact_write_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("sqlproof.scale.psycopg.connect", _fake_connect)
+    monkeypatch.setattr("sqlproof.scale.database.connect", _fake_connect)
     monkeypatch.setattr("sqlproof.scale.run_sweep", _fake_run_sweep)
     blocker = tmp_path / "blocker"
     blocker.write_text("not a directory", encoding="utf-8")
@@ -173,7 +173,7 @@ def test_git_state_is_captured_before_the_sweep_and_passed_to_the_artifact(
     def must_not_capture() -> tuple[str | None, bool]:
         raise AssertionError("save_run re-captured git state after the sweep")
 
-    monkeypatch.setattr("sqlproof.scale.psycopg.connect", _fake_connect)
+    monkeypatch.setattr("sqlproof.scale.database.connect", _fake_connect)
     monkeypatch.setattr("sqlproof.scale.capture_git_info", fake_capture)
     monkeypatch.setattr("sqlproof.scale.run_sweep", fake_run_sweep)
     monkeypatch.setattr("sqlproof.scale.artifact.capture_git_info", must_not_capture)

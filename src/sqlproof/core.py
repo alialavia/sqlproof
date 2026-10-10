@@ -7,15 +7,14 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any, Self, cast
 
-import psycopg
 from hypothesis import strategies as st
 from hypothesis.strategies import SearchStrategy
-from psycopg.rows import dict_row
-from psycopg.types.json import Json, Jsonb
 
+from sqlproof import _database as database
+from sqlproof._database import Json, Jsonb, dict_row
 from sqlproof.client import (
     InMemorySqlProofClient,
-    PsycopgSqlProofClient,
+    PostgresSqlProofClient,
     SqlProofClient,
     normalize_identifier,
 )
@@ -292,10 +291,10 @@ class SqlProof:
             path = Path(config.schema_file)
             return parse_schema_sql(path.read_text(encoding="utf-8"), schema=config.schema)
         if config.connection_string is not None:
-            connection = psycopg.connect(
+            connection = database.connect(
                 conninfo=config.connection_string,
                 autocommit=True,
-                row_factory=cast(Any, dict_row),
+                row_factory=dict_row,
             )
             try:
                 return introspect_schema(connection, schema=config.schema)
@@ -315,13 +314,13 @@ class SqlProof:
             msg = "external_tables requires a connection_string-backed SqlProof instance."
             raise SqlProofUsageError(msg)
 
-        connection = psycopg.connect(
+        connection = database.connect(
             conninfo=self.config.connection_string,
             autocommit=True,
-            row_factory=cast(Any, dict_row),
+            row_factory=dict_row,
         )
         try:
-            client = PsycopgSqlProofClient(connection)
+            client = PostgresSqlProofClient(connection)
             return _external_parent_rows(
                 self.config.external_tables,
                 client,
@@ -512,8 +511,8 @@ def _adapt_insert_value(table: Table, column_name: str, value: Any) -> object:
     # scalar* `null` (`json.dumps(None)`): a real, non-NULL value for
     # which `IS NULL` is false. Wrapping unconditionally silently wrote
     # 'null'::jsonb wherever a nullable json/jsonb column drew NULL.
-    if value is None:
-        return None
+    if value is None or isinstance(value, Json):
+        return value
     column = table.column(column_name)
     type_name = _base_type_name(column)
     if type_name == "jsonb":
