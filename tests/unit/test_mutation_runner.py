@@ -197,6 +197,21 @@ def test_dbname_on_dsn_without_dbname_raises() -> None:
         runner._dbname("host=localhost")
 
 
+@pytest.mark.parametrize(
+    "dsn",
+    [
+        "host=localhost user=ali password='synthetic-review-secret'",
+        "postgresql://ali:synthetic-review-secret@localhost",
+        "postgresql://ali:synthetic%2Dreview%2Dsecret@localhost?sslmode=require",
+    ],
+)
+def test_missing_database_errors_do_not_expose_connection_credentials(dsn) -> None:
+    runner = LocalMutationRunner(database_url=dsn, pytest_args=[])
+    with pytest.raises(SqlProofMutationError) as exc:
+        runner.run_baseline()
+    assert str(exc.value) == "database_url has no dbname; specify the template database name."
+
+
 def test_create_clone_failure_skips_drop_and_yields_error() -> None:
     class FailCreateRunner(FakeRunner):
         def _create_clone(self, clone_name: str) -> str:

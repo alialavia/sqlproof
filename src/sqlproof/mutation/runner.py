@@ -273,7 +273,7 @@ class LocalMutationRunner:
     def _dbname(self, dsn: str) -> str:
         dbname = conninfo.conninfo_to_dict(dsn).get("dbname")
         if not dbname:
-            msg = f"database_url has no dbname: {dsn!r}"
+            msg = "database_url has no dbname; specify the template database name."
             raise SqlProofMutationError(msg)
         return str(dbname)
 
