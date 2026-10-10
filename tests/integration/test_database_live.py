@@ -169,6 +169,36 @@ def test_special_decimal_parameters_remain_numeric_values(value) -> None:
         assert str(stored) == str(value)
 
 
+_SUPAVISOR_APPLICATION_NAME = "Supavisor"
+
+
+@pytest.fixture(scope="module")
+def application_name_reaches_the_server() -> None:
+    """Gate: these oracles need the server to see the client's
+    application_name, which only a direct connection guarantees.
+
+    Supabase's pooler (Supavisor) replaces application_name with its own
+    name on the server session, so SHOW can never echo the client's value
+    there. The gate only skips when the server reports exactly that
+    override; any other mismatch still fails the test.
+    """
+    probe = "sqlproof-application-name-probe"
+    dsn = make_conninfo(os.environ["SQLPROOF_TEST_DATABASE_URL"], application_name=probe)
+    with database.connect(dsn) as conn:
+        seen = conn.execute("SHOW application_name").fetchone()[0]
+    if seen == probe:
+        return
+    assert seen == _SUPAVISOR_APPLICATION_NAME, (
+        f"server reported application_name {seen!r} for {probe!r}, and it is "
+        "not the Supavisor pooler override"
+    )
+    pytest.skip(
+        "GATE (pooler): Supavisor rewrites application_name to 'Supavisor'; "
+        "these application_name oracles need a direct connection"
+    )
+
+
+@pytest.mark.usefixtures("application_name_reaches_the_server")
 def test_connection_options_preserve_backslashes_without_spaces() -> None:
     name = r"sqlproof\review"
     dsn = make_conninfo(os.environ["SQLPROOF_TEST_DATABASE_URL"], application_name=name)
@@ -176,6 +206,7 @@ def test_connection_options_preserve_backslashes_without_spaces() -> None:
         assert conn.execute("SHOW application_name").fetchone() == (name,)
 
 
+@pytest.mark.usefixtures("application_name_reaches_the_server")
 @settings(max_examples=30, deadline=None)
 @given(
     name=st.text(
