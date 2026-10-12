@@ -69,6 +69,17 @@ def test_startup_options_keep_libpq_service_and_environment_precedence(
         assert conn.execute("SHOW search_path").fetchone() == (expected,)
 
 
+def test_a_normalized_backend_only_startup_option_still_connects() -> None:
+    # The server reads `true` back as `on`, and ignore_system_indexes can only
+    # be set at connection start, so re-applying it after connecting would
+    # fail. Any role may set it, so this also runs against hosted databases.
+    dsn = make_conninfo(
+        os.environ["SQLPROOF_TEST_DATABASE_URL"], options="-c ignore_system_indexes=true"
+    )
+    with database.connect(dsn) as conn:
+        assert conn.execute("SHOW search_path").fetchone() is not None
+
+
 @settings(max_examples=30, deadline=None)
 @given(dataset=DATASETS)
 def test_copy_preserves_generated_text_and_sql_nulls(dataset) -> None:

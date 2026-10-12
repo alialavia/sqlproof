@@ -412,11 +412,25 @@ def _reapply_startup_settings(native: Any) -> None:
     already reads back unchanged and is left alone; anything that did not
     is set for the session with ``set_config``, which a session pooler
     passes straight through.
+
+    "Applied" is read from ``pg_settings.source`` rather than by comparing
+    text: the server normalizes values (``log_connections=true`` reads
+    back ``on``), and re-setting a backend-only setting after startup
+    fails the whole connection.
     """
     # libpq has already resolved DSN, service-file and environment precedence.
     for name, value in startup_settings(native.options or ""):
-        current = native.query("SELECT current_setting($1, true)", (name,)).getresult()
-        if current[0][0] != value:
+        listed = native.query(
+            "SELECT source FROM pg_settings WHERE lower(name) = lower($1)", (name,)
+        ).getresult()
+        if listed:
+            applied = listed[0][0] == "client"
+        else:
+            # Custom (dotted) settings are not listed in pg_settings and are
+            # stored verbatim, so their text compares exactly.
+            current = native.query("SELECT current_setting($1, true)", (name,)).getresult()
+            applied = current[0][0] == value
+        if not applied:
             native.query("SELECT set_config($1, $2, false)", (name, value))
 
 
