@@ -22,6 +22,13 @@ CREATE FUNCTION count_items() RETURNS bigint LANGUAGE plpgsql STABLE AS $$
 DECLARE n bigint;
 BEGIN SELECT count(*) INTO n FROM items; RETURN n; END $$;
 CREATE FUNCTION touch_nothing() RETURNS int LANGUAGE sql IMMUTABLE AS 'SELECT 1';
+CREATE FUNCTION count_items_and_catalog() RETURNS bigint LANGUAGE plpgsql STABLE AS $$
+DECLARE n bigint;
+BEGIN
+  SELECT count(*) INTO n FROM items;
+  PERFORM count(*) FROM pg_catalog.pg_class;
+  RETURN n;
+END $$;
 """
 
 
@@ -135,3 +142,41 @@ def test_resolver_failing_to_find_a_row_raises_rather_than_returning_none(conn):
     conn.execute("CREATE TABLE probe_test.empty_t (id bigint PRIMARY KEY)")
     with pytest.raises(SqlProofUsageError, match="found no rows"):
         resolve_args(conn, [heaviest("probe_test.empty_t.id")])
+
+
+def test_probe_with_relations_counts_only_those_relations(conn):
+    """With `relations`, catalog reads do not count: another session's
+    catalog changes make this backend re-read catalog pages inside a
+    probe, which would move work_blocks with nothing about the measured
+    function changed. Reading pg_class in the function stands in for
+    that: the relation-scoped count ignores it, the EXPLAIN total does not."""
+    items = [("probe_test", "items")]
+    # The first scan of freshly inserted rows touches one more block than
+    # later ones (as the sweep's discarded calibration round absorbs).
+    probe_function(conn, "count_items", [], factor=1, total_rows=500, relations=items)
+    plain = probe_function(conn, "count_items", [], factor=1, total_rows=500, relations=items)
+    with_catalog = probe_function(
+        conn, "count_items_and_catalog", [], factor=1, total_rows=500, relations=items,
+    )
+    explain_total = probe_function(
+        conn, "count_items_and_catalog", [], factor=1, total_rows=500,
+    )
+
+    assert plain.work_blocks > 0
+    assert with_catalog.work_blocks == plain.work_blocks
+    assert explain_total.work_blocks > with_catalog.work_blocks
+
+
+def test_probe_with_relations_counts_their_indexes(conn):
+    conn.execute(
+        "CREATE FUNCTION probe_test.find_item(i bigint) RETURNS text LANGUAGE sql STABLE AS "
+        "'SELECT tag FROM probe_test.items WHERE id = i'"
+    )
+    conn.execute("ANALYZE probe_test.items")
+    point = probe_function(
+        conn, "probe_test.find_item", [42], factor=1, total_rows=500,
+        relations=[("probe_test", "items")],
+    )
+    # An index lookup: at least the index root and one heap page.
+    assert point.work_blocks >= 2
+

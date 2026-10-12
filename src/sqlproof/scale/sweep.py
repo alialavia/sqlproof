@@ -90,13 +90,13 @@ def run_sweep(
     or a resolver re-run against each freshly loaded dataset (see
     `args.py`). `seed` fixes the generated data, and with it every
     point's row counts, resolved arguments and plans -- and so the
-    fitted exponent. Raw buffer counts are NOT reproducible across
-    connections: a second sweep on a fresh connection measured a fixed
-    offset of tens of blocks at every point (+13 to +25, baseline +21,
-    in the full test suite; most likely per-backend catalog cache
-    state). The calibration baseline is taken on the same connection as
-    the ladder, so it absorbs that offset: the exponents agreed to
-    0.001. `columns` pins generated columns, as `load_dataset`'s does.
+    fitted exponent. Each probe counts only the buffers of the tables
+    `schema` models, with their indexes and TOAST storage (see
+    `probe_function`'s `relations`), not the system catalogs: catalog
+    reads varied with per-backend cache state and with other sessions'
+    catalog changes, and moved a single probe by tens of blocks. The
+    calibration baseline is taken on the same connection as the ladder.
+    `columns` pins generated columns, as `load_dataset`'s does.
 
     The ladder stops at the first of: `min_points` points whose final
     plan regime fits (R^2 >= `fit.MIN_R_SQUARED`); `max_factor` reached;
@@ -217,8 +217,8 @@ def _measure(
     points: list[ProbePoint] = []
     truncated = False
 
-    # Calibrate the fixed per-call cost -- catalog lookups and plan
-    # caching, paid regardless of data size -- on a separate one-row
+    # Calibrate the fixed per-call cost -- the modelled tables' pages a
+    # call touches regardless of data size -- on a separate one-row
     # load, never on a ladder point. Fitting a ladder point against its
     # own work_blocks subtracts to exactly 0 at that point and refuses
     # every sweep. Leaving the cost in the fit flattens the curve and
@@ -249,6 +249,9 @@ def _measure(
     # stays empty here exactly as it does at every ladder point.
     calibration_sizes = {name: min(count, 1) for name, count in sizes.items()}
 
+    # Count only the modelled tables' buffers: see probe_function.
+    relations = [(table.schema, table.name) for table in schema.tables]
+
     def _calibration_round() -> ProbePoint:
         truncate(conn, schema)
         load_dataset(conn, schema, calibration_sizes, seed=seed, columns=columns)
@@ -256,9 +259,14 @@ def _measure(
         calibration_args = resolve_args(conn, args)
         return probe_function(
             conn, function, calibration_args, factor=0, total_rows=0,
+            relations=relations,
         )
 
-    _calibration_round()  # discarded: absorbs the one-time compile cost
+    # Since probes count only the modelled tables, the compile and replan
+    # work described above (catalog reads) no longer reaches work_blocks.
+    # The first round is still discarded: the first scan of freshly
+    # loaded rows touches one more block than later scans.
+    _calibration_round()  # discarded
     baseline = _calibration_round().work_blocks
 
     factor = 1
@@ -273,6 +281,7 @@ def _measure(
         point = probe_function(
             conn, function, resolved,
             factor=factor, total_rows=base_total * factor,
+            relations=relations,
         )
         elapsed = time.perf_counter() - started
         points.append(point)

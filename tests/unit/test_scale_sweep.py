@@ -47,6 +47,7 @@ def _install_db_stubs(
     *,
     counts: dict[str, int | None] | None = None,
     truncate_fn: Callable[[], None] | None = None,
+    relations_seen: list[Any] | None = None,
 ) -> None:
     """Stub every database-touching name `sweep` imports. When `log` is
     given, `row_counts`/`truncate`/`load_dataset`/`analyze`/
@@ -77,9 +78,14 @@ def _install_db_stubs(
         if log is not None:
             log.append(("analyze",))
 
-    def _probe(conn: Any, function: Any, args: Any, *, factor: int, total_rows: int) -> Any:
+    def _probe(
+        conn: Any, function: Any, args: Any, *, factor: int, total_rows: int,
+        relations: Any = None,
+    ) -> Any:
         if log is not None:
             log.append(("probe", factor, total_rows))
+        if relations_seen is not None:
+            relations_seen.append(relations)
         return probe_fn(conn, function, args, factor=factor, total_rows=total_rows)
 
     monkeypatch.setattr(sweep, "row_counts", _row_counts)
@@ -180,7 +186,7 @@ def test_calibration_keeps_the_second_rounds_work_not_the_first(
     ladder point outright (100 + f**2 - 500 <= 0 for small f)."""
     calibration_calls = 0
 
-    def fake_probe(conn, function, args, *, factor, total_rows):
+    def fake_probe(conn, function, args, *, factor, total_rows, relations=None):
         nonlocal calibration_calls
         if factor == 0:
             calibration_calls += 1
@@ -219,7 +225,7 @@ def test_ladder_stops_once_five_points_fit_a_clean_power_law(
     probed at 32."""
     probed_factors: list[int] = []
 
-    def fake_probe(conn, function, args, *, factor, total_rows):
+    def fake_probe(conn, function, args, *, factor, total_rows, relations=None):
         probed_factors.append(factor)
         work = 100 if factor == 0 else 100 + factor**2
         return _point(factor, total_rows, work)
@@ -237,7 +243,7 @@ def test_timeout_marks_truncated_and_stops_probing(monkeypatch: pytest.MonkeyPat
     truncated=True and no further factor is probed."""
     probed_factors: list[int] = []
 
-    def fake_probe(conn, function, args, *, factor, total_rows):
+    def fake_probe(conn, function, args, *, factor, total_rows, relations=None):
         probed_factors.append(factor)
         if factor == 2:
             time.sleep(0.3)
@@ -269,7 +275,7 @@ def test_final_segment_decides_when_the_ladder_stops(
     the final segment, it stops at 32, the moment 'b' accumulates its
     own 5 points."""
 
-    def fake_probe(conn, function, args, *, factor, total_rows):
+    def fake_probe(conn, function, args, *, factor, total_rows, relations=None):
         if factor == 0:
             work = 100
         elif factor == 1:
@@ -296,7 +302,7 @@ def test_exponent_uses_the_final_regime_not_an_earlier_accepted_one(
     `.exponent` must raise using b's refusal, not silently fall back to
     a's accepted 2.0."""
 
-    def fake_probe(conn, function, args, *, factor, total_rows):
+    def fake_probe(conn, function, args, *, factor, total_rows, relations=None):
         if factor == 0:
             work = 100
         elif factor <= 16:
@@ -491,7 +497,7 @@ def test_truncate_existing_skips_the_row_count_and_runs(monkeypatch: pytest.Monk
     assert abs(result.exponent - 2.0) < 1e-6
 
 
-def _probe_failing_at_factor_two(conn, function, args, *, factor, total_rows):
+def _probe_failing_at_factor_two(conn, function, args, *, factor, total_rows, relations=None):
     if factor == 2:
         raise RuntimeError("function raised mid-sweep")
     return _quadratic_probe(conn, function, args, factor=factor, total_rows=total_rows)
@@ -563,3 +569,16 @@ def test_the_result_records_how_each_argument_is_chosen(
         {"kind": "heaviest", "column": "t.id"},
         {"kind": "literal"},
     )
+
+
+def test_every_probe_counts_only_the_modelled_tables(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The sweep hands each probe the tables it scales, so work_blocks
+    counts their buffers alone and not the system catalogs, which other
+    sessions' activity on a shared server can make this backend re-read
+    mid-probe. Calibration and ladder probes alike."""
+    seen: list[Any] = []
+    _install_db_stubs(monkeypatch, _quadratic_probe, relations_seen=seen)
+    run_sweep(object(), _schema("a", "b"), "fn", sizes={"a": 10, "b": 30}, max_factor=64)
+
+    assert seen
+    assert all(relations == [("public", "a"), ("public", "b")] for relations in seen)
