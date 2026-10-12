@@ -17,7 +17,7 @@ remains in `0.x`, minor versions may include breaking changes.
 * **database:** raw database errors are PyGreSQL exception classes
   (`pgdb.DatabaseError` and subclasses) instead of `psycopg.errors.*`. Code
   that caught psycopg classes should match on
-  `sqlproof.database.sqlstate(exc)` instead.
+  `sqlproof.postgres.sqlstate(exc)` instead.
 * **database:** range values are `sqlproof.Range` instead of psycopg's
   `Range`. Infinite `daterange`, `tsrange` and `tstzrange` bounds read back as
   `date.min`/`date.max` and `datetime.min`/`datetime.max` (timezone-aware for
@@ -31,6 +31,8 @@ remains in `0.x`, minor versions may include breaking changes.
 * **database:** query parameters are inlined into the SQL text on the client
   with libpq escaping, rather than sent separately as psycopg did.
 * **client:** `PsycopgSqlProofClient` is renamed `PostgresSqlProofClient`.
+  The old name still works in this release with a `DeprecationWarning` and
+  will be removed in 0.13.
 * **database:** text containing a NUL byte (`\x00`) is refused on both the
   parameter and COPY paths with a `DataError` carrying SQLSTATE `22021`,
   before anything is sent. psycopg also raised `DataError`; without this
@@ -49,7 +51,7 @@ remains in `0.x`, minor versions may include breaking changes.
 
 ### Added
 
-* **database:** `sqlproof.database` exposes the connection adapter
+* **postgres:** `sqlproof.postgres` exposes the connection adapter
   (`connect`, `Connection`, `DatabaseError`, `Json`, `sqlstate`, `dict_row`,
   `Range`) for scripts and examples that need a raw connection next to
   SqlProof, replacing direct psycopg usage.

@@ -331,7 +331,7 @@ class SqlProofClient(Protocol):
 
     @property
     def connection(self) -> database.Connection:
-        """Escape hatch for the PostgreSQL connection adapter (`sqlproof.database`)."""
+        """Escape hatch for the PostgreSQL connection adapter (`sqlproof.postgres`)."""
 ```
 
 #### `query_typed` Semantics

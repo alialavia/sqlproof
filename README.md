@@ -24,7 +24,7 @@ Connections use PyGreSQL and the system's PostgreSQL client library (`libpq`).
 PostgreSQL URLs, keyword DSNs, SSL settings, service files and `PG*` environment
 variables are handled by libpq. Raw database errors are PyGreSQL exceptions;
 range values use `sqlproof.Range`. Scripts that need a raw connection next to
-SqlProof can use `sqlproof.database.connect`.
+SqlProof can use `sqlproof.postgres.connect`.
 
 Query parameters are inlined into the SQL text on the client with libpq
 escaping. Lists of numbers or booleans are sent as typed arrays; other lists
@@ -45,6 +45,21 @@ export PATH="$(brew --prefix libpq)/bin:$PATH"
 
 On Windows, install PostgreSQL's client tools and put the directory containing
 `libpq.dll` on `PATH`.
+
+### Upgrading from 0.11
+
+0.12 replaced psycopg with PyGreSQL. Code that only uses SqlProof's fixtures
+and `SqlProof` API needs no changes. If your tests touch the driver directly:
+
+| 0.11 | 0.12 |
+|---|---|
+| `PsycopgSqlProofClient` | `PostgresSqlProofClient` (the old name warns until 0.13) |
+| `psycopg.connect(...)` | `sqlproof.postgres.connect(...)` |
+| `except psycopg.errors.UniqueViolation` | `except sqlproof.postgres.DatabaseError as exc` and check `sqlproof.postgres.sqlstate(exc) == "23505"` |
+| `psycopg.types.range.Range` | `sqlproof.Range` |
+| `unnest(%s)` with a list of text or UUIDs | add a cast: `unnest(%s::uuid[])` |
+
+See the [changelog](CHANGELOG.md) for the full list.
 
 Running in CI? See [the CI/CD guide](https://sqlproof.com/guides/ci-cd/) for
 copy-paste GitHub Actions workflows covering vanilla Postgres and the extra
