@@ -10,7 +10,12 @@
       "include-component-in-tag": false,
       "tag-separator": "",
       "extra-files": [
-        { "type": "generic", "path": "src/sqlproof/_version.py" }
+        { "type": "generic", "path": "src/sqlproof/_version.py" },
+        {
+          "type": "toml",
+          "path": "uv.lock",
+          "jsonpath": "$.package[?(@.name.value=='sqlproof')].version"
+        }
       ],
       "changelog-sections": [
         { "type": "feat",     "section": "Added" },
