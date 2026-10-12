@@ -56,6 +56,20 @@ remains in `0.x`, minor versions may include breaking changes.
   `Range`) for scripts and examples that need a raw connection next to
   SqlProof, replacing direct psycopg usage.
 
+### Fixed
+
+* **database:** `-c name=value` settings in a connection string's `options`
+  (and `PGOPTIONS`) are read back after connecting and re-applied with
+  `set_config` when the server did not apply them. Session poolers such as
+  Supavisor drop startup `options`, so `-csearch_path=...` previously had no
+  effect through them.
+* **mutation:** when `CREATE DATABASE ... TEMPLATE` is refused because other
+  sessions are on the template (SQLSTATE 55006, e.g. a pooler's idle server
+  session), the runner raises `SqlProofMutationError` naming them. New
+  `release_template_sessions=True` briefly closes the template to new
+  connections, terminates idle sessions of the runner's own role there,
+  clones, and reopens it; active or other-role sessions are never touched.
+
 ## [0.11.2](https://github.com/alialavia/sqlproof/compare/v0.11.1...v0.11.2) (2026-10-02)
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from configparser import ConfigParser
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from uuid import UUID
@@ -12,7 +13,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from sqlproof import _database as database
-from sqlproof._dsn import make_conninfo
+from sqlproof._dsn import conninfo_to_dict, make_conninfo
 from sqlproof._range import Range
 from sqlproof.generators.graph import dataset_strategy
 from sqlproof.scale.load import copy_table
@@ -45,6 +46,38 @@ TEXT = st.one_of(
 DATASETS = dataset_strategy(
     SCHEMA, sizes={"transport_rows": st.integers(0, 15)}, columns={"transport_rows.value": TEXT}
 )
+
+
+@pytest.mark.parametrize(
+    ("options", "expected"),
+    [(None, "from_service"), ("-csearch_path=from_dsn", "from_dsn")],
+)
+def test_startup_options_keep_libpq_service_and_environment_precedence(
+    tmp_path, monkeypatch, options, expected
+) -> None:
+    service = ConfigParser(interpolation=None)
+    service["sqlproof_review"] = conninfo_to_dict(os.environ["SQLPROOF_TEST_DATABASE_URL"])
+    service["sqlproof_review"]["options"] = "-csearch_path=from_service"
+    service_path = tmp_path / "pg_service.conf"
+    with service_path.open("w") as file:
+        service.write(file, space_around_delimiters=False)
+    monkeypatch.setenv("PGSERVICEFILE", str(service_path))
+    monkeypatch.setenv("PGOPTIONS", "-csearch_path=from_environment")
+    dsn = make_conninfo(service="sqlproof_review", **({"options": options} if options else {}))
+
+    with database.connect(dsn) as conn:
+        assert conn.execute("SHOW search_path").fetchone() == (expected,)
+
+
+def test_a_normalized_backend_only_startup_option_still_connects() -> None:
+    # The server reads `true` back as `on`, and ignore_system_indexes can only
+    # be set at connection start, so re-applying it after connecting would
+    # fail. Any role may set it, so this also runs against hosted databases.
+    dsn = make_conninfo(
+        os.environ["SQLPROOF_TEST_DATABASE_URL"], options="-c ignore_system_indexes=true"
+    )
+    with database.connect(dsn) as conn:
+        assert conn.execute("SHOW search_path").fetchone() is not None
 
 
 @settings(max_examples=30, deadline=None)
@@ -169,6 +202,36 @@ def test_special_decimal_parameters_remain_numeric_values(value) -> None:
         assert str(stored) == str(value)
 
 
+_SUPAVISOR_APPLICATION_NAME = "Supavisor"
+
+
+@pytest.fixture(scope="module")
+def application_name_reaches_the_server() -> None:
+    """Gate: these oracles need the server to see the client's
+    application_name, which only a direct connection guarantees.
+
+    Supabase's pooler (Supavisor) replaces application_name with its own
+    name on the server session, so SHOW can never echo the client's value
+    there. The gate only skips when the server reports exactly that
+    override; any other mismatch still fails the test.
+    """
+    probe = "sqlproof-application-name-probe"
+    dsn = make_conninfo(os.environ["SQLPROOF_TEST_DATABASE_URL"], application_name=probe)
+    with database.connect(dsn) as conn:
+        seen = conn.execute("SHOW application_name").fetchone()[0]
+    if seen == probe:
+        return
+    assert seen == _SUPAVISOR_APPLICATION_NAME, (
+        f"server reported application_name {seen!r} for {probe!r}, and it is "
+        "not the Supavisor pooler override"
+    )
+    pytest.skip(
+        "GATE (pooler): Supavisor rewrites application_name to 'Supavisor'; "
+        "these application_name oracles need a direct connection"
+    )
+
+
+@pytest.mark.usefixtures("application_name_reaches_the_server")
 def test_connection_options_preserve_backslashes_without_spaces() -> None:
     name = r"sqlproof\review"
     dsn = make_conninfo(os.environ["SQLPROOF_TEST_DATABASE_URL"], application_name=name)
@@ -176,6 +239,7 @@ def test_connection_options_preserve_backslashes_without_spaces() -> None:
         assert conn.execute("SHOW application_name").fetchone() == (name,)
 
 
+@pytest.mark.usefixtures("application_name_reaches_the_server")
 @settings(max_examples=30, deadline=None)
 @given(
     name=st.text(

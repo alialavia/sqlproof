@@ -165,11 +165,17 @@ covering `get_member_project_ids` / `get_editor_project_ids` against
 - The `auth.users` schema can drift across Supabase versions. The helpers
   insert minimal columns (`id`, `aud`, `role`, `email`); if your test data
   needs richer auth metadata, insert directly with raw SQL.
-- Connect to hosted Supabase on the **direct** port (5432), not through
-  the connection pooler (port 6543, Supavisor). The pooler silently drops
-  the `application_name` and `options` (`search_path`) connection
-  settings, needs the `.<project-ref>` suffix on role names, and keeps the
-  template database open, so the mutation runner's
-  `CREATE DATABASE ... TEMPLATE` is refused. If only the pooler is
-  reachable (IPv6-only direct endpoints are common), expect those
-  features to fail even though the schema under test is fine.
+- Prefer the **direct** connection to hosted Supabase. If only the
+  Supavisor pooler is reachable (IPv6-only direct endpoints are common),
+  use its **session** mode (`<region>.pooler.supabase.com:5432`, user
+  `postgres.<project-ref>`); transaction mode (port 6543) has not been tested.
+  Through the session pooler:
+  - `options` settings such as `-csearch_path=...` are dropped by the
+    pooler; SqlProof re-applies them with `set_config` after connecting.
+  - `application_name` is replaced with `Supavisor` on the server.
+  - Role names need the `.<project-ref>` suffix (the test suite's RLS
+    fixture keeps it via `sqlproof._dsn.with_user`).
+  - The pooler keeps idle sessions on every database it has served, so
+    the mutation runner's `CREATE DATABASE ... TEMPLATE` is refused. Pass
+    `release_template_sessions=True` to `run_mutation_tests` to terminate
+    idle sessions of your role on the template before cloning.
