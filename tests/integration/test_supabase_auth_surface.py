@@ -24,8 +24,9 @@ import json
 import os
 from uuid import uuid4
 
-import psycopg
 import pytest
+
+from sqlproof import _database as database
 
 DSN_ENV = "SQLPROOF_TEST_DATABASE_URL"
 
@@ -37,7 +38,7 @@ pytestmark = pytest.mark.skipif(
 
 def test_auth_schema_exposes_uid_role_email_jwt_helpers() -> None:
     dsn = os.environ[DSN_ENV]
-    with psycopg.connect(dsn) as conn, conn.cursor() as cur:
+    with database.connect(dsn) as conn, conn.cursor() as cur:
         cur.execute(
             """
             SELECT proname
@@ -64,7 +65,7 @@ def test_auth_uid_reads_singular_request_jwt_claim_sub() -> None:
     dsn = os.environ[DSN_ENV]
     user_id = str(uuid4())
 
-    with psycopg.connect(dsn) as conn, conn.cursor() as cur:
+    with database.connect(dsn) as conn, conn.cursor() as cur:
         cur.execute("BEGIN")
         cur.execute(
             "SELECT set_config('request.jwt.claim.sub', %s, true)", (user_id,)
@@ -88,7 +89,7 @@ def test_auth_uid_reads_json_request_jwt_claims() -> None:
     user_id = str(uuid4())
     claims = json.dumps({"sub": user_id, "role": "authenticated"})
 
-    with psycopg.connect(dsn) as conn, conn.cursor() as cur:
+    with database.connect(dsn) as conn, conn.cursor() as cur:
         cur.execute("BEGIN")
         cur.execute("SELECT set_config('request.jwt.claims', %s, true)", (claims,))
         cur.execute("SELECT auth.uid()::text")
@@ -103,7 +104,7 @@ def test_plpgsql_check_extension_is_installed() -> None:
     """The CI workflow runs CREATE EXTENSION plpgsql_check before pytest;
     this test asserts that step actually took effect."""
     dsn = os.environ[DSN_ENV]
-    with psycopg.connect(dsn) as conn, conn.cursor() as cur:
+    with database.connect(dsn) as conn, conn.cursor() as cur:
         cur.execute("SELECT 1 FROM pg_extension WHERE extname = 'plpgsql_check'")
         assert cur.fetchone() is not None, (
             "plpgsql_check should be pre-installed by the CI setup step"

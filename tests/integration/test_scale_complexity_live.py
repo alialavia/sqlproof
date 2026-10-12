@@ -37,9 +37,9 @@ from __future__ import annotations
 
 import os
 
-import psycopg
 import pytest
 
+from sqlproof import _database as database
 from sqlproof.exceptions import SqlProofScaleError
 from sqlproof.scale.args import heaviest
 from sqlproof.scale.sweep import run_sweep
@@ -93,7 +93,7 @@ BEGIN SELECT name INTO r FROM scale_test.items WHERE id = k; RETURN r; END $$;
 
 @pytest.fixture
 def conn():
-    with psycopg.connect(os.environ[DSN_ENV], autocommit=True) as connection:
+    with database.connect(os.environ[DSN_ENV], autocommit=True) as connection:
         connection.execute("DROP SCHEMA IF EXISTS scale_test CASCADE")
         try:
             # Ruling W: setup lives inside the try too, so a failure partway
@@ -181,7 +181,7 @@ def test_the_same_seed_and_profile_measure_the_same_points(
         ]
 
     first = run_sweep(conn, _schema(), function, sizes=sizes, args=args, max_factor=16, seed=7)
-    with psycopg.connect(os.environ[DSN_ENV], autocommit=True) as fresh:
+    with database.connect(os.environ[DSN_ENV], autocommit=True) as fresh:
         second = run_sweep(
             fresh, _schema(), function, sizes=sizes, args=args, max_factor=16, seed=7,
         )

@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import psycopg
 import pytest
 
 from sqlproof.exceptions import SqlProofUsageError
@@ -37,14 +36,10 @@ class _FakeCursor:
         return ([{"Plan": plan, "Execution Time": 0.1}],)
 
 
-class _FakeInfo:
-    transaction_status = psycopg.pq.TransactionStatus.IDLE
-
-
 class _FakeConn:
     def __init__(self) -> None:
         self.statements: list[str] = []
-        self.info = _FakeInfo()
+        self.in_transaction = False
 
     def cursor(self) -> _FakeCursor:
         return _FakeCursor(self)

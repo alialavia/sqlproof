@@ -9,8 +9,15 @@ SqlProof is a Python property-based testing library for PostgreSQL. It generates
 
 - Python 3.11+
 - PostgreSQL 13+ or Docker, if using testcontainers
+- PostgreSQL client library (`libpq`) on the host running Python
 
 ## Install
+
+On Debian/Ubuntu, install `build-essential libpq-dev`. On macOS, run
+`brew install libpq` and put `$(brew --prefix libpq)/bin` on `PATH`.
+On Windows, install PostgreSQL's client tools and put the directory
+containing `libpq.dll` on `PATH`. PyGreSQL uses these tools even when the
+database runs in Docker.
 
 ```bash
 pip install sqlproof

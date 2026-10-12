@@ -152,7 +152,7 @@ def test_parser_renders_expression_form_index_param_as_text() -> None:
     items = info.table("items")
     assert len(items.partial_unique_constraints) == 1
     constraint = items.partial_unique_constraints[0]
-    # The expression renders as text from pglast. We don't pin the
+    # The expression renders as text from postgast. We don't pin the
     # exact rendering — just that it's non-empty and recognizable.
     assert len(constraint.columns) == 1
     assert "name" in constraint.columns[0].lower()

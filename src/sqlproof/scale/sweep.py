@@ -19,8 +19,7 @@ import time
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-import psycopg
-
+from sqlproof import _database as database
 from sqlproof.exceptions import (
     CircularDependencyError,
     SqlProofGenerationError,
@@ -44,7 +43,7 @@ from sqlproof.schema.model import SchemaInfo
 
 
 def run_sweep(
-    conn: psycopg.Connection,
+    conn: database.Connection,
     schema: SchemaInfo,
     function: str,
     *,
@@ -176,7 +175,7 @@ def _validate(
         raise SqlProofUsageError(msg)
 
 
-def _refuse_non_empty_tables(conn: psycopg.Connection, schema: SchemaInfo) -> None:
+def _refuse_non_empty_tables(conn: database.Connection, schema: SchemaInfo) -> None:
     counts = row_counts(conn, schema)
     occupied: list[str] = []
     for table in schema.tables:
@@ -200,7 +199,7 @@ def _refuse_non_empty_tables(conn: psycopg.Connection, schema: SchemaInfo) -> No
 
 
 def _measure(
-    conn: psycopg.Connection,
+    conn: database.Connection,
     schema: SchemaInfo,
     function: str,
     *,

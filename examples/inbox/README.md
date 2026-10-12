@@ -15,7 +15,7 @@ the bug, the SqlProof property that catches it, and the fix.
 
 ```bash
 # 1. Install
-pip install sqlproof psycopg
+pip install sqlproof
 
 # 2. Start a Supabase-shaped Postgres (with pgvector + auth schema)
 supabase start

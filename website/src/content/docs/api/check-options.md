@@ -60,4 +60,4 @@ affected = db.execute("UPDATE orders SET status = %s", "confirmed")
 dataset = db.get_generated_data()
 ```
 
-Use `db.connection` when you need raw psycopg access.
+Queries use PyGreSQL internally. Prefer these helpers so tests stay independent of the driver.

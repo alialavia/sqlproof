@@ -12,11 +12,11 @@ import json
 import os
 from itertools import pairwise
 
-import psycopg
 import pytest
-from psycopg import sql
 
 from sqlproof import SqlProof
+from sqlproof import _database as database
+from sqlproof._dsn import make_conninfo, quote_identifier
 from sqlproof.config import SqlProofConfig
 from sqlproof.exceptions import SqlProofUsageError
 from sqlproof.scale import heaviest, scale_analysis
@@ -41,7 +41,7 @@ CREATE TABLE events (
 @pytest.fixture
 def proof():
     dsn = os.environ[DSN_ENV]
-    with psycopg.connect(dsn, autocommit=True) as connection:
+    with database.connect(dsn, autocommit=True) as connection:
         connection.execute("DROP SCHEMA IF EXISTS api_test CASCADE")
         try:
             # Ruling Z: setup lives inside the try too, so a failure partway
@@ -110,7 +110,7 @@ def test_resolved_arguments_are_recorded_per_point(proof, tmp_path):
 def _row_counts() -> dict[str, int]:
     """Read on a fresh connection, so nothing the sweep's own session
     left uncommitted can make a count look right."""
-    with psycopg.connect(os.environ[DSN_ENV]) as fresh:
+    with database.connect(os.environ[DSN_ENV]) as fresh:
         return {
             name: fresh.execute(f"SELECT count(*) FROM api_test.{name}").fetchone()[0]
             for name in ("orgs", "events")
@@ -118,7 +118,7 @@ def _row_counts() -> dict[str, int]:
 
 
 def _seed_three_orgs() -> None:
-    with psycopg.connect(os.environ[DSN_ENV], autocommit=True) as connection:
+    with database.connect(os.environ[DSN_ENV], autocommit=True) as connection:
         connection.execute(
             "INSERT INTO api_test.orgs VALUES (1, 'kept'), (2, 'kept'), (3, 'kept')"
         )
@@ -150,7 +150,7 @@ def rls_role_dsn(proof):
     even under FORCE, so only a plain role can see a table as empty
     while TRUNCATE would still delete its rows."""
     dsn = os.environ[DSN_ENV]
-    with psycopg.connect(dsn, autocommit=True) as connection:
+    with database.connect(dsn, autocommit=True) as connection:
         connection.execute(f"DROP ROLE IF EXISTS {RLS_ROLE}")
         connection.execute(f"CREATE ROLE {RLS_ROLE} LOGIN PASSWORD 'rls'")
         try:
@@ -159,12 +159,13 @@ def rls_role_dsn(proof):
             # The grantee is named, not CURRENT_USER: supabase/postgres
             # 15.8.1.040 segfaults on `GRANT <role> TO CURRENT_USER`.
             connection.execute(
-                sql.SQL("GRANT {} TO {}").format(
-                    sql.Identifier(RLS_ROLE), sql.Identifier(connection.info.user)
+                ("GRANT {} TO {}").format(
+                    quote_identifier(RLS_ROLE),
+                    quote_identifier(connection.execute("SELECT current_user").fetchone()[0]),
                 )
             )
             connection.execute(f"GRANT USAGE, CREATE ON SCHEMA api_test TO {RLS_ROLE}")
-            yield psycopg.conninfo.make_conninfo(dsn, user=RLS_ROLE, password="rls")
+            yield make_conninfo(dsn, user=RLS_ROLE, password="rls")
         finally:
             connection.execute("DROP SCHEMA IF EXISTS api_test CASCADE")
             connection.execute(f"DROP OWNED BY {RLS_ROLE}")
@@ -178,7 +179,7 @@ def test_rows_hidden_by_rls_are_refused_and_left_untouched(rls_role_dsn, setup):
     owner under FORCE ROW LEVEL SECURITY, and as a role granted TRUNCATE
     without BYPASSRLS. The sweep must refuse, and the rows must survive."""
     _seed_three_orgs()
-    with psycopg.connect(os.environ[DSN_ENV], autocommit=True) as connection:
+    with database.connect(os.environ[DSN_ENV], autocommit=True) as connection:
         connection.execute("ALTER TABLE api_test.orgs ENABLE ROW LEVEL SECURITY")
         if setup == "force_rls_owner":
             connection.execute(f"ALTER TABLE api_test.orgs OWNER TO {RLS_ROLE}")
@@ -188,7 +189,7 @@ def test_rows_hidden_by_rls_are_refused_and_left_untouched(rls_role_dsn, setup):
             connection.execute(
                 f"GRANT SELECT, INSERT, TRUNCATE ON api_test.orgs, api_test.events TO {RLS_ROLE}"
             )
-    with psycopg.connect(rls_role_dsn) as as_role:
+    with database.connect(rls_role_dsn) as as_role:
         visible = as_role.execute("SELECT count(*) FROM api_test.orgs").fetchone()
     assert visible == (0,), "the setup must hide the rows from the sweep's role"
 
@@ -205,7 +206,7 @@ def test_rows_hidden_by_rls_are_refused_and_left_untouched(rls_role_dsn, setup):
         )
     # Lift RLS before counting: CI's `postgres` is not a superuser, so
     # the policy would hide the surviving rows from this check too.
-    with psycopg.connect(os.environ[DSN_ENV], autocommit=True) as connection:
+    with database.connect(os.environ[DSN_ENV], autocommit=True) as connection:
         connection.execute("ALTER TABLE api_test.orgs NO FORCE ROW LEVEL SECURITY")
         connection.execute("ALTER TABLE api_test.orgs DISABLE ROW LEVEL SECURITY")
     assert _row_counts() == {"orgs": 3, "events": 0}
@@ -232,7 +233,7 @@ def test_a_function_that_raises_mid_sweep_propagates_and_leaves_tables_empty(pro
     error message carries the count, proving the table was full when it
     failed). The function's own error must reach the caller, and the
     closing TRUNCATE must still leave every modelled table empty."""
-    with psycopg.connect(os.environ[DSN_ENV], autocommit=True) as connection:
+    with database.connect(os.environ[DSN_ENV], autocommit=True) as connection:
         connection.execute(
             "CREATE FUNCTION api_test.fails_when_large() RETURNS bigint "
             "LANGUAGE plpgsql STABLE AS $$ DECLARE n bigint; BEGIN "
@@ -240,7 +241,7 @@ def test_a_function_that_raises_mid_sweep_propagates_and_leaves_tables_empty(pro
             "IF n > 1000 THEN RAISE EXCEPTION 'sqlproof test: % events', n; END IF; "
             "RETURN n; END $$"
         )
-    with pytest.raises(psycopg.errors.RaiseException, match="sqlproof test: 1600 events"):
+    with pytest.raises(database.DatabaseError, match="sqlproof test: 1600 events"):
         scale_analysis(
             proof,
             "api_test.fails_when_large",

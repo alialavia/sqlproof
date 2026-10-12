@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 from sqlproof._version import __version__
 
 if TYPE_CHECKING:
+    from sqlproof._range import Range
     from sqlproof.config import ExternalTableSpec, SqlProofConfig
     from sqlproof.core import SqlProof
     from sqlproof.mutation.model import Drop, Mutant, MutationSet, Replace
@@ -21,6 +22,7 @@ __all__ = [
     "MutantOutcome",
     "MutationResult",
     "MutationSet",
+    "Range",
     "Replace",
     "SqlProof",
     "SqlProofConfig",
@@ -33,6 +35,10 @@ __all__ = [
 
 
 def __getattr__(name: str) -> object:
+    if name == "Range":
+        from sqlproof._range import Range
+
+        return Range
     if name == "SqlProof":
         from sqlproof.core import SqlProof
 

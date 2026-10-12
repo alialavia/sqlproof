@@ -9,7 +9,7 @@ which the old regex refiner could not read.
 
 Covers all three generation routes against a real server:
   * `from_connection_string` (live introspection) + Hypothesis inserts,
-  * `from_schema_file` (pglast parse of the source) -> rows Postgres
+  * `from_schema_file` (postgast parse of the source) -> rows Postgres
     accepts,
   * the bulk `load_dataset` COPY path over a table carrying every
     common CHECK shape.
@@ -21,10 +21,11 @@ import os
 from pathlib import Path
 from uuid import uuid4
 
-import psycopg
 import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
+
+from sqlproof import _database as database
 
 pytestmark = pytest.mark.skipif(
     "SQLPROOF_TEST_DATABASE_URL" not in os.environ,
@@ -59,7 +60,7 @@ create table {schema}.check_shapes (
 """
 
 
-def _create(connection: psycopg.Connection, schema: str, sql: str) -> None:
+def _create(connection: database.Connection, schema: str, sql: str) -> None:
     connection.execute(sql.format(schema=f'"{schema}"'))
 
 
@@ -67,7 +68,7 @@ def _create(connection: psycopg.Connection, schema: str, sql: str) -> None:
 def live_schema():
     dsn = os.environ["SQLPROOF_TEST_DATABASE_URL"]
     schema = f"sqlproof_chk113_{uuid4().hex[:12]}"
-    with psycopg.connect(dsn, autocommit=True) as connection:
+    with database.connect(dsn, autocommit=True) as connection:
         connection.execute(f'CREATE SCHEMA "{schema}"')
         try:
             _create(connection, schema, TODOS_SQL)
@@ -94,7 +95,7 @@ def test_issue_113_todos_from_connection_string_never_violates_task_check(
     from sqlproof import SqlProof
 
     dsn, schema = live_schema
-    with psycopg.connect(dsn) as connection:
+    with database.connect(dsn) as connection:
         if connection.execute("SELECT count(*) FROM auth.users").fetchone() == (0,):
             pytest.skip("auth.users has no rows to reference")
 
@@ -147,7 +148,7 @@ def test_issue_113_check_shapes_from_schema_file_are_accepted_by_postgres(
 
     collect()
     assert rows
-    with psycopg.connect(dsn) as connection:
+    with database.connect(dsn) as connection:
         for row in rows:
             columns = [c for c in row if c != "id"]
             placeholders = ", ".join(["%s"] * len(columns))
@@ -166,8 +167,8 @@ def test_issue_113_bulk_load_honors_every_check_shape(live_schema) -> None:
     from sqlproof.schema.introspect import introspect_schema
 
     dsn, schema = live_schema
-    with psycopg.connect(dsn) as connection:
-        with connection.cursor(row_factory=psycopg.rows.dict_row) as cur:
+    with database.connect(dsn) as connection:
+        with connection.cursor(row_factory=database.dict_row) as cur:
             info = introspect_schema(cur, schema=schema)
         shapes_only = type(info)(
             tables=tuple(t for t in info.tables if t.name == "check_shapes"),

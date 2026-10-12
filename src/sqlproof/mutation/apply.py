@@ -3,13 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import cast
 
-from pglast import parse_sql as parse_postgres_sql
-
-# parse_plpgsql_json returns the raw JSON string; we re-dump with sort_keys for a
-# deterministic AST key (pglast.parse_plpgsql is just json.loads of this).
-from pglast.parser import parse_plpgsql_json
+import postgast
+from google.protobuf.json_format import MessageToDict
 
 from sqlproof.exceptions import SqlProofMutationError
 from sqlproof.mutation.extract import (
@@ -39,10 +36,7 @@ def apply_op(body: str, op: Op) -> str:
         msg = f"{op.describe()}: pattern not found in the function body."
         raise SqlProofMutationError(msg)
     if count > 1:
-        msg = (
-            f"{op.describe()}: pattern occurs {count} times; "
-            "extend it until it is unique."
-        )
+        msg = f"{op.describe()}: pattern occurs {count} times; extend it until it is unique."
         raise SqlProofMutationError(msg)
     return body.replace(pattern, replacement, 1)
 
@@ -51,29 +45,33 @@ def _sql_ast_key(sql: str, *, context: str) -> str:
     try:
         # Key on the statement nodes, not RawStmt wrappers, so that
         # stmt_location/stmt_len (which encode formatting) don't affect identity.
-        statements: tuple[Any, ...] = tuple(parse_postgres_sql(sql))
-        return repr(tuple(raw.stmt for raw in statements))
+        tree = postgast.parse(sql)
+        statements = [MessageToDict(raw.stmt) for raw in tree.stmts]
+        return json.dumps(_strip_locations(statements), sort_keys=True)
     except Exception as exc:
         msg = f"{context}: body does not parse — authoring error: {exc}"
         raise SqlProofMutationError(msg) from exc
 
 
-def _strip_linenos(node: object) -> object:
-    """Recursively remove 'lineno' keys from a parsed plpgsql JSON structure."""
+def _strip_locations(node: object) -> object:
+    """Remove source positions, which do not affect mutation identity."""
     if isinstance(node, dict):
         items = cast("dict[str, object]", node)
-        return {key: _strip_linenos(value) for key, value in items.items() if key != "lineno"}
+        return {
+            key: _strip_locations(value)
+            for key, value in items.items()
+            if key not in {"lineno", "location", "stmtLocation", "stmtLen"}
+        }
     if isinstance(node, list):
         items_list = cast("list[object]", node)
-        return [_strip_linenos(item) for item in items_list]
+        return [_strip_locations(item) for item in items_list]
     return node
 
 
 def _plpgsql_ast_key(ddl: str, *, context: str) -> str:
     try:
-        raw: Any = parse_plpgsql_json(ddl)
-        parsed = json.loads(raw) if isinstance(raw, str) else raw
-        return json.dumps(_strip_linenos(parsed), sort_keys=True)
+        parsed = postgast.parse_plpgsql(ddl)
+        return json.dumps(_strip_locations(parsed), sort_keys=True)
     except Exception as exc:
         msg = f"{context}: body does not parse — authoring error: {exc}"
         raise SqlProofMutationError(msg) from exc
@@ -128,9 +126,7 @@ def prepare_mutants(mutations: MutationSet, schema_sql: str) -> tuple[PreparedMu
         if original_key == mutated_key:
             msg = f"{context}: mutation is a no-op (identical AST after parsing)."
             raise SqlProofMutationError(msg)
-        digest = hashlib.sha256(
-            f"{mutant.target_name}\n{mutated_key}".encode()
-        ).hexdigest()[:16]
+        digest = hashlib.sha256(f"{mutant.target_name}\n{mutated_key}".encode()).hexdigest()[:16]
         if digest in seen:
             msg = (
                 f"{context}: duplicate of mutant {seen[digest]!r} "

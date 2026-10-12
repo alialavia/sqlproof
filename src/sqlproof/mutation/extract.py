@@ -3,11 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from pglast import ast as pg_ast
-from pglast import parse_sql as parse_postgres_sql
-from pglast.stream import RawStream
-
 from sqlproof.exceptions import SqlProofMutationError
+from sqlproof.schema._postgres import node_message, render_statement
+from sqlproof.schema._postgres import parse_sql as parse_postgres_sql
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,8 +70,7 @@ def _option(statement: Any, defname: str, function_name: str) -> Any:
 
 def _body_from_statement(statement: Any, function_name: str) -> str:
     as_option = _option(statement, "as", function_name)
-    # pglast returns arg as a plain tuple of String nodes (not a node with .items)
-    items: tuple[Any, ...] = tuple(as_option.arg)
+    items: tuple[Any, ...] = tuple(as_option.arg.items)
     if len(items) != 1:
         msg = (
             f"Function {function_name!r} has a multi-part AS clause "
@@ -87,21 +84,23 @@ def extract_function(schema_sql: str, name: str) -> FunctionSource:
     statement = _matching_statement(schema_sql, name)
     language = str(_option(statement, "language", name).arg.sval)
     body = _body_from_statement(statement, name)
-    stream = RawStream()  # type: ignore[no-untyped-call]
-    return FunctionSource(name=name, language=language, body=body, ddl=stream(statement))
+    return FunctionSource(
+        name=name, language=language, body=body, ddl=render_statement(statement)
+    )
 
 
 def build_mutated_ddl(schema_sql: str, name: str, mutated_body: str) -> str:
     """CREATE OR REPLACE FUNCTION statement with `mutated_body` spliced in.
 
-    Re-parses the schema and mutates the AST (pglast nodes are mutable),
+    Re-parses the schema and mutates the protobuf AST,
     then deparses — no text splicing, so dollar-quoting and clause order
     are the deparser's problem, not ours.  `_matching_statement` re-parses
     the schema, so the tree mutated here is private to this call.
     """
     statement = _matching_statement(schema_sql, name)
-    statement.replace = True
+    node_message(statement).replace = True
     as_option = _option(statement, "as", name)
-    as_option.arg = (pg_ast.String(sval=mutated_body),)  # type: ignore[no-untyped-call]
-    stream = RawStream()  # type: ignore[no-untyped-call]
-    return stream(statement)  # type: ignore[no-any-return]
+    argument = node_message(as_option).arg.list
+    del argument.items[:]
+    argument.items.add().string.sval = mutated_body
+    return render_statement(statement)

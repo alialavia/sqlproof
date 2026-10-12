@@ -2,12 +2,11 @@ from __future__ import annotations
 
 from collections.abc import Generator
 from contextlib import contextmanager
-from typing import Any, cast
+from typing import Any
 
-import psycopg
-from psycopg.rows import dict_row
-
-from sqlproof.client import PsycopgSqlProofClient, SqlProofClient
+from sqlproof import _database as database
+from sqlproof._database import dict_row
+from sqlproof.client import PostgresSqlProofClient, SqlProofClient
 from sqlproof.config import SqlProofConfig
 from sqlproof.exceptions import SqlProofUsageError
 
@@ -24,10 +23,10 @@ class DBManager:
             raise SqlProofUsageError(msg)
         if self.started:
             return
-        self._connection = psycopg.connect(
+        self._connection = database.connect(
             conninfo=self.config.connection_string,
             autocommit=False,
-            row_factory=cast(Any, dict_row),
+            row_factory=dict_row,
         )
         self.started = True
 
@@ -39,7 +38,7 @@ class DBManager:
         if self._connection is None:
             msg = "DBManager failed to establish a database connection."
             raise SqlProofUsageError(msg)
-        yield PsycopgSqlProofClient(self._connection)
+        yield PostgresSqlProofClient(self._connection)
 
     def stop(self) -> None:
         if self._connection is not None:

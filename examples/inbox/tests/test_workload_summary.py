@@ -43,7 +43,7 @@ def workload_v2_required(supabase_proof):
 
 
 def _sorted_rows(rows: list[dict]) -> list[tuple]:
-    # psycopg returns UUID columns as uuid.UUID; stringify for stable sort.
+    # PyGreSQL returns UUID columns as uuid.UUID; stringify for stable sort.
     return sorted(
         (
             str(r["user_id"]),

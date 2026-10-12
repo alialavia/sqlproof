@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import os
 
-import psycopg
 import pytest
 
+from sqlproof import _database as database
 from sqlproof.exceptions import SqlProofUsageError
 from sqlproof.scale.probe import probe_function
 
@@ -27,7 +27,7 @@ CREATE FUNCTION touch_nothing() RETURNS int LANGUAGE sql IMMUTABLE AS 'SELECT 1'
 
 @pytest.fixture
 def conn():
-    with psycopg.connect(os.environ[DSN_ENV], autocommit=True) as connection:
+    with database.connect(os.environ[DSN_ENV], autocommit=True) as connection:
         connection.execute("DROP SCHEMA IF EXISTS probe_test CASCADE")
         connection.execute("CREATE SCHEMA probe_test")
         connection.execute("SET search_path TO probe_test")
@@ -72,7 +72,7 @@ def test_probe_composes_inside_an_existing_transaction(conn):
     a transaction active by the time a probe runs, and a caller may have
     uncommitted work in it that must survive the probe untouched -- only
     the probe's own savepoint should roll back."""
-    other = psycopg.connect(os.environ[DSN_ENV], autocommit=False)
+    other = database.connect(os.environ[DSN_ENV], autocommit=False)
     try:
         other.execute("SET search_path TO probe_test")
         other.execute("INSERT INTO items VALUES (888888, 'sentinel')")
@@ -101,7 +101,7 @@ def test_an_injected_function_name_is_refused_and_the_canary_survives(conn):
     )
     with pytest.raises(SqlProofUsageError, match="invalid identifier segment"):
         probe_function(conn, payload, [], factor=1, total_rows=0)
-    with psycopg.connect(os.environ[DSN_ENV]) as fresh:
+    with database.connect(os.environ[DSN_ENV]) as fresh:
         remaining = fresh.execute("SELECT count(*) FROM probe_test.canary").fetchone()[0]
     assert remaining == 3
 

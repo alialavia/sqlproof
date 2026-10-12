@@ -81,7 +81,7 @@ dev = [
   "sqlproof",
   "pytest>=8",
   "hypothesis>=6.100",
-  "psycopg[binary]>=3.1",
+  "PyGreSQL>=6.2.3,<7",
 ]
 
 [tool.pytest.ini_options]
@@ -158,7 +158,7 @@ dev = [
   "sqlproof",
   "pytest>=8",
   "hypothesis>=6.100",
-  "psycopg[binary]>=3.1",
+  "PyGreSQL>=6.2.3,<7",
 ]
 ```
 
@@ -231,6 +231,7 @@ jobs:
       - uses: alialavia/sqlproof/.github/actions/setup-supabase-test-db@main
         with:
           database-url: ${{ env.SQLPROOF_DATABASE_URL }}
+      - run: sudo apt-get update && sudo apt-get install -y libpq-dev
       - run: pip install -e ".[dev]"
       - run: pytest
 ```
@@ -720,7 +721,7 @@ db.execute(
     "INSERT INTO posts (org_id, author_id) VALUES (%s, %s)",
     [org_id, author_id],
 )
-# psycopg.errors.SyntaxError: the query has 2 placeholders but 1 parameters
+# A parameter-count error: two placeholders require two separate values.
 ```
 
 ```python
@@ -733,8 +734,8 @@ db.execute(
 ```
 
 Same rule for `db.query(...)` and `db.scalar(...)`. The list-wrapping
-pattern is what `psycopg.Cursor.execute` expects, but `SqlProofClient`
-wraps psycopg with a splat-style signature. Easy to get wrong because
+pattern is what DB-API cursor methods expect, but `SqlProofClient`
+uses a splat-style signature. Easy to get wrong because
 the failure mode is a confusing parameter-count mismatch.
 
 ### ❌ Don't access default-bearing columns without putting them in `columns={...}`

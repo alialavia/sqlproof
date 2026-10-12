@@ -5,7 +5,7 @@ Confirms that:
       a range column resolves to ``kind="range"`` with the
       element type as ``base``.
   (b) The generator's ``Range`` objects round-trip through
-      psycopg's adapter into Postgres without rejection.
+      database's adapter into Postgres without rejection.
 
 Without these, the unit tests' parser invariant could be correct
 in isolation while the introspect side or the wire-format adapter
@@ -17,9 +17,9 @@ from __future__ import annotations
 import os
 from uuid import uuid4
 
-import psycopg
 import pytest
 
+from sqlproof import _database as database
 from sqlproof.schema.introspect import introspect_schema
 from sqlproof.schema.parse_sql import parse_schema_sql
 
@@ -46,7 +46,7 @@ def test_range_typed_columns_round_trip_through_postgres() -> None:
 
     dsn = os.environ["SQLPROOF_TEST_DATABASE_URL"]
     schema_name = f"sqlproof_range_{uuid4().hex}"
-    with psycopg.connect(dsn, autocommit=True) as connection:
+    with database.connect(dsn, autocommit=True) as connection:
         connection.execute(f'CREATE SCHEMA "{schema_name}"')
         try:
             connection.execute(f'SET search_path TO "{schema_name}"')
@@ -60,7 +60,7 @@ def test_range_typed_columns_round_trip_through_postgres() -> None:
             assert parsed.column("quantity").type.kind == "range"
 
             # Introspector-side
-            with connection.cursor(row_factory=psycopg.rows.dict_row) as cur:
+            with connection.cursor(row_factory=database.dict_row) as cur:
                 introspected = introspect_schema(cur, schema=schema_name).table(
                     "bookings", schema=schema_name
                 )
@@ -68,7 +68,7 @@ def test_range_typed_columns_round_trip_through_postgres() -> None:
             assert during_type.kind == "range"
             assert during_type.name == "tstzrange"
 
-            # End-to-end: generate a dataset and let psycopg insert
+            # End-to-end: generate a dataset and let database insert
             # the Range objects into Postgres. If anything in the
             # adapter chain breaks, check() raises before the property
             # body runs.

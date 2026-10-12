@@ -5,10 +5,10 @@ introspection gets Postgres's own rendering from
 ``pg_get_constraintdef`` (``CHECK (((char_length(task) >= 1) AND
 (char_length(task) <= 200)))`` -- note the extra parentheses, the
 ``::type`` casts, and ``BETWEEN`` already rewritten to ``>= AND <=``),
-while ``from_schema_file`` gets pglast's deparse of what the user
+while ``from_schema_file`` gets postgast's deparse of what the user
 wrote (``char_length(task) BETWEEN 1 AND 200``). Matching either with
 regular expressions is brittle, so this module parses the text with
-pglast and walks the AST instead, which makes both renderings land on
+postgast and walks the AST instead, which makes both renderings land on
 the same facts.
 
 An expression is split into its top-level ``AND`` conjuncts. Each
@@ -40,11 +40,10 @@ from decimal import Decimal, InvalidOperation
 from functools import lru_cache
 from typing import Any, Literal
 
-import pglast
-from pglast import ast
-from pglast.enums import A_Expr_Kind, BoolExprType, NullTestType
-from pglast.keywords import RESERVED_KEYWORDS
+from postgast import nodes as ast
+from postgast.pg_query_pb2 import A_Expr_Kind, BoolExprType, NullTestType
 
+from sqlproof.schema._postgres import is_reserved_keyword, parse_sql
 from sqlproof.schema.model import ParsedCheck
 
 _CHECK_WRAPPER_RE = re.compile(
@@ -93,10 +92,10 @@ _TRANSPARENT_CASTS = frozenset(
 
 
 def _is(node: Any, cls: type) -> bool:
-    # pglast's AST classes are loosely typed (every field is
+    # postgast's AST classes are loosely typed (every field is
     # `Unknown | dict | None` to a type checker). Checking node types
     # through this helper instead of a bare `isinstance` keeps nodes
-    # typed `Any`, matching how parse_sql.py handles pglast nodes.
+    # typed `Any`, matching how parse_sql.py handles postgast nodes.
     return isinstance(node, cls)
 
 
@@ -159,17 +158,17 @@ def analyze_check(expression: str) -> CheckAnalysis:
 
 def _parse_expression(body: str) -> Any:
     try:
-        statements: Any = pglast.parse_sql(f"SELECT {body}")
+        statements: Any = parse_sql(f"SELECT {body}")
     except Exception:
         return None
     if len(statements) != 1:
         return None
     select: Any = statements[0].stmt
-    if not _is(select, ast.SelectStmt) or select.targetList is None:
+    if not _is(select, ast.SelectStmt) or select.target_list is None:
         return None
-    if len(select.targetList) != 1 or select.fromClause is not None:
+    if len(select.target_list) != 1 or select.from_clause:
         return None
-    return select.targetList[0].val
+    return select.target_list[0].val
 
 
 # Reserved words that legitimately appear inside a CHECK expression;
@@ -220,7 +219,7 @@ def _quote_reserved_identifiers(body: str) -> str:
     def quote(match: re.Match[str]) -> str:
         token = match.group(0)
         lowered = token.lower()
-        if lowered in RESERVED_KEYWORDS and lowered not in _EXPRESSION_KEYWORDS:
+        if is_reserved_keyword(lowered) and lowered not in _EXPRESSION_KEYWORDS:
             return f'"{token}"'
         return token
 
@@ -307,8 +306,8 @@ def _atoms_for_a_expr(node: Any) -> list[ParsedCheck] | None:
     if kind == A_Expr_Kind.AEXPR_OP:
         return _comparison(op, node.lexpr, node.rexpr)
     if kind in (A_Expr_Kind.AEXPR_BETWEEN, A_Expr_Kind.AEXPR_BETWEEN_SYM):
-        # pglast always gives BETWEEN a (low, high) pair.
-        low_node, high_node = node.rexpr
+        # postgast always gives BETWEEN a (low, high) pair.
+        low_node, high_node = node.rexpr.items
         low = _numeric(_literal(low_node))
         high = _numeric(_literal(high_node))
         if low is None or high is None:
@@ -322,7 +321,7 @@ def _atoms_for_a_expr(node: Any) -> list[ParsedCheck] | None:
         return [lower, upper]
     if kind == A_Expr_Kind.AEXPR_IN:
         column = _column_name(node.lexpr)
-        values = _literal_list(node.rexpr)
+        values = _literal_list(node.rexpr.items)
         if column is None or values is None:
             return None
         # IN is `=`, NOT IN is `<>` -- the parser produces no other.
@@ -398,7 +397,7 @@ def _operator(node: Any) -> str:
 
 
 def _column_name(node: Any) -> str | None:
-    if _is(node, ast.TypeCast) and _cast_name(node.typeName) in _TRANSPARENT_CASTS:
+    if _is(node, ast.TypeCast) and _cast_name(node.type_name) in _TRANSPARENT_CASTS:
         # Postgres renders implicit coercions explicitly:
         # `length((code)::text)` for a varchar column,
         # `((status)::text = ANY (...))`, `((qty)::numeric > 0.5)`.
@@ -442,7 +441,7 @@ def _literal(node: Any) -> Any:
         return _NO_LITERAL
     if _is(node, ast.TypeCast):
         inner = _literal(node.arg)
-        if isinstance(inner, str) and _cast_is_numeric(node.typeName):
+        if isinstance(inner, str) and _cast_is_numeric(node.type_name):
             try:
                 number = Decimal(inner)
             except InvalidOperation:
@@ -499,10 +498,10 @@ def _column_refs(node: Any) -> set[str]:
             if name is not None:
                 found.add(name)
             return
-        if _is(value, ast.Node):
-            for attr in value:
+        if _is(value, ast.AstNode):
+            for attr in value.__match_args__:
                 visit(getattr(value, attr))
-        elif _is(value, tuple):
+        elif _is(value, list) or _is(value, tuple):
             for item in value:
                 visit(item)
 

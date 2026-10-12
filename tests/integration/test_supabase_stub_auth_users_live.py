@@ -18,12 +18,13 @@ import os
 from collections.abc import Generator
 from uuid import uuid4
 
-import psycopg
 import pytest
-from psycopg import conninfo, sql
-from psycopg.rows import dict_row
 
-from sqlproof.client import PsycopgSqlProofClient
+from sqlproof import _database as database
+from sqlproof import _dsn as conninfo
+from sqlproof._database import dict_row
+from sqlproof._dsn import quote_identifier
+from sqlproof.client import PostgresSqlProofClient
 from sqlproof.contrib.supabase import seed_test_users_directly
 from sqlproof.exceptions import SqlProofSchemaError
 
@@ -49,29 +50,29 @@ CREATE TABLE public.profiles (
 def stub_dsn() -> Generator[str]:
     base_dsn = os.environ[DSN_ENV]
     db_name = f"sqlproof_stub_auth_{uuid4().hex[:12]}"
-    with psycopg.connect(base_dsn, autocommit=True) as admin:
-        admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(db_name)))
+    with database.connect(base_dsn, autocommit=True) as admin:
+        admin.execute(f"CREATE DATABASE {quote_identifier(db_name)}")
     try:
         parts = conninfo.conninfo_to_dict(base_dsn)
         parts["dbname"] = db_name
         dsn = conninfo.make_conninfo(**parts)
-        with psycopg.connect(dsn, autocommit=True) as connection:
+        with database.connect(dsn, autocommit=True) as connection:
             connection.execute(STUB_SCHEMA_SQL)
         yield dsn
     finally:
-        with psycopg.connect(base_dsn, autocommit=True) as admin:
+        with database.connect(base_dsn, autocommit=True) as admin:
             admin.execute(
-                sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(db_name))
+                f"DROP DATABASE IF EXISTS {quote_identifier(db_name)} WITH (FORCE)"
             )
 
 
 def test_seed_test_users_directly_works_on_stubbed_auth_users(stub_dsn: str) -> None:
-    with psycopg.connect(
+    with database.connect(
         stub_dsn,
         autocommit=True,
         row_factory=dict_row,  # pyright: ignore[reportArgumentType]
     ) as conn:
-        client = PsycopgSqlProofClient(conn)
+        client = PostgresSqlProofClient(conn)
         first = seed_test_users_directly(client, count=3, email_prefix="stubtest_")
         second = seed_test_users_directly(client, count=3, email_prefix="stubtest_")
         emails = [
@@ -91,13 +92,13 @@ def test_seed_test_users_directly_works_on_stubbed_auth_users(stub_dsn: str) -> 
 
 
 def test_seed_test_users_directly_names_unfillable_not_null_columns(stub_dsn: str) -> None:
-    with psycopg.connect(stub_dsn, row_factory=dict_row) as conn:  # pyright: ignore[reportArgumentType]
+    with database.connect(stub_dsn, row_factory=dict_row) as conn:  # pyright: ignore[reportArgumentType]
         # Transaction rolled back on exit, so the extra column doesn't leak.
         # Backfill existing rows via a default, then drop it so the column
         # is NOT NULL with no default.
         conn.execute("ALTER TABLE auth.users ADD COLUMN tenant text NOT NULL DEFAULT 'x'")
         conn.execute("ALTER TABLE auth.users ALTER COLUMN tenant DROP DEFAULT")
-        client = PsycopgSqlProofClient(conn)
+        client = PostgresSqlProofClient(conn)
         with pytest.raises(SqlProofSchemaError, match="tenant"):
             seed_test_users_directly(client, count=1)
         conn.rollback()

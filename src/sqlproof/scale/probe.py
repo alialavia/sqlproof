@@ -16,10 +16,9 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, LiteralString, cast
+from typing import Any, cast
 
-import psycopg
-
+from sqlproof import _database as database
 from sqlproof.scale._identifiers import validate_function_name
 
 
@@ -133,7 +132,7 @@ def _shape(node: dict[str, Any]) -> str:
 
 
 def probe_function(
-    conn: psycopg.Connection,
+    conn: database.Connection,
     function: str,
     args: Sequence[Any],
     *,
@@ -165,22 +164,13 @@ def probe_function(
     statement = (
         f"EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) SELECT {function}({placeholders})"
     )
-    opened_transaction = (
-        conn.info.transaction_status == psycopg.pq.TransactionStatus.IDLE
-    )
+    opened_transaction = not conn.in_transaction
     with conn.cursor() as cur:
         if opened_transaction:
             cur.execute("BEGIN")
         cur.execute("SAVEPOINT sqlproof_probe")
         try:
-            # `statement` interpolates a runtime function name and
-            # placeholder count, so it isn't a LiteralString; the cast
-            # matches the pattern in scale/load.py and mutation/runner.py.
-            cur.execute(cast(LiteralString, statement), tuple(args) or None)  # type: ignore[redundant-cast]
-            # `conn` is typed as a bare, unparameterized `psycopg.Connection`
-            # (callers use both a plain and a dict_row cursor), so pyright
-            # cannot infer the row's shape; explicit `Any` launders that
-            # instead of leaving it "Unknown" for every use below.
+            cur.execute(statement, tuple(args) or None)
             row: Any = cur.fetchone()
         finally:
             cur.execute("ROLLBACK TO SAVEPOINT sqlproof_probe")
@@ -188,7 +178,7 @@ def probe_function(
             if opened_transaction:
                 cur.execute("ROLLBACK")
     assert row is not None, "EXPLAIN ANALYZE always returns exactly one row"
-    # psycopg returns the JSON already decoded; the row is a 1-tuple (or
+    # PyGreSQL returns the JSON already decoded; the row is a 1-tuple (or
     # a 1-key dict under dict_row) holding the EXPLAIN array. `cast(Any,
     # row)` (rather than casting the branch result) keeps pyright from
     # narrowing the dict branch to `dict[Unknown, Unknown]`.

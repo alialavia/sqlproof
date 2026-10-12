@@ -25,7 +25,7 @@ Ten tables. Source: [examples/inbox/schema/001_initial.sql](https://github.com/a
 ## Run it
 
 ```bash
-pip install sqlproof psycopg
+pip install sqlproof
 supabase start
 export SUPABASE_DB_URL='postgresql://postgres:postgres@127.0.0.1:54322/postgres'
 psql "$SUPABASE_DB_URL" -f examples/inbox/schema/001_initial.sql

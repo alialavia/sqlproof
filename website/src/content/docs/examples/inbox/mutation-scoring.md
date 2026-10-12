@@ -91,7 +91,7 @@ for f in examples/inbox/schema/*.sql; do
 done
 
 export SQLPROOF_TEMPLATE_URL='postgresql://postgres:postgres@127.0.0.1:54399/inbox_proof_template'
-uv run pytest examples/inbox/tests/mutation -m mutation -v   # repo venv — needs psycopg + sqlproof
+uv run pytest examples/inbox/tests/mutation -m mutation -v   # repo venv — needs PyGreSQL + sqlproof
 ```
 
 Three things this sequence handles: the test-init SQL makes a bare

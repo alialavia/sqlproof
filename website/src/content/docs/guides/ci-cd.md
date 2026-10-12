@@ -44,6 +44,7 @@ jobs:
       - uses: alialavia/sqlproof/.github/actions/setup-supabase-test-db@main
         with:
           database-url: ${{ env.SQLPROOF_DATABASE_URL }}
+      - run: sudo apt-get update && sudo apt-get install -y libpq-dev
       - run: pip install sqlproof pytest
       - run: pytest
 ```
@@ -121,6 +122,7 @@ If your tests only use the in-memory client or the pure data generator
 container and the env var:
 
 ```yaml
+- run: sudo apt-get update && sudo apt-get install -y libpq-dev
 - run: pip install sqlproof pytest
 - run: pytest
 ```

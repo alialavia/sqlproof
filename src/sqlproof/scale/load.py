@@ -18,12 +18,11 @@ from __future__ import annotations
 import itertools
 import random
 from collections.abc import Iterable, Mapping, Sequence
-from typing import Any, LiteralString, cast
+from tempfile import SpooledTemporaryFile
+from typing import Any
 
-import psycopg
-from psycopg import sql
-from psycopg.rows import tuple_row
-from psycopg.types.json import Json, Jsonb
+from sqlproof import _database as database
+from sqlproof._database import Json, Jsonb, tuple_row
 
 # Cross-module reuse of core.py's JSON-column adaptation, deliberately,
 # for the same reason bulk.py reaches into rows.py's private helpers
@@ -46,7 +45,7 @@ def _quote(identifier: str) -> str:
 
 
 def copy_table(
-    conn: psycopg.Connection,
+    conn: database.Connection,
     table: Table,
     rows: Iterable[dict[str, Any]],
     column_names: Sequence[str],
@@ -57,13 +56,11 @@ def copy_table(
     carries (see `load_dataset`, which derives it from a real row
     rather than an independent guess). Every value is adapted before
     hitting the wire (see `_column_wrap_kind`/`_adapt_copy_value`
-    below): `COPY`'s text protocol resolves most Python types
-    (Decimal, str, bytes, datetime, a generic `Range`, ...) to the
-    right wire format on its own, but a bare `dict` for a json/jsonb
-    column is ambiguous -- psycopg raises `cannot adapt type 'dict'`
-    unless it's wrapped in `Json`/`Jsonb`, exactly as the
-    parameterized INSERT path (`_adapt_insert_value` in core.py)
-    needs.
+    below): the database adapter supplies PostgreSQL text encoders for Decimal,
+    bytes, datetime, ranges and arrays. Json/Jsonb wrappers distinguish
+    JSON arrays and scalar values from ordinary SQL values, just as
+    the parameterized INSERT path does. SQL NULL stays distinct from
+    the JSON scalar null.
 
     A `GENERATED ALWAYS AS IDENTITY` column carrying an explicit
     value (as its primary key does, once it's `table.primary_key`)
@@ -74,28 +71,24 @@ def copy_table(
     """
     qualified = f"{_quote(table.schema)}.{_quote(table.name)}"
     columns = ", ".join(_quote(name) for name in column_names)
-    # Identifiers are already safely quoted by `_quote` above; the cast
-    # to LiteralString only satisfies pyright strict's `Query` type for
-    # `Cursor.copy`, matching the pattern in mutation/runner.py.
-    copy_sql = sql.SQL(cast(LiteralString, f"COPY {qualified} ({columns}) FROM STDIN"))  # type: ignore[redundant-cast]
-    # Table-invariant: which columns need Json/Jsonb wrapping depends
-    # only on the column's type, never on the row. `_adapt_insert_value`
-    # (core.py) resolves this via `table.column(name)` -- a linear scan
-    # over `table.columns` -- plus a walk up the type's domain/base
-    # chain, per VALUE per ROW. Resolved once per column here, before
-    # the `COPY` loop, instead (same hoist as generators/bulk.py's
-    # per-row FK/unique lookups).
+    copy_sql = f"COPY {qualified} ({columns}) FROM STDIN"
     wrap_kinds = [_column_wrap_kind(table, name) for name in column_names]
     written = 0
-    with conn.cursor() as cur, cur.copy(copy_sql) as copy:
+    # Serialize before COPY starts: a generator/adapter error must not leave
+    # the connection stuck in COPY mode. Spill large datasets to disk while
+    # keeping small ones in memory, then let PyGreSQL stream the file.
+    # Text chunks let PyGreSQL honor the connection's client encoding.
+    with SpooledTemporaryFile(max_size=1024 * 1024, mode="w+t", encoding="utf-8") as stream:
         for row in rows:
-            copy.write_row(
-                tuple(
-                    _adapt_copy_value(row.get(name), kind)
-                    for name, kind in zip(column_names, wrap_kinds, strict=True)
-                )
+            values = (
+                database.copy_text(_adapt_copy_value(row.get(name), kind))
+                for name, kind in zip(column_names, wrap_kinds, strict=True)
             )
+            stream.write("\t".join(values) + "\n")
             written += 1
+        stream.seek(0)
+        with conn.cursor() as cur:
+            cur.execute(copy_sql, stream=stream)
     return written
 
 
@@ -118,8 +111,8 @@ def _adapt_copy_value(value: Any, wrap_kind: str | None) -> object:
     *jsonb scalar* `null`: a real, non-NULL value for which `IS NULL`
     is false. Mirrors `_adapt_insert_value` (core.py) exactly.
     """
-    if value is None:
-        return None
+    if value is None or isinstance(value, Json):
+        return value
     if wrap_kind == "jsonb":
         return Jsonb(value)
     if wrap_kind == "json":
@@ -197,7 +190,7 @@ def missing_required_parents(
 
 
 def load_dataset(
-    conn: psycopg.Connection,
+    conn: database.Connection,
     schema: SchemaInfo,
     sizes: Mapping[str, int],
     *,
@@ -250,7 +243,7 @@ def load_dataset(
     return loaded
 
 
-def truncate(conn: psycopg.Connection, schema: SchemaInfo) -> None:
+def truncate(conn: database.Connection, schema: SchemaInfo) -> None:
     """Empty every modelled table: before each reload at the next factor,
     and once more when a sweep ends, so it leaves no synthetic rows behind.
 
@@ -273,10 +266,10 @@ def truncate(conn: psycopg.Connection, schema: SchemaInfo) -> None:
     )
     if not names:
         return
-    conn.execute(sql.SQL(cast(LiteralString, f"TRUNCATE {names}")))  # type: ignore[redundant-cast]
+    conn.execute(f"TRUNCATE {names}")
 
 
-def analyze(conn: psycopg.Connection, schema: SchemaInfo) -> None:
+def analyze(conn: database.Connection, schema: SchemaInfo) -> None:
     """Refresh planner statistics.
 
     Non-optional after a bulk load: without it the planner has no
@@ -285,10 +278,10 @@ def analyze(conn: psycopg.Connection, schema: SchemaInfo) -> None:
     """
     for table in schema.tables:
         qualified = f"{_quote(table.schema)}.{_quote(table.name)}"
-        conn.execute(sql.SQL(cast(LiteralString, f"ANALYZE {qualified}")))  # type: ignore[redundant-cast]
+        conn.execute(f"ANALYZE {qualified}")
 
 
-def row_counts(conn: psycopg.Connection, schema: SchemaInfo) -> dict[str, int | None]:
+def row_counts(conn: database.Connection, schema: SchemaInfo) -> dict[str, int | None]:
     """Rows currently in each modelled table, keyed by table name -- the
     keys `sizes` uses. `None` means the count could not be verified.
 
@@ -311,9 +304,11 @@ def row_counts(conn: psycopg.Connection, schema: SchemaInfo) -> dict[str, int | 
             try:
                 with conn.transaction():
                     cur.execute("SET LOCAL row_security = off")
-                    cur.execute(sql.SQL(cast(LiteralString, f"SELECT count(*) FROM {qualified}")))  # type: ignore[redundant-cast]
+                    cur.execute(f"SELECT count(*) FROM {qualified}")
                     row = cur.fetchone()
-            except psycopg.errors.InsufficientPrivilege:
+            except database.DatabaseError as exc:
+                if database.sqlstate(exc) != "42501":
+                    raise
                 counts[table.name] = None
                 continue
             counts[table.name] = 0 if row is None else int(row[0])

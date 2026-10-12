@@ -89,8 +89,8 @@ def test_build_mutated_ddl_splices_body_and_uses_or_replace() -> None:
     assert "COALESCE(SUM(amount), 0)" not in ddl
 
 
-def test_build_mutated_ddl_round_trips_through_pglast() -> None:
-    from pglast import parse_sql
+def test_build_mutated_ddl_round_trips_through_postgres_parser() -> None:
+    from sqlproof.schema._postgres import parse_sql
 
     ddl = build_mutated_ddl(SCHEMA_SQL, "total_usage", " SELECT 42 ")
     (raw,) = parse_sql(ddl)

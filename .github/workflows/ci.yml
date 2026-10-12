@@ -36,13 +36,15 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - uses: astral-sh/setup-uv@v7
+      - name: Install PostgreSQL client development tools
+        run: sudo apt-get update && sudo apt-get install -y libpq-dev
       - run: uv sync --extra dev
       - name: Bring Postgres surface into lockstep with managed Supabase
         uses: ./.github/actions/setup-supabase-test-db
         with:
           database-url: ${{ env.SQLPROOF_TEST_DATABASE_URL }}
           verbose: 'true'
-      - run: uv run ruff check src/ tests/
+      - run: uv run ruff check src/ tests/ examples/
       - run: uv run pyright
       - run: uv run mypy src/sqlproof/
       - run: uv run pytest --cov=sqlproof --cov-fail-under=94 --cov-report=xml
@@ -58,6 +60,77 @@ jobs:
           # and add as repo secret CODECOV_TOKEN.
           token: ${{ secrets.CODECOV_TOKEN }}
 
+  native-dependencies:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: astral-sh/setup-uv@v7
+      - name: Install libpq on Linux
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libpq-dev
+      - name: Install libpq on macOS
+        if: runner.os == 'macOS'
+        run: |
+          brew install libpq
+          echo "$(brew --prefix libpq)/bin" >> "$GITHUB_PATH"
+      - name: Enable the runner's PostgreSQL client on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (!(Test-Path "$env:PGBIN/libpq.dll")) {
+            throw "The runner's PostgreSQL client library is missing"
+          }
+          $env:PGBIN | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      # Each runner image ships a PostgreSQL server. Start it so the adapter's
+      # live tests run against the native libpq build on every OS; importing
+      # the extension alone proves little about COPY or type casts.
+      - name: Start the runner's PostgreSQL on Linux
+        if: runner.os == 'Linux'
+        run: |
+          sudo systemctl start postgresql.service
+          sudo -u postgres psql -v ON_ERROR_STOP=1 -c "ALTER USER postgres PASSWORD 'postgres'"
+          echo "SQLPROOF_TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/postgres" >> "$GITHUB_ENV"
+      - name: Start a PostgreSQL server on macOS
+        if: runner.os == 'macOS'
+        run: |
+          # The macOS runner image ships no PostgreSQL server, only Homebrew.
+          # Install one and start it directly with pg_ctl, avoiding
+          # brew services and its launchd plumbing.
+          brew install postgresql@17
+          PG="$(brew --prefix postgresql@17)/bin"
+          "$PG/initdb" -D "$RUNNER_TEMP/pgdata" -U postgres --auth=trust >/dev/null
+          "$PG/pg_ctl" -D "$RUNNER_TEMP/pgdata" -l "$RUNNER_TEMP/postgres.log" \
+            -o "-p 5432 -k $RUNNER_TEMP" -w start
+          "$PG/pg_isready" -h 127.0.0.1 -p 5432
+          echo "SQLPROOF_TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/postgres" >> "$GITHUB_ENV"
+      - name: Start the runner's PostgreSQL on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $service = Get-Service -Name postgresql*
+          Set-Service -InputObject $service -StartupType Manual
+          Start-Service -InputObject $service
+          foreach ($i in 1..30) {
+            & "$env:PGBIN\pg_isready" -h 127.0.0.1
+            if ($LASTEXITCODE -eq 0) { break }
+            Start-Sleep -Seconds 2
+          }
+          # The image documents the preinstalled server's credentials as postgres / root.
+          "SQLPROOF_TEST_DATABASE_URL=postgresql://postgres:root@127.0.0.1:5432/postgres" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - run: uv sync --locked --extra dev
+      # test_database_live.py fails collection, rather than skipping, when the
+      # DSN is missing under CI, so this step cannot pass with the adapter untested.
+      - run: uv run pytest tests/unit tests/meta tests/integration/test_database_live.py
+      - run: uv build
+
   licenses:
     # Fails when a dependency in uv.lock or website/package-lock.json uses a
     # license outside this allowlist (permissive licenses, plus MPL-2.0 and
@@ -71,7 +144,7 @@ jobs:
         with:
           scan-args: |-
             --config=.github/osv-scanner-licenses.toml
-            --licenses=MIT,0BSD,ISC,BSD-2-Clause,BSD-3-Clause,Apache-2.0,PSF-2.0,Python-2.0,BlueOak-1.0.0,CC0-1.0,MPL-2.0,LGPL-3.0-only,LGPL-3.0-or-later
+            --licenses=MIT,0BSD,ISC,BSD-2-Clause,BSD-3-Clause,PostgreSQL,Apache-2.0,PSF-2.0,Python-2.0,BlueOak-1.0.0,CC0-1.0,MPL-2.0,LGPL-3.0-only,LGPL-3.0-or-later
             --lockfile=uv.lock
             --lockfile=website/package-lock.json
 

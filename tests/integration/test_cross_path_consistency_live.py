@@ -10,10 +10,10 @@ from __future__ import annotations
 import os
 from dataclasses import replace
 
-import psycopg
 import pytest
 from hypothesis import HealthCheck, given, settings
 
+from sqlproof import _database as database
 from sqlproof.scale.load import load_dataset
 from sqlproof.schema.model import Column, ForeignKey, PgType, SchemaInfo, Table
 from sqlproof.testing import schemas
@@ -82,7 +82,7 @@ def _ddl_for(schema: SchemaInfo) -> str:
 def test_bulk_path_produces_loadable_data_for_any_generated_schema(schema):
     schema = _retarget_schema(schema, "xpath")
     sizes = {t.name: 40 for t in schema.tables}
-    with psycopg.connect(os.environ[DSN_ENV], autocommit=True) as conn:
+    with database.connect(os.environ[DSN_ENV], autocommit=True) as conn:
         conn.execute("DROP SCHEMA IF EXISTS xpath CASCADE")
         conn.execute("CREATE SCHEMA xpath")
         conn.execute("SET search_path TO xpath")
@@ -180,7 +180,7 @@ def test_composite_primary_key_junction_table_loads_deterministically():
     schema_name = "xpath_composite"
     schema = _composite_pk_junction_schema(schema_name)
     sizes = {"customers": 10, "products": 10, "line_items": 40}
-    with psycopg.connect(os.environ[DSN_ENV], autocommit=True) as conn:
+    with database.connect(os.environ[DSN_ENV], autocommit=True) as conn:
         conn.execute(f'DROP SCHEMA IF EXISTS "{schema_name}" CASCADE')
         conn.execute(f'CREATE SCHEMA "{schema_name}"')
         conn.execute(f'SET search_path TO "{schema_name}"')

@@ -3,11 +3,11 @@ from __future__ import annotations
 import re
 from typing import Any, Literal, cast
 
-from pglast import parse_sql as parse_postgres_sql
-from pglast.enums import ConstrType
-from pglast.stream import RawStream
+from postgast.pg_query_pb2 import ConstrType
 
 from sqlproof.exceptions import SqlProofSchemaError
+from sqlproof.schema._postgres import parse_sql as parse_postgres_sql
+from sqlproof.schema._postgres import render_expression
 from sqlproof.schema.checks import parse_check_expression
 from sqlproof.schema.model import (
     CheckConstraint,
@@ -37,7 +37,7 @@ def parse_schema_sql(sql: str, *, schema: str = "public") -> SchemaInfo:
     for raw_statement in statements:
         statement: Any = raw_statement.stmt
         if type(statement).__name__ == "CreateEnumStmt":
-            enum_schema, enum_name = _qualified_parts(statement.typeName, default_schema=schema)
+            enum_schema, enum_name = _qualified_parts(statement.type_name, default_schema=schema)
             enum = PgType(
                 kind="enum",
                 name=enum_name,
@@ -85,7 +85,7 @@ def parse_schema_sql(sql: str, *, schema: str = "public") -> SchemaInfo:
 def _parse_domain_statement(statement: Any, default_schema: str) -> PgType:
     """Parse a CREATE DOMAIN node.
 
-    The base type comes from ``typeName``; CHECK clauses live in
+    The base type comes from ``type_name``; CHECK clauses live in
     ``constraints`` as ordinary ``CONSTR_CHECK`` nodes that reference
     a placeholder column named ``VALUE`` (Postgres's convention for
     referring to the domain value inside a CHECK).
@@ -93,7 +93,7 @@ def _parse_domain_statement(statement: Any, default_schema: str) -> PgType:
     _domain_schema, domain_name = _qualified_parts(
         statement.domainname, default_schema=default_schema
     )
-    base = _parse_type_node(statement.typeName, type_names={})
+    base = _parse_type_node(statement.type_name, type_names={})
     check_expressions: list[str] = []
     for constraint in statement.constraints or ():
         if constraint.contype == ConstrType.CONSTR_CHECK:
@@ -116,7 +116,7 @@ def _attach_partial_unique_indexes(
             continue
         if not getattr(statement, "unique", False):
             continue
-        if getattr(statement, "whereClause", None) is None:
+        if getattr(statement, "where_clause", None) is None:
             # Unconditional CREATE UNIQUE INDEX — outside scope of this
             # change. Inline UNIQUE in CREATE TABLE remains the canonical
             # spelling for unconditional uniques.
@@ -124,8 +124,8 @@ def _attach_partial_unique_indexes(
         relation = statement.relation
         table_schema = getattr(relation, "schemaname", None) or default_schema
         table_name = relation.relname
-        columns = tuple(_index_param_name(param) for param in statement.indexParams or ())
-        predicate = _render(statement.whereClause)
+        columns = tuple(_index_param_name(param) for param in statement.index_params or ())
+        predicate = _render(statement.where_clause)
         by_qname.setdefault((table_schema, table_name), []).append(
             PartialUniqueConstraint(columns=columns, predicate=predicate)
         )
@@ -156,7 +156,7 @@ def _index_param_name(param: Any) -> str:
     # have name=None and `.expr` set; we don't model those today —
     # render their text so the user sees something stable.
     name = getattr(param, "name", None)
-    if name is not None:
+    if name:
         return str(name)
     expr = getattr(param, "expr", None)
     if expr is not None:
@@ -176,7 +176,7 @@ def _parse_composite_type(statement: Any, type_names: dict[str, PgType]) -> PgTy
     name = str(statement.typevar.relname)
     fields: list[tuple[str, PgType]] = []
     for column_def in statement.coldeflist or ():
-        field_type = _parse_type_node(column_def.typeName, type_names)
+        field_type = _parse_type_node(column_def.type_name, type_names)
         fields.append((str(column_def.colname), field_type))
     return PgType(kind="composite", name=name, composite_fields=tuple(fields))
 
@@ -192,7 +192,7 @@ def _parse_table_statement(statement: Any, type_names: dict[str, PgType], schema
     check_constraints: list[CheckConstraint] = []
     exclusion_constraints: list[ExclusionConstraint] = []
 
-    for element in statement.tableElts or ():
+    for element in statement.table_elts or ():
         if type(element).__name__ == "ColumnDef":
             column = _parse_column(element, type_names)
             columns.append(column)
@@ -240,9 +240,11 @@ def _parse_exclusion(constraint: Any) -> ExclusionConstraint:
     omits ``USING`` for an EXCLUDE clause.
     """
     columns_with_operators: list[tuple[str, str]] = []
-    for index_elem, operator_strings in constraint.exclusions or ():
+    for exclusion in constraint.exclusions or ():
+        index_elem, operators = exclusion.items
+        operator_strings = operators.items
         column_name = getattr(index_elem, "name", None)
-        if column_name is None:
+        if not column_name:
             # Expression-form (`EXCLUDE (lower(name) WITH =)`) — render
             # the expression text so the model still surfaces something
             # stable. The generator won't enforce it.
@@ -260,7 +262,7 @@ def _parse_exclusion(constraint: Any) -> ExclusionConstraint:
 
 def _parse_column(column: Any, type_names: dict[str, PgType]) -> Column:
     constraints = tuple(column.constraints or ())
-    pg_type = _parse_type_node(column.typeName, type_names)
+    pg_type = _parse_type_node(column.type_name, type_names)
     identity = _identity_for_constraints(constraints)
     # `GENERATED ALWAYS AS (expr) STORED` columns appear as a
     # CONSTR_GENERATED constraint on the column. Postgres rejects
@@ -330,7 +332,7 @@ def _parse_foreign_key(constraint: Any, *, columns: tuple[str, ...] | None = Non
         referenced_columns=tuple(_sval(value) for value in constraint.pk_attrs),
         on_delete=_referential_action(constraint.fk_del_action),
         on_update=_referential_action(constraint.fk_upd_action),
-        referenced_schema=getattr(constraint.pktable, "schemaname", None),
+        referenced_schema=constraint.pktable.schemaname or None,
     )
 
 
@@ -394,8 +396,7 @@ def _const_int(node: Any) -> int:
 
 
 def _render(node: Any) -> str:
-    stream = RawStream()  # type: ignore[no-untyped-call]
-    return str(stream(node))
+    return render_expression(node)
 
 
 def _normalize_type_name(name: str) -> str:

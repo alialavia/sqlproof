@@ -352,7 +352,7 @@ def _domain_checks_as_column_checks(column: Column) -> tuple[CheckConstraint, ..
     domain value); the existing CHECK refiner works on expressions
     that name the column directly. We substitute the column name for
     ``VALUE`` so a single domain definition can be applied to many
-    columns. pglast renders ``VALUE`` as lowercase, so we match
+    columns. Parser renderings can vary in case, so we match
     case-insensitively (and word-boundary, to avoid mangling tokens
     that happen to contain "value" as a substring).
     """

@@ -27,13 +27,11 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-import psycopg
 import pytest
 from hypothesis import assume
 from hypothesis import strategies as st
-from psycopg import errors as pg_errors
 
-from sqlproof import ExternalTableSpec, SqlProof, sqlproof
+from sqlproof import ExternalTableSpec, SqlProof, database, sqlproof
 from sqlproof.contrib.supabase import as_rls_user, supabase_test_user_ids
 
 DSN = os.environ.get("SQLPROOF_TEST_DATABASE_URL")
@@ -58,7 +56,7 @@ def _setup_schema_and_users(dsn: str) -> None:
     that reference unrelated schema (e.g. a personal-org trigger from
     another project). Run this example against a clean Supabase database.
     """
-    with psycopg.connect(dsn, autocommit=True) as conn:
+    with database.connect(dsn, autocommit=True) as conn:
         conn.execute("DROP TABLE IF EXISTS posts, org_members, organizations CASCADE")
         conn.execute(SCHEMA)
         for email in SEED_USER_EMAILS:
@@ -69,10 +67,12 @@ def _setup_schema_and_users(dsn: str) -> None:
                     "WHERE NOT EXISTS (SELECT 1 FROM auth.users WHERE email = %s)",
                     [str(uuid4()), email, email],
                 )
-            except pg_errors.ForeignKeyViolation as exc:
+            except database.DatabaseError as exc:
+                if database.sqlstate(exc) != "23503":
+                    raise
                 pytest.skip(
                     f"target database has a trigger on auth.users that "
-                    f"references unrelated schema ({exc.diag.message_primary}). "
+                    f"references unrelated schema ({exc!s}). "
                     f"Run this example against a clean Supabase database, "
                     f"not one shared with another project's triggers.",
                     allow_module_level=True,
@@ -177,17 +177,19 @@ def test_free_plan_post_limit_at_every_boundary(
     inserted = 0
     with as_rls_user(db, member["user_id"]):
         for _ in range(max_posts + 2):  # try to overshoot
-            with db.savepoint():
-                try:
+            try:
+                with db.savepoint():
                     db.execute(
                         "INSERT INTO posts (org_id, author_id, status) "
                         "VALUES (%s, %s, 'draft')",
                         org["id"],
                         member["user_id"],
                     )
-                    inserted += 1
-                except pg_errors.InsufficientPrivilege:
-                    break
+                inserted += 1
+            except database.DatabaseError as exc:
+                if database.sqlstate(exc) != "42501":
+                    raise
+                break
 
     assert inserted == max_posts, (
         f"free plan with max_posts={max_posts}: inserted {inserted}, "
@@ -217,16 +219,19 @@ def test_member_management_requires_owner_or_admin(
         u for u in _sample_seeded_users(db) if u != actor["user_id"]
     )
 
-    with as_rls_user(db, actor["user_id"]), db.savepoint():
+    with as_rls_user(db, actor["user_id"]):
         try:
-            db.execute(
-                "INSERT INTO org_members (org_id, user_id, role) "
-                "VALUES (%s, %s, 'viewer')",
-                org["id"],
-                target_user,
-            )
+            with db.savepoint():
+                db.execute(
+                    "INSERT INTO org_members (org_id, user_id, role) "
+                    "VALUES (%s, %s, 'viewer')",
+                    org["id"],
+                    target_user,
+                )
             inserted = True
-        except pg_errors.InsufficientPrivilege:
+        except database.DatabaseError as exc:
+            if database.sqlstate(exc) != "42501":
+                raise
             inserted = False
 
     expected = actor["role"] in ("owner", "admin")

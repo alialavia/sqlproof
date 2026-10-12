@@ -45,6 +45,8 @@ jobs:
         with:
           python-version: "3.11"
       - uses: astral-sh/setup-uv@v7
+      - name: Install PostgreSQL client development tools
+        run: sudo apt-get update && sudo apt-get install -y libpq-dev
       - run: uv sync --extra dev
       - name: Bring Postgres surface into lockstep with managed Supabase
         uses: ./.github/actions/setup-supabase-test-db

@@ -3,7 +3,7 @@
 Verifies the end-to-end path with the `vector` extension installed:
   (a) `introspect_schema` recovers the dimension from atttypmod.
   (b) The generator emits valid vector literals.
-  (c) Generated rows round-trip through psycopg into Postgres.
+  (c) Generated rows round-trip through database into Postgres.
 
 Skips if:
   - SQLPROOF_TEST_DATABASE_URL is unset, OR
@@ -16,9 +16,9 @@ from __future__ import annotations
 import os
 from uuid import uuid4
 
-import psycopg
 import pytest
 
+from sqlproof import _database as database
 from sqlproof.schema.introspect import introspect_schema
 from sqlproof.schema.parse_sql import parse_schema_sql
 
@@ -41,13 +41,13 @@ def test_vector_column_round_trips_through_postgres() -> None:
     dsn = os.environ["SQLPROOF_TEST_DATABASE_URL"]
     schema_name = f"sqlproof_pgvector_{uuid4().hex}"
 
-    with psycopg.connect(dsn, autocommit=True) as connection:
+    with database.connect(dsn, autocommit=True) as connection:
         # Probe for pgvector availability. CREATE EXTENSION at the
         # database level requires superuser; skip cleanly when missing
         # rather than failing the suite on hosts without pgvector.
         try:
             connection.execute("CREATE EXTENSION IF NOT EXISTS vector")
-        except psycopg.Error as exc:
+        except database.Error as exc:
             pytest.skip(f"pgvector extension not available: {exc}")
 
         connection.execute(f'CREATE SCHEMA "{schema_name}"')
@@ -66,7 +66,7 @@ def test_vector_column_round_trips_through_postgres() -> None:
             assert parsed.column("embedding").type.modifiers == (8,)
 
             # Introspector-side
-            with connection.cursor(row_factory=psycopg.rows.dict_row) as cur:
+            with connection.cursor(row_factory=database.dict_row) as cur:
                 introspected = introspect_schema(cur, schema=schema_name).table(
                     "embeddings", schema=schema_name
                 )

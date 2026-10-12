@@ -5,8 +5,8 @@ from typing import Any, Literal
 
 from hypothesis import strategies as st
 from hypothesis.strategies import SearchStrategy
-from psycopg.types.range import Range
 
+from sqlproof._range import Range
 from sqlproof.exceptions import SqlProofSchemaError
 from sqlproof.generators.typespec import (
     TypeSpec,
@@ -161,7 +161,7 @@ def _strategy_for_spec(spec: TypeSpec) -> SearchStrategy[Any]:
         # composite; strategy_for_spec calls back into itself for
         # each field. Returned value is a dict so users can address
         # fields by name in property tests; matching the wire
-        # format for INSERT is a follow-up that needs psycopg
+        # format for INSERT is a follow-up that needs driver
         # composite-class registration.
         return st.fixed_dictionaries(
             {name: strategy_for_spec(sub) for name, sub in spec.fields}

@@ -8,13 +8,16 @@ change, propose it, and see it shipped.
 sqlproof targets Python 3.11+ and uses [uv](https://github.com/astral-sh/uv)
 for dependency management.
 
+Install the PostgreSQL client development tools first; see
+[the README](README.md#install) for Linux, macOS and Windows instructions.
+
 ```bash
 git clone https://github.com/alialavia/sqlproof.git
 cd sqlproof
 uv sync --extra dev
 ```
 
-That installs the runtime deps (`hypothesis`, `psycopg`, `pglast`, `rich`)
+That installs the runtime deps (`hypothesis`, `PyGreSQL`, `postgast`, `rich`)
 and the dev toolchain (`pytest`, `ruff`, `mypy`, `pyright`, `syrupy`,
 `mutmut`).
 
