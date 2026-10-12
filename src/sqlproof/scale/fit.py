@@ -34,8 +34,8 @@ def fit_exponent(points: Sequence[ProbePoint], baseline: int) -> FitResult:
     The slope IS the complexity exponent: work proportional to n^k plots
     as a straight line of slope k on log-log axes.
 
-    `baseline` is the fixed per-call cost -- catalog lookups and plan
-    caching, ~100-190 blocks regardless of data size. Leaving it in
+    `baseline` is the fixed per-call cost -- the modelled tables' pages a
+    call touches regardless of data size. Leaving it in
     flattens the curve toward zero at small factors and understates the
     exponent; the Phase 1 spike measured 1.69 raw against 1.994
     corrected on an exactly-quadratic function.

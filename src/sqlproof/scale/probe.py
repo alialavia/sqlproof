@@ -27,8 +27,10 @@ class ProbePoint:
     """One scale point, measured from `EXPLAIN (ANALYZE, BUFFERS)` of
     `SELECT function(...)`.
 
-    `work_blocks` and `temp_blocks` are the root node's totals, which
-    include every statement run inside the function. `plan_hash` and
+    `work_blocks` counts the buffers of the relations `probe_function`
+    was given (as `run_sweep` passes its tables), or, without them, the
+    root node's total. Either way it includes every statement run inside
+    the function; so does `temp_blocks`, the root's total. `plan_hash` and
     `peak_memory_kb` describe only the OUTER statement's plan: for a
     function Postgres does not inline -- every plpgsql function, and SQL
     functions with a FROM clause or an aggregate -- that plan is a single
@@ -138,8 +140,21 @@ def probe_function(
     *,
     factor: int,
     total_rows: int,
+    relations: Sequence[tuple[str, str]] | None = None,
 ) -> ProbePoint:
     """Measure one call of `function` under EXPLAIN.
+
+    With `relations` -- ``(schema, table)`` pairs, as `run_sweep` passes
+    the tables it scales -- `work_blocks` counts only buffer accesses to
+    those tables, their indexes and their TOAST storage, read from this
+    backend's per-relation counters for the current transaction. Without
+    it, `work_blocks` is the EXPLAIN root's total, which also counts the
+    system catalogs: when another session changes the catalogs (on a
+    shared server, e.g. background workers starting for a new database),
+    this backend re-reads its catalog caches inside the probe, and the
+    count moves by tens of blocks with nothing about `function` changed.
+    The per-relation counters belong to this backend alone and never
+    include catalog pages, so other sessions cannot move them.
 
     Runs inside a savepoint that is always rolled back: a function with
     side effects must not change the data the next scale point measures
@@ -165,13 +180,21 @@ def probe_function(
         f"EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) SELECT {function}({placeholders})"
     )
     opened_transaction = not conn.in_transaction
+    relation_blocks: int | None = None
     with conn.cursor() as cur:
         if opened_transaction:
             cur.execute("BEGIN")
         cur.execute("SAVEPOINT sqlproof_probe")
         try:
+            oids = _relation_oids(cur, relations) if relations is not None else None
+            # The counters accumulate until the backend flushes them, which
+            # never happens inside a transaction: the difference across the
+            # call, both reads in this one transaction, is exactly its work.
+            before = _blocks_fetched(cur, oids) if oids is not None else 0
             cur.execute(statement, tuple(args) or None)
             row: Any = cur.fetchone()
+            if oids is not None:
+                relation_blocks = _blocks_fetched(cur, oids) - before
         finally:
             cur.execute("ROLLBACK TO SAVEPOINT sqlproof_probe")
             cur.execute("RELEASE SAVEPOINT sqlproof_probe")
@@ -190,10 +213,52 @@ def probe_function(
     return ProbePoint(
         factor=factor,
         total_rows=total_rows,
-        work_blocks=work,
+        work_blocks=work if relation_blocks is None else relation_blocks,
         peak_memory_kb=memory,
         temp_blocks=temp,
         plan_hash=digest,
         exec_ms=ms,
         args=tuple(args),
     )
+
+
+def _relation_oids(cur: Any, relations: Sequence[tuple[str, str]]) -> list[int]:
+    """OIDs of `relations`, their indexes, their TOAST tables and the
+    TOAST tables' indexes. Tables that do not exist are skipped."""
+    names = [f"{schema}.{table}" for schema, table in relations]
+    cur.execute(
+        "WITH tables AS ("
+        "  SELECT c.oid, c.reltoastrelid FROM pg_class c"
+        "  JOIN pg_namespace n ON n.oid = c.relnamespace"
+        "  WHERE n.nspname || '.' || c.relname = ANY(%s::text[])"
+        "), heaps AS ("
+        "  SELECT oid FROM tables"
+        "  UNION SELECT reltoastrelid FROM tables WHERE reltoastrelid <> 0"
+        ") SELECT oid::bigint FROM heaps"
+        "  UNION SELECT indexrelid::bigint FROM pg_index"
+        "  WHERE indrelid IN (SELECT oid FROM heaps)",
+        (names,),
+    )
+    return sorted(int(_first(row)) for row in cur.fetchall())
+
+
+def _blocks_fetched(cur: Any, oids: Sequence[int]) -> int:
+    """Buffer requests (hits plus reads) this backend has made for `oids`
+    and not yet flushed to the cumulative statistics."""
+    if not oids:
+        return 0
+    cur.execute(
+        "SELECT coalesce(sum(pg_stat_get_xact_blocks_fetched(oid)), 0)::bigint"
+        " FROM unnest(%s::bigint[]::oid[]) AS oid",
+        (list(oids),),
+    )
+    return int(_first(cur.fetchone()))
+
+
+def _first(row: Any) -> Any:
+    """A row's first value, whether the connection returns tuples or dicts."""
+    # cast(Any, ...) keeps pyright from narrowing to dict[Unknown, Unknown],
+    # as in probe_function.
+    values: Any = cast(Any, row).values() if isinstance(row, dict) else row
+    return next(iter(values))
+

@@ -116,6 +116,7 @@ function.
 - **O(n log n) versus O(n).** An in-memory sort touches no buffers.
 - **Runaway probes.** `probe_timeout_s` is checked after a probe returns;
   a probe that never returns hangs the sweep.
-- **Raw buffer counts across connections.** Data, plans, arguments and
-  the fitted exponent reproduce; raw `work_blocks` can shift by a fixed
-  offset between connections.
+- **What `work_blocks` counts.** Only buffers of the modelled tables, their
+  indexes and TOAST storage. System catalog reads are excluded, so neither
+  per-connection cache state nor other sessions' activity on a shared server
+  moves the measurement.

@@ -62,10 +62,9 @@ def save_run(
     `regimes`. `seed`, `max_factor`, `min_points` and `probe_timeout_s`
     record how the sweep ran, so it can be run again: the same seed and
     profile reproduce the data, the resolved arguments, the plans and
-    the fitted exponent. Raw `work_blocks` do not reproduce across
-    connections -- they carry a per-connection offset of tens of blocks
-    (most likely per-backend catalog cache state) -- which `baseline`,
-    measured on the same connection as the points, absorbs.
+    the fitted exponent. `work_blocks` counts only the modelled tables'
+    buffers, not the system catalogs, so per-backend catalog cache state
+    and other sessions' catalog changes do not move it.
 
     `argument_policy` holds one entry per argument position, saying how
     that argument was chosen (Ruling AO): `{"kind": "heaviest", "column":
