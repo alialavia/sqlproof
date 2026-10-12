@@ -58,3 +58,11 @@ version = "6.2.3"
 ecosystem = "PyPI"
 license.override = ["PostgreSQL"]
 reason = "The shipped LICENSE.txt grants the PostgreSQL License; metadata uses its older non-SPDX name."
+
+# --- The project itself --------------------------------------------------------
+
+[[PackageOverrides]]
+name = "sqlproof"
+ecosystem = "PyPI"
+license.override = ["MIT"]
+reason = "The project itself (uv.lock lists it). Release PRs bump it to a version not yet on PyPI, which has no license data to look up."
