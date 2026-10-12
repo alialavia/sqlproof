@@ -146,8 +146,8 @@ def test_rendering_fails_clearly_when_postgast_hides_the_protobuf_message() -> N
 # --- Public surface (GROK-08) ----------------------------------------------
 
 
-def test_the_public_database_module_exposes_the_adapter_surface_examples_use() -> None:
-    from sqlproof import database as public
+def test_the_public_postgres_module_exposes_the_adapter_surface_examples_use() -> None:
+    from sqlproof import postgres as public
 
     assert public.connect is database.connect
     assert public.DatabaseError is database.DatabaseError

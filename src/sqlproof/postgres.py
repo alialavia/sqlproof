@@ -3,9 +3,9 @@
 Use this when a test or script needs a raw connection alongside SqlProof,
 for example to apply DDL or seed rows before building a ``SqlProof``::
 
-    from sqlproof import database
+    from sqlproof import postgres
 
-    with database.connect(dsn, autocommit=True) as conn:
+    with postgres.connect(dsn, autocommit=True) as conn:
         conn.execute("CREATE TABLE ...")
 
 Parameters are inlined into the SQL text on the client by PyGreSQL, with

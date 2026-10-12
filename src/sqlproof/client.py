@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import warnings
 from collections.abc import Generator
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import fields, is_dataclass
@@ -171,3 +172,18 @@ def _map_row(row: dict[str, Any], model: type[T]) -> T:
     if missing:
         raise SqlProofMappingError(f"Missing required fields: {', '.join(sorted(missing))}")
     return dict(row)  # type: ignore[return-value]
+
+
+def __getattr__(name: str) -> object:
+    # Deprecated alias kept for one release so code written against 0.11
+    # gets a pointer to the new names instead of a bare ImportError.
+    if name == "PsycopgSqlProofClient":
+        warnings.warn(
+            "PsycopgSqlProofClient was renamed to PostgresSqlProofClient in 0.12 "
+            "and will be removed in 0.13. SqlProof no longer uses psycopg: open "
+            "raw connections with sqlproof.postgres.connect().",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return PostgresSqlProofClient
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
