@@ -201,12 +201,21 @@ bypasses RLS. Queries outside <code dir="auto">as_rls_user</code> run as the con
 <li>The <code dir="auto">auth.users</code> schema can drift across Supabase versions. The helpers
 insert minimal columns (<code dir="auto">id</code>, <code dir="auto">aud</code>, <code dir="auto">role</code>, <code dir="auto">email</code>); if your test data
 needs richer auth metadata, insert directly with raw SQL.</li>
-<li>Connect to hosted Supabase on the <strong>direct</strong> port (5432), not through
-the connection pooler (port 6543, Supavisor). The pooler silently drops
-the <code dir="auto">application_name</code> and <code dir="auto">options</code> (<code dir="auto">search_path</code>) connection
-settings, needs the <code dir="auto">.&#x3C;project-ref></code> suffix on role names, and keeps the
-template database open, so the mutation runner’s
-<code dir="auto">CREATE DATABASE ... TEMPLATE</code> is refused. If only the pooler is
-reachable (IPv6-only direct endpoints are common), expect those
-features to fail even though the schema under test is fine.</li>
+<li>Prefer the <strong>direct</strong> connection to hosted Supabase. If only the
+Supavisor pooler is reachable (IPv6-only direct endpoints are common),
+use its <strong>session</strong> mode (<code dir="auto">&#x3C;region>.pooler.supabase.com:5432</code>, user
+<code dir="auto">postgres.&#x3C;project-ref></code>); transaction mode (port 6543) has not been tested.
+Through the session pooler:
+<ul>
+<li><code dir="auto">options</code> settings such as <code dir="auto">-csearch_path=...</code> are dropped by the
+pooler; SqlProof re-applies them with <code dir="auto">set_config</code> after connecting.</li>
+<li><code dir="auto">application_name</code> is replaced with <code dir="auto">Supavisor</code> on the server.</li>
+<li>Role names need the <code dir="auto">.&#x3C;project-ref></code> suffix (the test suite’s RLS
+fixture keeps it via <code dir="auto">sqlproof._dsn.with_user</code>).</li>
+<li>The pooler keeps idle sessions on every database it has served, so
+the mutation runner’s <code dir="auto">CREATE DATABASE ... TEMPLATE</code> is refused. Pass
+<code dir="auto">release_template_sessions=True</code> to <code dir="auto">run_mutation_tests</code> to terminate
+idle sessions of your role on the template before cloning.</li>
+</ul>
+</li>
 </ul>  </div>  <script type="module">const n='<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><!-- Icon from Lucide by Lucide Contributors - https://github.com/lucide-icons/lucide/blob/main/LICENSE --><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></g></svg>',s='<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><!-- Icon from Lucide by Lucide Contributors - https://github.com/lucide-icons/lucide/blob/main/LICENSE --><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 6L9 17l-5-5"/></svg>';class i extends HTMLElement{constructor(){super()}connectedCallback(){const e=()=>{const o=t==="ready"?n:s;this.innerHTML='<span class="w-full h-full block [&_svg]:w-full [&_svg]:h-full">'+o+"</span>"};let t="ready";e(),this.addEventListener("click",()=>{if(t==="ready"){t="success",e();const o=this.dataset.code||"";navigator.clipboard.writeText(o),setTimeout(()=>{t="ready",e()},1500)}})}}customElements.define("nova-code-copy-button",i);</script> <script type="module" src="/_astro/MarkdownContent.astro_astro_type_script_index_0_lang.BGoLIRP2.js"></script> <footer class="sl-flex astro-3yyafb3n"> <div class="meta sl-flex astro-3yyafb3n">   </div> <div class="flex min-w-full flex-row items-stretch justify-between gap-2 px-1 pt-0 pb-6 print:hidden" dir="ltr"> <a href="/examples/inbox/mutation-scoring/" rel="prev" data-side="left" class="group m-0 flex items-center justify-end gap-2 rounded-xl p-2 font-medium text-(--sl-color-gray-2) no-underline transition hover:text-(--sl-color-white) md:text-lg [[rel='next']]:flex-row [[rel='prev']]:flex-row-reverse"> <span>11. Scoring the suite (mutation)</span> <svg width="1em" height="1em" viewBox="0 0 24 24" class="block min-h-5 min-w-5 transition group-hover:-translate-x-1"><!-- Icon from Lucide by Lucide Contributors - https://github.com/lucide-icons/lucide/blob/main/LICENSE --><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m15 18l-6-6l6-6" /></svg> </a> <div class="flex-1"></div> <a href="/guides/supabase-rls-bug-classes/" rel="next" data-side="right" class="group m-0 flex items-center justify-end gap-2 rounded-xl p-2 font-medium text-(--sl-color-gray-2) no-underline transition hover:text-(--sl-color-white) md:text-lg [[rel='next']]:flex-row [[rel='prev']]:flex-row-reverse"> <span>RLS bug classes (reference)</span> <svg width="1em" height="1em" viewBox="0 0 24 24" class="block min-h-5 min-w-5 transition group-hover:translate-x-1"><!-- Icon from Lucide by Lucide Contributors - https://github.com/lucide-icons/lucide/blob/main/LICENSE --><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m9 18l6-6l-6-6" /></svg> </a> </div>  </footer> </div> </div>  </main> </div> </div> </div> </div> </body></html>
