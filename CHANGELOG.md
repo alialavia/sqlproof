@@ -70,6 +70,29 @@ remains in `0.x`, minor versions may include breaking changes.
   connections, terminates idle sessions of the runner's own role there,
   clones, and reopens it; active or other-role sessions are never touched.
 
+## [0.12.0](https://github.com/alialavia/sqlproof/compare/v0.11.2...v0.12.0) (2026-10-12)
+
+
+### ⚠ BREAKING CHANGES
+
+* replace pglast and psycopg with permissively licensed postgast and PyGreSQL ([#130](https://github.com/alialavia/sqlproof/issues/130))
+
+### Added
+
+* **scale:** scale measurement for SQL functions (Phase 2) ([#110](https://github.com/alialavia/sqlproof/issues/110)) ([d05e444](https://github.com/alialavia/sqlproof/commit/d05e444d66e7c81ec00c261119ff9a7b1e75ca44))
+
+
+### Fixed
+
+* handle Supabase pooler sessions, keep credentials out of runner errors, fix PostgreSQL 17 spill test ([#133](https://github.com/alialavia/sqlproof/issues/133)) ([a7c3eaf](https://github.com/alialavia/sqlproof/commit/a7c3eafd9e1d6ffc56cfd2c3142a237e68f115bd))
+* **scale:** count only the modelled tables' buffers in sweep probes ([#136](https://github.com/alialavia/sqlproof/issues/136)) ([05aed18](https://github.com/alialavia/sqlproof/commit/05aed18a66f56fb5c1f4abe68c37fa72914cc259))
+
+
+### Changed
+
+* rename sqlproof.database to sqlproof.postgres; deprecate PsycopgSqlProofClient ([#132](https://github.com/alialavia/sqlproof/issues/132)) ([8ca8bcb](https://github.com/alialavia/sqlproof/commit/8ca8bcb934ca0a00d9712f9ba2ab67769905bba7))
+* replace pglast and psycopg with permissively licensed postgast and PyGreSQL ([#130](https://github.com/alialavia/sqlproof/issues/130)) ([9b0b762](https://github.com/alialavia/sqlproof/commit/9b0b762f2e404fcf462cf3d3ec5171ea6c1cab6e))
+
 ## [0.11.2](https://github.com/alialavia/sqlproof/compare/v0.11.1...v0.11.2) (2026-10-02)
 
 
