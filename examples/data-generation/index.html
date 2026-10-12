@@ -337,11 +337,11 @@ environment or after a <code dir="auto">db reset</code>:</p>
 <span class="line"></span>
 <span class="line"><span style="--shiki-light:#A0A1A7;--shiki-light-font-style:italic;--shiki-dark:#768390;--shiki-dark-font-style:inherit"># `client_for_dataset` rolls back by default. To commit:</span></span>
 <span class="line"><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">from</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> sqlproof.client </span><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">import</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> PostgresSqlProofClient</span></span>
-<span class="line"><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">from</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> sqlproof </span><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">import</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> database</span></span>
-<span class="line"><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">from</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> sqlproof.database </span><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">import</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> dict_row</span></span>
+<span class="line"><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">from</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> sqlproof </span><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">import</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> postgres</span></span>
+<span class="line"><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">from</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> sqlproof.postgres </span><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">import</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> dict_row</span></span>
 <span class="line"><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">from</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> sqlproof.core </span><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">import</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> _insert_dataset</span></span>
 <span class="line"></span>
-<span class="line"><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">with</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> database.connect(os.environ[</span><span style="--shiki-light:#50A14F;--shiki-dark:#96D0FF">"DATABASE_URL"</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">], </span><span style="--shiki-light:#986801;--shiki-dark:#F69D50">autocommit</span><span style="--shiki-light:#383A42;--shiki-dark:#F47067">=</span><span style="--shiki-light:#986801;--shiki-dark:#6CB6FF">True</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">,</span></span>
+<span class="line"><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">with</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> postgres.connect(os.environ[</span><span style="--shiki-light:#50A14F;--shiki-dark:#96D0FF">"DATABASE_URL"</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">], </span><span style="--shiki-light:#986801;--shiki-dark:#F69D50">autocommit</span><span style="--shiki-light:#383A42;--shiki-dark:#F47067">=</span><span style="--shiki-light:#986801;--shiki-dark:#6CB6FF">True</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">,</span></span>
 <span class="line"><span style="--shiki-light:#986801;--shiki-dark:#F69D50">                     row_factory</span><span style="--shiki-light:#383A42;--shiki-dark:#F47067">=</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">dict_row) </span><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">as</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> conn:</span></span>
 <span class="line"><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">    client </span><span style="--shiki-light:#383A42;--shiki-dark:#F47067">=</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> PostgresSqlProofClient(conn)</span></span>
 <span class="line"><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">    _insert_dataset(client, proof.schema_info, dataset)</span></span>
@@ -363,11 +363,11 @@ dataset = strategy.example()
 
 # &#x60;client_for_dataset&#x60; rolls back by default. To commit:
 from sqlproof.client import PostgresSqlProofClient
-from sqlproof import database
-from sqlproof.database import dict_row
+from sqlproof import postgres
+from sqlproof.postgres import dict_row
 from sqlproof.core import _insert_dataset
 
-with database.connect(os.environ[&#x22;DATABASE_URL&#x22;], autocommit=True,
+with postgres.connect(os.environ[&#x22;DATABASE_URL&#x22;], autocommit=True,
                      row_factory=dict_row) as conn:
     client = PostgresSqlProofClient(conn)
     _insert_dataset(client, proof.schema_info, dataset)
