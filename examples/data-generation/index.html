@@ -336,14 +336,14 @@ environment or after a <code dir="auto">db reset</code>:</p>
 <span class="line"><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">dataset </span><span style="--shiki-light:#383A42;--shiki-dark:#F47067">=</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> strategy.example()</span></span>
 <span class="line"></span>
 <span class="line"><span style="--shiki-light:#A0A1A7;--shiki-light-font-style:italic;--shiki-dark:#768390;--shiki-dark-font-style:inherit"># `client_for_dataset` rolls back by default. To commit:</span></span>
-<span class="line"><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">from</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> sqlproof.client </span><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">import</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> PsycopgSqlProofClient</span></span>
-<span class="line"><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">import</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> psycopg</span></span>
-<span class="line"><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">from</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> psycopg.rows </span><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">import</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> dict_row</span></span>
+<span class="line"><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">from</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> sqlproof.client </span><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">import</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> PostgresSqlProofClient</span></span>
+<span class="line"><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">from</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> sqlproof </span><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">import</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> database</span></span>
+<span class="line"><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">from</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> sqlproof.database </span><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">import</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> dict_row</span></span>
 <span class="line"><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">from</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> sqlproof.core </span><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">import</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> _insert_dataset</span></span>
 <span class="line"></span>
-<span class="line"><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">with</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> psycopg.connect(os.environ[</span><span style="--shiki-light:#50A14F;--shiki-dark:#96D0FF">"DATABASE_URL"</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">], </span><span style="--shiki-light:#986801;--shiki-dark:#F69D50">autocommit</span><span style="--shiki-light:#383A42;--shiki-dark:#F47067">=</span><span style="--shiki-light:#986801;--shiki-dark:#6CB6FF">True</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">,</span></span>
+<span class="line"><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">with</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> database.connect(os.environ[</span><span style="--shiki-light:#50A14F;--shiki-dark:#96D0FF">"DATABASE_URL"</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">], </span><span style="--shiki-light:#986801;--shiki-dark:#F69D50">autocommit</span><span style="--shiki-light:#383A42;--shiki-dark:#F47067">=</span><span style="--shiki-light:#986801;--shiki-dark:#6CB6FF">True</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">,</span></span>
 <span class="line"><span style="--shiki-light:#986801;--shiki-dark:#F69D50">                     row_factory</span><span style="--shiki-light:#383A42;--shiki-dark:#F47067">=</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">dict_row) </span><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">as</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> conn:</span></span>
-<span class="line"><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">    client </span><span style="--shiki-light:#383A42;--shiki-dark:#F47067">=</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> PsycopgSqlProofClient(conn)</span></span>
+<span class="line"><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">    client </span><span style="--shiki-light:#383A42;--shiki-dark:#F47067">=</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> PostgresSqlProofClient(conn)</span></span>
 <span class="line"><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">    _insert_dataset(client, proof.schema_info, dataset)</span></span>
 <span class="line"></span>
 <span class="line"><span style="--shiki-light:#0184BC;--shiki-dark:#6CB6FF">print</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">(</span><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">f</span><span style="--shiki-light:#50A14F;--shiki-dark:#96D0FF">"Seeded </span><span style="--shiki-light:#986801;--shiki-dark:#F47067">{</span><span style="--shiki-light:#0184BC;--shiki-dark:#6CB6FF">sum</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">(</span><span style="--shiki-light:#0184BC;--shiki-dark:#6CB6FF">len</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">(rows) </span><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">for</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> rows </span><span style="--shiki-light:#A626A4;--shiki-dark:#F47067">in</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7"> dataset.values())</span><span style="--shiki-light:#986801;--shiki-dark:#F47067">}</span><span style="--shiki-light:#50A14F;--shiki-dark:#96D0FF"> rows."</span><span style="--shiki-light:#383A42;--shiki-dark:#ADBAC7">)</span></span></code></pre><nova-code-copy-button type="button" data-code="# scripts/seed_dev_db.py
@@ -362,14 +362,14 @@ strategy = proof.dataset_strategy(sizes={
 dataset = strategy.example()
 
 # &#x60;client_for_dataset&#x60; rolls back by default. To commit:
-from sqlproof.client import PsycopgSqlProofClient
-import psycopg
-from psycopg.rows import dict_row
+from sqlproof.client import PostgresSqlProofClient
+from sqlproof import database
+from sqlproof.database import dict_row
 from sqlproof.core import _insert_dataset
 
-with psycopg.connect(os.environ[&#x22;DATABASE_URL&#x22;], autocommit=True,
+with database.connect(os.environ[&#x22;DATABASE_URL&#x22;], autocommit=True,
                      row_factory=dict_row) as conn:
-    client = PsycopgSqlProofClient(conn)
+    client = PostgresSqlProofClient(conn)
     _insert_dataset(client, proof.schema_info, dataset)
 
 print(f&#x22;Seeded {sum(len(rows) for rows in dataset.values())} rows.&#x22;)" title="Copy code" aria-label="Copy code" class="absolute top-2 right-2 m-0 size-6 rounded border border-solid border-(--sl-color-gray-5) bg-gray-100/30 p-1 text-black backdrop-blur-sm transition hover:bg-gray-200/50 active:scale-90 dark:bg-gray-600/30 dark:text-white hover:dark:bg-gray-500/50"></nova-code-copy-button></div>

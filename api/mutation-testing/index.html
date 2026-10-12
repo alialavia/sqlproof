@@ -122,7 +122,7 @@ authoring errors raise before a single database is cloned:</p>
 <li>The target function must exist in the schema SQL, exactly once
 (overloads are not supported yet).</li>
 <li>The pattern must match exactly once in the body.</li>
-<li>The mutated body must parse (<code dir="auto">pglast</code> for <code dir="auto">LANGUAGE sql</code>,
+<li>The mutated body must parse (<code dir="auto">postgast</code> for <code dir="auto">LANGUAGE sql</code>,
 <code dir="auto">plpgsql_check</code>’s parser for PL/pgSQL).</li>
 <li>A mutated body whose AST equals the original’s is rejected as a no-op
 mutant; two mutants producing the same AST are rejected as duplicates.</li>
