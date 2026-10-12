@@ -328,6 +328,25 @@ schema fingerprinting, dependency ordering, FK validity, constraint
 generation, shrinking, parser idempotence, and counterexample replay. This
 keeps the library honest about the same invariants it asks users to write.
 
+## Badge
+
+Using SqlProof in your project? Add the badge to your README:
+
+[![tested with SqlProof](https://sqlproof.com/badges/tested-with.svg)](https://sqlproof.com)
+
+```markdown
+[![tested with SqlProof](https://sqlproof.com/badges/tested-with.svg)](https://sqlproof.com)
+```
+
+For a website or docs footer, use the larger
+[dark](https://sqlproof.com/badges/built-with-dark.svg) or
+[light](https://sqlproof.com/badges/built-with-light.svg) "Built with SqlProof"
+lockup:
+
+```html
+<a href="https://sqlproof.com"><img src="https://sqlproof.com/badges/built-with-dark.svg" alt="Built with SqlProof" height="36"></a>
+```
+
 ## License
 
 MIT. Dependencies include postgast (BSD-2-Clause) and PyGreSQL (PostgreSQL License); see [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
