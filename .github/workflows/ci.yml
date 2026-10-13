@@ -133,8 +133,9 @@ jobs:
 
   licenses:
     # Fails when a dependency in uv.lock or website/package-lock.json uses a
-    # license outside this allowlist (permissive licenses, plus MPL-2.0 and
-    # LGPL-3.0, which are fine to depend on from MIT code). Vulnerabilities
+    # license outside this allowlist (permissive licenses plus MPL-2.0, whose
+    # file-level copyleft only covers changes to the MPL files). No GPL,
+    # LGPL or AGPL. Vulnerabilities
     # are not checked here. Policy and exceptions: THIRD_PARTY_LICENSES.md
     # and .github/osv-scanner-licenses.toml.
     runs-on: ubuntu-latest
@@ -144,7 +145,7 @@ jobs:
         with:
           scan-args: |-
             --config=.github/osv-scanner-licenses.toml
-            --licenses=MIT,0BSD,ISC,BSD-2-Clause,BSD-3-Clause,PostgreSQL,Apache-2.0,PSF-2.0,Python-2.0,BlueOak-1.0.0,CC0-1.0,MPL-2.0,LGPL-3.0-only,LGPL-3.0-or-later
+            --licenses=MIT,0BSD,ISC,BSD-2-Clause,BSD-3-Clause,PostgreSQL,Apache-2.0,PSF-2.0,Python-2.0,BlueOak-1.0.0,CC0-1.0,MPL-2.0
             --lockfile=uv.lock
             --lockfile=website/package-lock.json
 

@@ -59,6 +59,96 @@ ecosystem = "PyPI"
 license.override = ["PostgreSQL"]
 reason = "The shipped LICENSE.txt grants the PostgreSQL License; metadata uses its older non-SPDX name."
 
+# --- Build-time only: sharp's prebuilt libvips (LGPL-3.0-or-later) -----------
+# sharp resizes images while the website builds. These platform packages ship
+# libvips, which is LGPL; nothing from them is in the published site or in the
+# Python package. Not pinned to a version: this holds for any sharp release.
+# Do not add runtime (uv.lock) packages here.
+
+[[PackageOverrides]]
+name = "@img/sharp-libvips-darwin-arm64"
+ecosystem = "npm"
+license.ignore = true
+reason = "Website build tool only (sharp's libvips binaries); never distributed."
+
+[[PackageOverrides]]
+name = "@img/sharp-libvips-darwin-x64"
+ecosystem = "npm"
+license.ignore = true
+reason = "Website build tool only (sharp's libvips binaries); never distributed."
+
+[[PackageOverrides]]
+name = "@img/sharp-libvips-linux-arm"
+ecosystem = "npm"
+license.ignore = true
+reason = "Website build tool only (sharp's libvips binaries); never distributed."
+
+[[PackageOverrides]]
+name = "@img/sharp-libvips-linux-arm64"
+ecosystem = "npm"
+license.ignore = true
+reason = "Website build tool only (sharp's libvips binaries); never distributed."
+
+[[PackageOverrides]]
+name = "@img/sharp-libvips-linux-ppc64"
+ecosystem = "npm"
+license.ignore = true
+reason = "Website build tool only (sharp's libvips binaries); never distributed."
+
+[[PackageOverrides]]
+name = "@img/sharp-libvips-linux-riscv64"
+ecosystem = "npm"
+license.ignore = true
+reason = "Website build tool only (sharp's libvips binaries); never distributed."
+
+[[PackageOverrides]]
+name = "@img/sharp-libvips-linux-s390x"
+ecosystem = "npm"
+license.ignore = true
+reason = "Website build tool only (sharp's libvips binaries); never distributed."
+
+[[PackageOverrides]]
+name = "@img/sharp-libvips-linux-x64"
+ecosystem = "npm"
+license.ignore = true
+reason = "Website build tool only (sharp's libvips binaries); never distributed."
+
+[[PackageOverrides]]
+name = "@img/sharp-libvips-linuxmusl-arm64"
+ecosystem = "npm"
+license.ignore = true
+reason = "Website build tool only (sharp's libvips binaries); never distributed."
+
+[[PackageOverrides]]
+name = "@img/sharp-libvips-linuxmusl-x64"
+ecosystem = "npm"
+license.ignore = true
+reason = "Website build tool only (sharp's libvips binaries); never distributed."
+
+[[PackageOverrides]]
+name = "@img/sharp-wasm32"
+ecosystem = "npm"
+license.ignore = true
+reason = "Website build tool only (sharp's libvips binaries); never distributed."
+
+[[PackageOverrides]]
+name = "@img/sharp-win32-arm64"
+ecosystem = "npm"
+license.ignore = true
+reason = "Website build tool only (sharp's libvips binaries); never distributed."
+
+[[PackageOverrides]]
+name = "@img/sharp-win32-ia32"
+ecosystem = "npm"
+license.ignore = true
+reason = "Website build tool only (sharp's libvips binaries); never distributed."
+
+[[PackageOverrides]]
+name = "@img/sharp-win32-x64"
+ecosystem = "npm"
+license.ignore = true
+reason = "Website build tool only (sharp's libvips binaries); never distributed."
+
 # --- The project itself --------------------------------------------------------
 
 [[PackageOverrides]]
