@@ -42,6 +42,9 @@ def _resolve_seed(seed: int | None) -> int:
 # SQLSTATE 55006: "source database ... is being accessed by other users".
 _OBJECT_IN_USE = "55006"
 
+# Postgres truncates identifiers longer than NAMEDATALEN - 1 bytes.
+_MAX_IDENTIFIER_BYTES = 63
+
 
 class LocalMutationRunner:
     """Clone-per-mutant local execution.
@@ -55,10 +58,13 @@ class LocalMutationRunner:
     to have no other connections. Close dev sessions against it first.
     Clone creation is serialized behind a lock for the same reason.
 
-    Interrupted runs may leave ``sqlproof_mutant_*`` databases behind.
-    Rerunning the same mutation set self-heals (each run drops-then-recreates
-    by id); edited mutants receive new ids, so orphans from those must be
-    dropped manually (e.g. ``DROP DATABASE IF EXISTS sqlproof_mutant_<id>``).
+    Clone names carry the run's `run_id` (``sqlproof_baseline_<run>``,
+    ``sqlproof_mutant_<mutant_id>_<run>``), so concurrent runs against one
+    cluster never touch each other's clones. Interrupted runs may leave
+    clones behind that no later run drops; find them with
+    ``SELECT datname FROM pg_database WHERE datname ~ '^sqlproof_(baseline|mutant)_'``
+    and drop them manually (``DROP DATABASE IF EXISTS <name> WITH (FORCE)``)
+    once no run is in flight.
 
     The pytest child process inherits the parent environment, so any
     ``PYTEST_ADDOPTS`` set in CI will affect mutant suites — review that
@@ -76,6 +82,7 @@ class LocalMutationRunner:
         max_workers: int = 1,
         timeout_s: float | None = 600.0,
         release_template_sessions: bool = False,
+        run_id: str | None = None,
     ) -> None:
         self.database_url = database_url
         self.pytest_args = list(pytest_args)
@@ -85,6 +92,7 @@ class LocalMutationRunner:
         self.max_workers = max(1, max_workers)
         self.timeout_s = timeout_s
         self.release_template_sessions = release_template_sessions
+        self.run_id = run_id if run_id is not None else new_run_id()
         self._clone_lock = threading.Lock()
 
     # -- orchestration ------------------------------------------------
@@ -106,7 +114,7 @@ class LocalMutationRunner:
         a meaningless false 100%. No mutated DDL is applied — the clone is an
         exact copy of the template.
         """
-        clone_name = "sqlproof_baseline"
+        clone_name = self._clone_name("sqlproof_baseline")
         clone_dsn = self._create_clone(clone_name)
         try:
             return self._run_pytest(clone_dsn)
@@ -114,7 +122,7 @@ class LocalMutationRunner:
             self._drop_clone(clone_name)
 
     def _run_one(self, prepared: PreparedMutant) -> MutantOutcome:
-        clone_name = f"sqlproof_mutant_{prepared.mutant_id}"
+        clone_name = self._clone_name(f"sqlproof_mutant_{prepared.mutant_id}")
         start = time.monotonic()
         try:
             clone_dsn = self._create_clone(clone_name)
@@ -274,6 +282,13 @@ class LocalMutationRunner:
 
     # -- helpers --------------------------------------------------------
 
+    def _clone_name(self, stem: str) -> str:
+        # The run-id suffix keeps concurrent runs on one cluster apart; trim
+        # the stem, never the suffix, to stay within the identifier limit.
+        suffix = f"_{self.run_id}".encode()
+        room = _MAX_IDENTIFIER_BYTES - len(suffix)
+        return stem.encode()[:room].decode(errors="ignore") + suffix.decode()
+
     def _pytest_command(self) -> list[str]:
         command = [sys.executable, "-m", "pytest", *self.pytest_args]
         if self.hypothesis_seed is not None:
@@ -326,6 +341,11 @@ def run_mutation_tests(
     connections), so the actual concurrency is in the pytest subprocesses
     themselves. Default is ``1`` (sequential).
 
+    Concurrent runs against the same cluster (parallel CI jobs, several
+    developers on one server) are safe: every clone name carries this
+    run's id, so no run drops another's clones. Each run still needs the
+    template free of other sessions while it clones.
+
     `hypothesis_seed` pins the Hypothesis seed for every mutant run,
     making failures reproducible. If ``None`` (the default), a fresh
     random seed is generated via :func:`secrets.randbelow` so every
@@ -377,6 +397,7 @@ def run_mutation_tests(
     schema_sql = Path(schema_file).read_text(encoding="utf-8")
     prepared = prepare_mutants(mutations, schema_sql)
     hypothesis_seed = _resolve_seed(hypothesis_seed)
+    run_id = new_run_id()
     runner = LocalMutationRunner(
         database_url=database_url,
         pytest_args=pytest_args,
@@ -386,6 +407,7 @@ def run_mutation_tests(
         max_workers=max_workers,
         timeout_s=timeout_s,
         release_template_sessions=release_template_sessions,
+        run_id=run_id,
     )
     if verify_baseline:
         baseline_exit, baseline_output = runner.run_baseline()
@@ -412,7 +434,7 @@ def run_mutation_tests(
             except Exception:
                 fingerprint = None
             artifact = RunArtifact(
-                run_id=new_run_id(),
+                run_id=run_id,
                 started_at=started.strftime("%Y-%m-%dT%H:%M:%SZ"),
                 duration_s=run_duration_s,
                 sqlproof_version=__version__,

@@ -45,7 +45,7 @@ class FakeRunner(LocalMutationRunner):
     def _run_pytest(self, clone_dsn: str) -> tuple[int, str]:
         self.calls.append(("pytest", clone_dsn))
         clone_name = clone_dsn.rsplit("/", 1)[1]
-        mutant_id = clone_name.removeprefix("sqlproof_mutant_")
+        mutant_id = clone_name.removeprefix("sqlproof_mutant_").removesuffix(f"_{self.run_id}")
         return self.exit_codes[mutant_id], "output tail"
 
     def _drop_clone(self, clone_name: str) -> None:
@@ -74,7 +74,7 @@ def test_clone_is_dropped_even_when_pytest_raises() -> None:
     result = runner.run([_prepared("m1")])
     assert result.outcomes[0].status == "error"
     assert "pytest binary vanished" in (result.outcomes[0].detail or "")
-    assert ("drop", "sqlproof_mutant_m1") in runner.calls
+    assert ("drop", f"sqlproof_mutant_m1_{runner.run_id}") in runner.calls
 
 
 def test_runner_runs_clone_apply_pytest_drop_in_order() -> None:
@@ -118,7 +118,7 @@ def test_timeout_expired_yields_error_outcome_and_drops_clone() -> None:
     outcome = result.outcomes[0]
     assert outcome.status == "error"
     assert "TimeoutExpired" in (outcome.detail or "")
-    assert ("drop", "sqlproof_mutant_m1") in runner.calls
+    assert ("drop", f"sqlproof_mutant_m1_{runner.run_id}") in runner.calls
 
 
 # ---------------------------------------------------------------------------
@@ -489,8 +489,39 @@ def test_run_baseline_clones_runs_unmutated_and_drops() -> None:
     assert runner.run_baseline() == (0, "baseline ok")
     # clone -> pytest -> drop, with no "apply" (the baseline is unmutated)
     assert [kind for kind, _ in runner.calls] == ["create", "pytest", "drop"]
-    assert ("create", "sqlproof_baseline") in runner.calls
-    assert ("drop", "sqlproof_baseline") in runner.calls
+    assert ("create", f"sqlproof_baseline_{runner.run_id}") in runner.calls
+    assert ("drop", f"sqlproof_baseline_{runner.run_id}") in runner.calls
+
+
+def test_concurrent_runs_never_share_a_clone_name() -> None:
+    # Two runs against one cluster must never compute the same clone name,
+    # or one force-drops the other's in-flight clone.
+    exit_codes = {"m1": 1, "sqlproof_baseline": 0}
+    first, second = FakeRunner(exit_codes), FakeRunner(exit_codes)
+    for runner in (first, second):
+        runner.run([_prepared("m1")])
+        runner.run_baseline()
+    first_names = {name for kind, name in first.calls if kind == "create"}
+    second_names = {name for kind, name in second.calls if kind == "create"}
+    assert len(first_names) == 2
+    assert first_names.isdisjoint(second_names)
+
+
+def test_clone_names_are_stable_within_a_run() -> None:
+    runner = FakeRunner({}, run_id="abc123")
+    assert runner._clone_name("sqlproof_baseline") == "sqlproof_baseline_abc123"
+    assert runner._clone_name("sqlproof_mutant_m1") == runner._clone_name("sqlproof_mutant_m1")
+
+
+def test_clone_names_fit_the_postgres_identifier_limit() -> None:
+    runner = FakeRunner({})
+    real_id = "0123456789abcdef"  # prepare_mutants ids are 16 hex chars
+    real_name = runner._clone_name(f"sqlproof_mutant_{real_id}")
+    assert real_name == f"sqlproof_mutant_{real_id}_{runner.run_id}"
+    for stem in ("sqlproof_baseline", f"sqlproof_mutant_{real_id}", "sqlproof_mutant_" + "é" * 40):
+        name = runner._clone_name(stem)
+        assert len(name.encode()) <= 63
+        assert name.endswith(f"_{runner.run_id}")
 
 
 def _schema_with_f(tmp_path) -> object:  # type: ignore[no-untyped-def]
