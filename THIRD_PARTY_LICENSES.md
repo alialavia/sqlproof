@@ -1,8 +1,9 @@
 # Third-party licenses
 
-SqlProof itself is MIT licensed. It does not vendor or bundle any
-third-party code: dependencies are declared in `pyproject.toml` and
-installed separately by pip or uv, each under its own license.
+SqlProof itself is MIT licensed (see [LICENSE](LICENSE)). It does not
+vendor or bundle any third-party code: dependencies are declared in
+`pyproject.toml` and installed separately by pip or uv, each under its own
+license.
 
 This file lists the runtime dependencies that are **not** MIT licensed
 and what that means for you. Everything else in `uv.lock` and
@@ -24,24 +25,22 @@ ISC, PSF and similar).
 Optional extras (`testcontainers`, `pydantic`, `mcp`) pull in further
 dependencies under permissive licenses, plus `certifi` (MPL-2.0, unmodified).
 
-## Native system dependencies
+## System libraries
 
-The Python dependencies and postgast's bundled parser components contain no
-GPL or LGPL code. The separately installed PostgreSQL client stack depends on
-the operating system and distribution; the lockfile license job does not
-audit it.
+PyGreSQL connects to PostgreSQL through libpq, the PostgreSQL C client
+library, which you install separately (from your OS package manager,
+Homebrew, or a PostgreSQL installer). SqlProof's packages do not bundle it.
 
-For example, the Debian Linux `libpq` used in the installation smoke test
-links LGPL system libraries: glibc and, through Kerberos, `libkeyutils`.
-[Keyutils's library is LGPL licensed](https://sources.debian.org/src/keyutils/1.6.3-2/README/).
-Homebrew's `libpq` formula also installs GPL readline for its command-line
-tools; the macOS PyGreSQL extension and `libpq` inspected here do not link
-readline. SqlProof's wheel bundles none of these system libraries.
+libpq itself uses the PostgreSQL License, but the libraries it links depend
+on how your distribution built it. Debian's `libpq`, for example, links LGPL
+system libraries: glibc and, through Kerberos,
+[`libkeyutils`](https://sources.debian.org/src/keyutils/1.6.3-2/README/).
+Homebrew's `libpq` formula also installs GNU readline (GPL), which is used
+only by command-line tools such as `psql`, not by the client library.
 
-Removing pglast and psycopg removes the GPL/LGPL Python packages from the
-runtime dependency graph. It does not establish that every native component
-on a deployment host is free of GPL/LGPL. Audit the chosen client-library
-distribution separately if that is required by your policy.
+The license check described below covers Python and npm packages only, not
+system libraries. If your policy also covers those, check the libpq build
+you install.
 
 ## Development and website dependencies
 
