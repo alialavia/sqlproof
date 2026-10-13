@@ -182,6 +182,10 @@ tuples, and `result.to_dict()` serializes the full report.
 - No function overloads, no `BEGIN ATOMIC` bodies.
 - The runner needs `CREATEDB` rights, and the template database must
   have zero connections while clones are created.
-- Interrupted runs can leave `sqlproof_mutant_*` databases behind.
-  Rerunning the same set self-heals; orphans from *edited* mutants need
-  a manual `DROP DATABASE IF EXISTS sqlproof_mutant_<id>`.
+- Clone names carry a per-run id (`sqlproof_baseline_<run>`,
+  `sqlproof_mutant_<id>_<run>`), so concurrent runs against one cluster
+  (parallel CI jobs, a shared dev server) don't drop each other's clones.
+- Interrupted runs can leave clone databases behind, and no later run
+  reuses their names. List them with
+  `SELECT datname FROM pg_database WHERE datname ~ '^sqlproof_(baseline|mutant)_'`
+  and `DROP DATABASE ... WITH (FORCE)` them once no run is in flight.

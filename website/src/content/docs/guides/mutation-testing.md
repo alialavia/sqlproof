@@ -34,7 +34,8 @@ clone ──► CREATE OR REPLACE FUNCTION (mutated body) ──► pytest ─�
 Each mutant gets a fresh clone, one pytest run, and a drop. The template
 is never modified, so there is no "restore the function if pytest
 crashes" problem — the worst case is an orphaned `sqlproof_mutant_*`
-database that the next run cleans up.
+database you drop by hand. Clone names include a per-run id, so
+concurrent runs against the same server don't collide.
 
 Two consequences worth internalizing:
 
@@ -375,4 +376,4 @@ the report, and an empty directory still produces a valid "no runs" page.
 | `permission denied for table …` in RLS tests | The template is missing table `GRANT`s — you dumped the schema with `pg_dump --no-privileges`. Re-dump with `--no-owner` only (keep privileges). |
 | Mutant `error` with exit 4/5 | The subprocess pytest got bad args or collected no tests — check `pytest_args` paths relative to the working directory. |
 | Odd pytest behavior only inside mutation runs | The subprocess inherits `PYTEST_ADDOPTS` from CI. Note that `-m 'not mutation'` in `addopts` is fine — it deselects the meta-test, not your property tests. |
-| Leftover `sqlproof_mutant_*` databases | An interrupted run. Rerunning the same set self-heals; otherwise drop them manually. |
+| Leftover `sqlproof_mutant_*` / `sqlproof_baseline_*` databases | An interrupted run. Each run uses fresh clone names, so drop them manually once no run is in flight. |
