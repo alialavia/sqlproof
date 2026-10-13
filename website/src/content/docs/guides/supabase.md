@@ -28,15 +28,25 @@ user_ids = seed_test_users_directly(db, count=5)
 # Idempotent: re-running won't duplicate.
 ```
 
-### Admin API (preferred in CI when service-role key is available)
+### Admin API (managed projects without SQL access to `auth.users`)
 
-When you have `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` set:
+When you have `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` set. This path
+needs the `supabase` extra, which provides `httpx`:
+
+```bash
+pip install "sqlproof[supabase]"
+```
 
 ```python
 from sqlproof.contrib.supabase import seed_supabase_test_users
 
 seed_supabase_test_users(db=object(), count=5)  # `db` arg unused for admin API
 ```
+
+The service-role key has full admin access to the project, so prefer
+`seed_test_users_directly` in CI when the connection can write `auth.users`.
+The default `password` is a well-known value: use it only against local or
+ephemeral projects, and pass `password=` for anything else.
 
 Both helpers use the same email pattern, so a test that samples from
 `auth.users WHERE email LIKE 'sqlproof_%@test.invalid'` works regardless of
