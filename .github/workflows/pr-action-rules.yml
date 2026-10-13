@@ -31,6 +31,7 @@ jobs:
         if: steps.changes.outputs.actions == 'true'
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
         run: |
           set -euo pipefail
           echo "PR touches .github/actions/** — checking commit type."
@@ -44,7 +45,7 @@ jobs:
             exit 0
           fi
 
-          if [[ "${{ github.event.pull_request.body }}" == *"BREAKING CHANGE:"* ]]; then
+          if [[ "$PR_BODY" == *"BREAKING CHANGE:"* ]]; then
             echo "OK — PR body carries BREAKING CHANGE footer."
             exit 0
           fi
