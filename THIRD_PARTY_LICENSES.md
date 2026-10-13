@@ -49,9 +49,10 @@ These are not installed with SqlProof and are never distributed to users.
 The only copyleft ones are:
 
 - `pathspec` (MPL-2.0), via mypy.
-- `@img/sharp-libvips-*` (LGPL-3.0-or-later), the image library sharp uses
-  while building the website. It runs at build time only; nothing from it
-  ships in the published site.
+- `@img/sharp-libvips-*`, `@img/sharp-wasm32` and `@img/sharp-win32-*`
+  (LGPL-3.0-or-later), the libvips binaries sharp uses to resize images
+  while building the website. They run at build time only; nothing from
+  them ships in the published site.
 
 ## How this is enforced
 
@@ -59,7 +60,7 @@ The `licenses` job in `.github/workflows/ci.yml` runs
 [OSV-Scanner](https://github.com/google/osv-scanner) over `uv.lock` and
 `website/package-lock.json` on every pull request. It fails when a
 dependency uses a license outside the allowlist: permissive licenses plus
-MPL-2.0 and LGPL-3.0. GPL and AGPL are not allowed.
+MPL-2.0. GPL, LGPL and AGPL are not allowed.
 
 Exceptions and corrections live in `.github/osv-scanner-licenses.toml`:
 
@@ -69,6 +70,11 @@ Exceptions and corrections live in `.github/osv-scanner-licenses.toml`:
   upgrade fails the check until the new version is re-checked.
 - **PyGreSQL** uses the older license name in its metadata; its shipped
   LICENSE.txt grants the PostgreSQL License. This correction is also pinned.
+- **sharp's libvips packages** (website only) are LGPL and are exempted by
+  name, because they are build tools that are never distributed. Runtime
+  dependencies in `uv.lock` get no such exemption.
+- **sqlproof** itself is set to MIT, because release PRs list a version
+  that is not on PyPI yet.
 
 To check locally, install [osv-scanner](https://google.github.io/osv-scanner/installation/)
 and run the same arguments as the CI job:
@@ -76,7 +82,7 @@ and run the same arguments as the CI job:
 ```bash
 osv-scanner scan source \
   --config=.github/osv-scanner-licenses.toml \
-  --licenses=MIT,0BSD,ISC,BSD-2-Clause,BSD-3-Clause,PostgreSQL,Apache-2.0,PSF-2.0,Python-2.0,BlueOak-1.0.0,CC0-1.0,MPL-2.0,LGPL-3.0-only,LGPL-3.0-or-later \
+  --licenses=MIT,0BSD,ISC,BSD-2-Clause,BSD-3-Clause,PostgreSQL,Apache-2.0,PSF-2.0,Python-2.0,BlueOak-1.0.0,CC0-1.0,MPL-2.0 \
   --lockfile=uv.lock --lockfile=website/package-lock.json
 ```
 
