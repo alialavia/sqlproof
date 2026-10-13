@@ -1597,12 +1597,16 @@ mcp = [
 pydantic = [
     { name = "pydantic" },
 ]
+supabase = [
+    { name = "httpx" },
+]
 testcontainers = [
     { name = "testcontainers" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "httpx", marker = "extra == 'supabase'", specifier = ">=0.27" },
     { name = "hypothesis", specifier = ">=6.100" },
     { name = "mcp", marker = "extra == 'dev'", specifier = ">=1.28.1,<2" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.28.1,<2" },
@@ -1623,7 +1627,7 @@ requires-dist = [
     { name = "types-protobuf", marker = "extra == 'dev'" },
     { name = "uv", marker = "extra == 'dev'" },
 ]
-provides-extras = ["testcontainers", "pydantic", "mcp", "dev"]
+provides-extras = ["testcontainers", "pydantic", "mcp", "supabase", "dev"]
 
 [[package]]
 name = "sse-starlette"

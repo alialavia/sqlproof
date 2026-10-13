@@ -54,6 +54,7 @@ Changelog = "https://github.com/alialavia/sqlproof/blob/main/CHANGELOG.md"
 testcontainers = ["testcontainers[postgres]>=4.0"]
 pydantic = ["pydantic>=2.0"]
 mcp = ["mcp>=1.28.1,<2"]
+supabase = ["httpx>=0.27"]
 dev = [
   "pytest>=8.0",
   "pytest-cov",
