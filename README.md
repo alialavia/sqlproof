@@ -338,13 +338,17 @@ Using SqlProof in your project? Add the badge to your README:
 [![tested with SqlProof](https://sqlproof.com/badges/tested-with.svg)](https://sqlproof.com)
 ```
 
-For a website or docs footer, use the larger
-[dark](https://sqlproof.com/badges/built-with-dark.svg) or
-[light](https://sqlproof.com/badges/built-with-light.svg) "Built with SqlProof"
-lockup:
+For a website or docs footer, use the larger "Built with SqlProof" badge, in
+dark or light:
+
+<a href="https://sqlproof.com"><img src="https://sqlproof.com/badges/built-with-dark.svg" alt="Built with SqlProof (dark)" height="36"></a>
+<a href="https://sqlproof.com"><img src="https://sqlproof.com/badges/built-with-light.svg" alt="Built with SqlProof (light)" height="36"></a>
 
 ```html
+<!-- dark -->
 <a href="https://sqlproof.com"><img src="https://sqlproof.com/badges/built-with-dark.svg" alt="Built with SqlProof" height="36"></a>
+<!-- light -->
+<a href="https://sqlproof.com"><img src="https://sqlproof.com/badges/built-with-light.svg" alt="Built with SqlProof" height="36"></a>
 ```
 
 ## License
