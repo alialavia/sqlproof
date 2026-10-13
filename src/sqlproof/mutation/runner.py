@@ -187,41 +187,55 @@ class LocalMutationRunner:
         *idle* sessions of its own role there, clones, and always reopens
         the template. Otherwise, or when any blocking session is active or
         belongs to another role, it raises an error naming the sessions.
+
+        Background workers are not client sessions and are never terminated.
+        Some visit every database briefly (e.g. TimescaleDB's per-database
+        scheduler on Supabase images), so they are left to ``CREATE
+        DATABASE``'s own wait for other sessions to exit; one still there
+        after it is named in the error like any other session.
         """
         quoted = quote_identifier(template)
         sessions = self._template_sessions(connection, template)
-        releasable = [pid for pid, _app, state, own in sessions if own and state == "idle"]
-        if not (self.release_template_sessions and len(releasable) == len(sessions)):
+        clients = [session for session in sessions if session[4]]
+        releasable = [pid for pid, _app, state, own, _client in clients if own and state == "idle"]
+        if not (self.release_template_sessions and len(releasable) == len(clients)):
             raise self._template_busy_error(template, sessions) from error
         connection.execute(f"ALTER DATABASE {quoted} ALLOW_CONNECTIONS false")
         try:
             for pid in releasable:
                 connection.execute("SELECT pg_terminate_backend(%s, 5000)", (pid,))
-            remaining = self._template_sessions(connection, template)
+            remaining = [s for s in self._template_sessions(connection, template) if s[4]]
             if remaining:
                 raise self._template_busy_error(template, remaining) from error
-            connection.execute(create)
+            try:
+                connection.execute(create)
+            except database.DatabaseError as exc:
+                if database.sqlstate(exc) != _OBJECT_IN_USE:
+                    raise
+                still = self._template_sessions(connection, template)
+                raise self._template_busy_error(template, still) from exc
         finally:
             connection.execute(f"ALTER DATABASE {quoted} ALLOW_CONNECTIONS true")
 
     @staticmethod
     def _template_sessions(
         connection: database.Connection, template: str
-    ) -> list[tuple[int, str, str, bool]]:
+    ) -> list[tuple[int, str, str, bool, bool]]:
+        # (pid, application_name, state, same role as us, client session)
         return [
             tuple(row)
             for row in connection.execute(
                 "SELECT pid, coalesce(application_name, ''), coalesce(state, ''), "
-                "usename = session_user "
+                "usename = session_user, backend_type = 'client backend' "
                 "FROM pg_stat_activity WHERE datname = %s AND pid <> pg_backend_pid()",
                 (template,),
             ).fetchall()
         ]
 
     def _template_busy_error(
-        self, template: str, sessions: Sequence[tuple[int, str, str, bool]]
+        self, template: str, sessions: Sequence[tuple[int, str, str, bool, bool]]
     ) -> SqlProofMutationError:
-        apps = sorted({app or "<unnamed>" for _pid, app, _state, _own in sessions})
+        apps = sorted({app or "<unnamed>" for _pid, app, _state, _own, _client in sessions})
         hint = (
             "they are not all idle sessions of this role, so they were left alone"
             if self.release_template_sessions

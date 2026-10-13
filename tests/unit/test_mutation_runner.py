@@ -4,6 +4,7 @@ import subprocess
 
 import pytest
 
+from sqlproof import _database as database
 from sqlproof.exceptions import SqlProofMutationError
 from sqlproof.mutation.apply import PreparedMutant
 from sqlproof.mutation.artifact import RunArtifact
@@ -584,3 +585,74 @@ def test_run_mutation_tests_proceeds_on_green_baseline(tmp_path, monkeypatch) ->
         pytest_args=["tests/"],
     )
     assert result.outcomes[0].status == "killed"
+
+
+class _Rows:
+    def __init__(self, rows: list[tuple[object, ...]]) -> None:
+        self._rows = rows
+
+    def fetchall(self) -> list[tuple[object, ...]]:
+        return self._rows
+
+
+class _TemplateConnection:
+    """Answers the session listing with queued snapshots; CREATE DATABASE
+    raises `create_error` if set."""
+
+    def __init__(
+        self, snapshots: list[list[tuple[object, ...]]], create_error: Exception | None = None
+    ) -> None:
+        self.snapshots = snapshots
+        self.create_error = create_error
+        self.statements: list[str] = []
+
+    def execute(self, sql: str, params: object = None) -> _Rows:
+        self.statements.append(sql)
+        if "pg_stat_activity" in sql:
+            return _Rows(self.snapshots.pop(0))
+        if sql.startswith("CREATE DATABASE") and self.create_error is not None:
+            raise self.create_error
+        return _Rows([])
+
+
+_POOLER = (101, "fake-pooler", "idle", True, True)
+_SCHEDULER = (102, "TimescaleDB Background Worker Scheduler", "", False, False)
+
+
+def _in_use() -> Exception:
+    error = database.DatabaseError("source database is being accessed by other users")
+    error.sqlstate = "55006"  # type: ignore[attr-defined]
+    return error
+
+
+def test_release_clones_past_a_background_worker_visiting_the_template() -> None:
+    # A background worker (here TimescaleDB's scheduler) shows up next to the
+    # pooler's idle session. It is not terminated: CREATE DATABASE waits for it.
+    runner = LocalMutationRunner(
+        database_url="postgresql://localhost/tmpl", pytest_args=[], release_template_sessions=True
+    )
+    connection = _TemplateConnection([[_POOLER, _SCHEDULER], [_SCHEDULER]])
+
+    runner._clone_past_template_sessions(
+        connection, "tmpl", 'CREATE DATABASE "c" TEMPLATE "tmpl"', _in_use()
+    )
+
+    terminated = [s for s in connection.statements if "pg_terminate_backend" in s]
+    assert len(terminated) == 1
+    assert 'CREATE DATABASE "c" TEMPLATE "tmpl"' in connection.statements
+    assert connection.statements[-1].endswith("ALLOW_CONNECTIONS true")
+
+
+def test_release_names_a_background_worker_that_outlasts_the_wait() -> None:
+    runner = LocalMutationRunner(
+        database_url="postgresql://localhost/tmpl", pytest_args=[], release_template_sessions=True
+    )
+    connection = _TemplateConnection(
+        [[_POOLER, _SCHEDULER], [_SCHEDULER], [_SCHEDULER]], create_error=_in_use()
+    )
+
+    with pytest.raises(SqlProofMutationError, match="TimescaleDB Background Worker Scheduler"):
+        runner._clone_past_template_sessions(
+            connection, "tmpl", 'CREATE DATABASE "c" TEMPLATE "tmpl"', _in_use()
+        )
+    assert connection.statements[-1].endswith("ALLOW_CONNECTIONS true")
