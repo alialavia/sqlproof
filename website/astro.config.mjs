@@ -20,6 +20,10 @@ const posthogHead = posthogHeadEntries({
 
 export default defineConfig({
   site: 'https://sqlproof.com',
+  // Astro 7 defaults to 'jsx' whitespace handling, which drops line breaks
+  // between text and inline elements in src/pages/index.astro (e.g. "of
+  // <code>auth.users</code>" renders as "ofauth.users"). Keep Astro 6 behavior.
+  compressHTML: true,
   integrations: [
     starlight({
       title: 'SqlProof',
