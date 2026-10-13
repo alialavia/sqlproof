@@ -4,6 +4,7 @@ import subprocess
 
 import pytest
 
+from sqlproof import _database as database
 from sqlproof.exceptions import SqlProofMutationError
 from sqlproof.mutation.apply import PreparedMutant
 from sqlproof.mutation.artifact import RunArtifact
@@ -44,7 +45,7 @@ class FakeRunner(LocalMutationRunner):
     def _run_pytest(self, clone_dsn: str) -> tuple[int, str]:
         self.calls.append(("pytest", clone_dsn))
         clone_name = clone_dsn.rsplit("/", 1)[1]
-        mutant_id = clone_name.removeprefix("sqlproof_mutant_")
+        mutant_id = clone_name.removeprefix("sqlproof_mutant_").removesuffix(f"_{self.run_id}")
         return self.exit_codes[mutant_id], "output tail"
 
     def _drop_clone(self, clone_name: str) -> None:
@@ -73,7 +74,7 @@ def test_clone_is_dropped_even_when_pytest_raises() -> None:
     result = runner.run([_prepared("m1")])
     assert result.outcomes[0].status == "error"
     assert "pytest binary vanished" in (result.outcomes[0].detail or "")
-    assert ("drop", "sqlproof_mutant_m1") in runner.calls
+    assert ("drop", f"sqlproof_mutant_m1_{runner.run_id}") in runner.calls
 
 
 def test_runner_runs_clone_apply_pytest_drop_in_order() -> None:
@@ -117,7 +118,7 @@ def test_timeout_expired_yields_error_outcome_and_drops_clone() -> None:
     outcome = result.outcomes[0]
     assert outcome.status == "error"
     assert "TimeoutExpired" in (outcome.detail or "")
-    assert ("drop", "sqlproof_mutant_m1") in runner.calls
+    assert ("drop", f"sqlproof_mutant_m1_{runner.run_id}") in runner.calls
 
 
 # ---------------------------------------------------------------------------
@@ -488,8 +489,39 @@ def test_run_baseline_clones_runs_unmutated_and_drops() -> None:
     assert runner.run_baseline() == (0, "baseline ok")
     # clone -> pytest -> drop, with no "apply" (the baseline is unmutated)
     assert [kind for kind, _ in runner.calls] == ["create", "pytest", "drop"]
-    assert ("create", "sqlproof_baseline") in runner.calls
-    assert ("drop", "sqlproof_baseline") in runner.calls
+    assert ("create", f"sqlproof_baseline_{runner.run_id}") in runner.calls
+    assert ("drop", f"sqlproof_baseline_{runner.run_id}") in runner.calls
+
+
+def test_concurrent_runs_never_share_a_clone_name() -> None:
+    # Two runs against one cluster must never compute the same clone name,
+    # or one force-drops the other's in-flight clone.
+    exit_codes = {"m1": 1, "sqlproof_baseline": 0}
+    first, second = FakeRunner(exit_codes), FakeRunner(exit_codes)
+    for runner in (first, second):
+        runner.run([_prepared("m1")])
+        runner.run_baseline()
+    first_names = {name for kind, name in first.calls if kind == "create"}
+    second_names = {name for kind, name in second.calls if kind == "create"}
+    assert len(first_names) == 2
+    assert first_names.isdisjoint(second_names)
+
+
+def test_clone_names_are_stable_within_a_run() -> None:
+    runner = FakeRunner({}, run_id="abc123")
+    assert runner._clone_name("sqlproof_baseline") == "sqlproof_baseline_abc123"
+    assert runner._clone_name("sqlproof_mutant_m1") == runner._clone_name("sqlproof_mutant_m1")
+
+
+def test_clone_names_fit_the_postgres_identifier_limit() -> None:
+    runner = FakeRunner({})
+    real_id = "0123456789abcdef"  # prepare_mutants ids are 16 hex chars
+    real_name = runner._clone_name(f"sqlproof_mutant_{real_id}")
+    assert real_name == f"sqlproof_mutant_{real_id}_{runner.run_id}"
+    for stem in ("sqlproof_baseline", f"sqlproof_mutant_{real_id}", "sqlproof_mutant_" + "é" * 40):
+        name = runner._clone_name(stem)
+        assert len(name.encode()) <= 63
+        assert name.endswith(f"_{runner.run_id}")
 
 
 def _schema_with_f(tmp_path) -> object:  # type: ignore[no-untyped-def]
@@ -584,3 +616,74 @@ def test_run_mutation_tests_proceeds_on_green_baseline(tmp_path, monkeypatch) ->
         pytest_args=["tests/"],
     )
     assert result.outcomes[0].status == "killed"
+
+
+class _Rows:
+    def __init__(self, rows: list[tuple[object, ...]]) -> None:
+        self._rows = rows
+
+    def fetchall(self) -> list[tuple[object, ...]]:
+        return self._rows
+
+
+class _TemplateConnection:
+    """Answers the session listing with queued snapshots; CREATE DATABASE
+    raises `create_error` if set."""
+
+    def __init__(
+        self, snapshots: list[list[tuple[object, ...]]], create_error: Exception | None = None
+    ) -> None:
+        self.snapshots = snapshots
+        self.create_error = create_error
+        self.statements: list[str] = []
+
+    def execute(self, sql: str, params: object = None) -> _Rows:
+        self.statements.append(sql)
+        if "pg_stat_activity" in sql:
+            return _Rows(self.snapshots.pop(0))
+        if sql.startswith("CREATE DATABASE") and self.create_error is not None:
+            raise self.create_error
+        return _Rows([])
+
+
+_POOLER = (101, "fake-pooler", "idle", True, True)
+_SCHEDULER = (102, "TimescaleDB Background Worker Scheduler", "", False, False)
+
+
+def _in_use() -> Exception:
+    error = database.DatabaseError("source database is being accessed by other users")
+    error.sqlstate = "55006"  # type: ignore[attr-defined]
+    return error
+
+
+def test_release_clones_past_a_background_worker_visiting_the_template() -> None:
+    # A background worker (here TimescaleDB's scheduler) shows up next to the
+    # pooler's idle session. It is not terminated: CREATE DATABASE waits for it.
+    runner = LocalMutationRunner(
+        database_url="postgresql://localhost/tmpl", pytest_args=[], release_template_sessions=True
+    )
+    connection = _TemplateConnection([[_POOLER, _SCHEDULER], [_SCHEDULER]])
+
+    runner._clone_past_template_sessions(
+        connection, "tmpl", 'CREATE DATABASE "c" TEMPLATE "tmpl"', _in_use()
+    )
+
+    terminated = [s for s in connection.statements if "pg_terminate_backend" in s]
+    assert len(terminated) == 1
+    assert 'CREATE DATABASE "c" TEMPLATE "tmpl"' in connection.statements
+    assert connection.statements[-1].endswith("ALLOW_CONNECTIONS true")
+
+
+def test_release_names_a_background_worker_that_outlasts_the_wait() -> None:
+    runner = LocalMutationRunner(
+        database_url="postgresql://localhost/tmpl", pytest_args=[], release_template_sessions=True
+    )
+    connection = _TemplateConnection(
+        [[_POOLER, _SCHEDULER], [_SCHEDULER], [_SCHEDULER]], create_error=_in_use()
+    )
+
+    with pytest.raises(SqlProofMutationError, match="TimescaleDB Background Worker Scheduler"):
+        runner._clone_past_template_sessions(
+            connection, "tmpl", 'CREATE DATABASE "c" TEMPLATE "tmpl"', _in_use()
+        )
+    assert connection.statements[-1].endswith("ALLOW_CONNECTIONS true")

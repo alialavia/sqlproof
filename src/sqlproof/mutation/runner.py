@@ -42,6 +42,9 @@ def _resolve_seed(seed: int | None) -> int:
 # SQLSTATE 55006: "source database ... is being accessed by other users".
 _OBJECT_IN_USE = "55006"
 
+# Postgres truncates identifiers longer than NAMEDATALEN - 1 bytes.
+_MAX_IDENTIFIER_BYTES = 63
+
 
 class LocalMutationRunner:
     """Clone-per-mutant local execution.
@@ -55,10 +58,13 @@ class LocalMutationRunner:
     to have no other connections. Close dev sessions against it first.
     Clone creation is serialized behind a lock for the same reason.
 
-    Interrupted runs may leave ``sqlproof_mutant_*`` databases behind.
-    Rerunning the same mutation set self-heals (each run drops-then-recreates
-    by id); edited mutants receive new ids, so orphans from those must be
-    dropped manually (e.g. ``DROP DATABASE IF EXISTS sqlproof_mutant_<id>``).
+    Clone names carry the run's `run_id` (``sqlproof_baseline_<run>``,
+    ``sqlproof_mutant_<mutant_id>_<run>``), so concurrent runs against one
+    cluster never touch each other's clones. Interrupted runs may leave
+    clones behind that no later run drops; find them with
+    ``SELECT datname FROM pg_database WHERE datname ~ '^sqlproof_(baseline|mutant)_'``
+    and drop them manually (``DROP DATABASE IF EXISTS <name> WITH (FORCE)``)
+    once no run is in flight.
 
     The pytest child process inherits the parent environment, so any
     ``PYTEST_ADDOPTS`` set in CI will affect mutant suites — review that
@@ -76,6 +82,7 @@ class LocalMutationRunner:
         max_workers: int = 1,
         timeout_s: float | None = 600.0,
         release_template_sessions: bool = False,
+        run_id: str | None = None,
     ) -> None:
         self.database_url = database_url
         self.pytest_args = list(pytest_args)
@@ -85,6 +92,7 @@ class LocalMutationRunner:
         self.max_workers = max(1, max_workers)
         self.timeout_s = timeout_s
         self.release_template_sessions = release_template_sessions
+        self.run_id = run_id if run_id is not None else new_run_id()
         self._clone_lock = threading.Lock()
 
     # -- orchestration ------------------------------------------------
@@ -106,7 +114,7 @@ class LocalMutationRunner:
         a meaningless false 100%. No mutated DDL is applied — the clone is an
         exact copy of the template.
         """
-        clone_name = "sqlproof_baseline"
+        clone_name = self._clone_name("sqlproof_baseline")
         clone_dsn = self._create_clone(clone_name)
         try:
             return self._run_pytest(clone_dsn)
@@ -114,7 +122,7 @@ class LocalMutationRunner:
             self._drop_clone(clone_name)
 
     def _run_one(self, prepared: PreparedMutant) -> MutantOutcome:
-        clone_name = f"sqlproof_mutant_{prepared.mutant_id}"
+        clone_name = self._clone_name(f"sqlproof_mutant_{prepared.mutant_id}")
         start = time.monotonic()
         try:
             clone_dsn = self._create_clone(clone_name)
@@ -187,41 +195,55 @@ class LocalMutationRunner:
         *idle* sessions of its own role there, clones, and always reopens
         the template. Otherwise, or when any blocking session is active or
         belongs to another role, it raises an error naming the sessions.
+
+        Background workers are not client sessions and are never terminated.
+        Some visit every database briefly (e.g. TimescaleDB's per-database
+        scheduler on Supabase images), so they are left to ``CREATE
+        DATABASE``'s own wait for other sessions to exit; one still there
+        after it is named in the error like any other session.
         """
         quoted = quote_identifier(template)
         sessions = self._template_sessions(connection, template)
-        releasable = [pid for pid, _app, state, own in sessions if own and state == "idle"]
-        if not (self.release_template_sessions and len(releasable) == len(sessions)):
+        clients = [session for session in sessions if session[4]]
+        releasable = [pid for pid, _app, state, own, _client in clients if own and state == "idle"]
+        if not (self.release_template_sessions and len(releasable) == len(clients)):
             raise self._template_busy_error(template, sessions) from error
         connection.execute(f"ALTER DATABASE {quoted} ALLOW_CONNECTIONS false")
         try:
             for pid in releasable:
                 connection.execute("SELECT pg_terminate_backend(%s, 5000)", (pid,))
-            remaining = self._template_sessions(connection, template)
+            remaining = [s for s in self._template_sessions(connection, template) if s[4]]
             if remaining:
                 raise self._template_busy_error(template, remaining) from error
-            connection.execute(create)
+            try:
+                connection.execute(create)
+            except database.DatabaseError as exc:
+                if database.sqlstate(exc) != _OBJECT_IN_USE:
+                    raise
+                still = self._template_sessions(connection, template)
+                raise self._template_busy_error(template, still) from exc
         finally:
             connection.execute(f"ALTER DATABASE {quoted} ALLOW_CONNECTIONS true")
 
     @staticmethod
     def _template_sessions(
         connection: database.Connection, template: str
-    ) -> list[tuple[int, str, str, bool]]:
+    ) -> list[tuple[int, str, str, bool, bool]]:
+        # (pid, application_name, state, same role as us, client session)
         return [
             tuple(row)
             for row in connection.execute(
                 "SELECT pid, coalesce(application_name, ''), coalesce(state, ''), "
-                "usename = session_user "
+                "usename = session_user, backend_type = 'client backend' "
                 "FROM pg_stat_activity WHERE datname = %s AND pid <> pg_backend_pid()",
                 (template,),
             ).fetchall()
         ]
 
     def _template_busy_error(
-        self, template: str, sessions: Sequence[tuple[int, str, str, bool]]
+        self, template: str, sessions: Sequence[tuple[int, str, str, bool, bool]]
     ) -> SqlProofMutationError:
-        apps = sorted({app or "<unnamed>" for _pid, app, _state, _own in sessions})
+        apps = sorted({app or "<unnamed>" for _pid, app, _state, _own, _client in sessions})
         hint = (
             "they are not all idle sessions of this role, so they were left alone"
             if self.release_template_sessions
@@ -259,6 +281,13 @@ class LocalMutationRunner:
         return process.returncode, process.stdout + process.stderr
 
     # -- helpers --------------------------------------------------------
+
+    def _clone_name(self, stem: str) -> str:
+        # The run-id suffix keeps concurrent runs on one cluster apart; trim
+        # the stem, never the suffix, to stay within the identifier limit.
+        suffix = f"_{self.run_id}".encode()
+        room = _MAX_IDENTIFIER_BYTES - len(suffix)
+        return stem.encode()[:room].decode(errors="ignore") + suffix.decode()
 
     def _pytest_command(self) -> list[str]:
         command = [sys.executable, "-m", "pytest", *self.pytest_args]
@@ -312,6 +341,11 @@ def run_mutation_tests(
     connections), so the actual concurrency is in the pytest subprocesses
     themselves. Default is ``1`` (sequential).
 
+    Concurrent runs against the same cluster (parallel CI jobs, several
+    developers on one server) are safe: every clone name carries this
+    run's id, so no run drops another's clones. Each run still needs the
+    template free of other sessions while it clones.
+
     `hypothesis_seed` pins the Hypothesis seed for every mutant run,
     making failures reproducible. If ``None`` (the default), a fresh
     random seed is generated via :func:`secrets.randbelow` so every
@@ -363,6 +397,7 @@ def run_mutation_tests(
     schema_sql = Path(schema_file).read_text(encoding="utf-8")
     prepared = prepare_mutants(mutations, schema_sql)
     hypothesis_seed = _resolve_seed(hypothesis_seed)
+    run_id = new_run_id()
     runner = LocalMutationRunner(
         database_url=database_url,
         pytest_args=pytest_args,
@@ -372,6 +407,7 @@ def run_mutation_tests(
         max_workers=max_workers,
         timeout_s=timeout_s,
         release_template_sessions=release_template_sessions,
+        run_id=run_id,
     )
     if verify_baseline:
         baseline_exit, baseline_output = runner.run_baseline()
@@ -398,7 +434,7 @@ def run_mutation_tests(
             except Exception:
                 fingerprint = None
             artifact = RunArtifact(
-                run_id=new_run_id(),
+                run_id=run_id,
                 started_at=started.strftime("%Y-%m-%dT%H:%M:%SZ"),
                 duration_s=run_duration_s,
                 sqlproof_version=__version__,

@@ -523,3 +523,11 @@ def test_seed_supabase_test_users_reuses_existing_test_users(monkeypatch) -> Non
     seed_supabase_test_users(db=object(), count=2)
 
     assert calls == [("get", "/auth/v1/admin/users", None)]
+
+
+def test_seed_supabase_test_users_missing_httpx_points_to_extra(monkeypatch) -> None:
+    # A None entry in sys.modules makes `import httpx` raise ImportError.
+    monkeypatch.setitem(sys.modules, "httpx", None)
+
+    with pytest.raises(ImportError, match=r'pip install "sqlproof\[supabase\]"'):
+        seed_supabase_test_users(db=object(), count=1)

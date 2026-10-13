@@ -141,13 +141,32 @@ def seed_supabase_test_users(
     email_domain: str = "test.invalid",
     password: str = "test_password",
 ) -> None:
-    """Create replaceable Supabase auth users for external table FK sampling."""
+    """Create Supabase auth users via the admin API for external table FK sampling.
+
+    Requires the ``supabase`` extra (``pip install "sqlproof[supabase]"``),
+    which provides ``httpx``, plus the ``SUPABASE_URL`` and
+    ``SUPABASE_SERVICE_ROLE_KEY`` environment variables. The service-role
+    key has full admin access to the project, so keep it out of untrusted
+    CI jobs. For CI, prefer ``seed_test_users_directly``, which seeds
+    ``auth.users`` over SQL and needs neither the key nor ``httpx``.
+
+    The default ``password`` is a well-known value. Use it only against
+    local or ephemeral projects, and pass your own for anything else.
+    """
     del db
     if count < 0:
         msg = "count must be non-negative."
         raise ValueError(msg)
 
-    httpx = import_module("httpx")
+    try:
+        httpx = import_module("httpx")
+    except ImportError as exc:
+        msg = (
+            "seed_supabase_test_users needs httpx, which ships with the "
+            'supabase extra: pip install "sqlproof[supabase]". Or use '
+            "seed_test_users_directly, which seeds auth.users over SQL."
+        )
+        raise ImportError(msg) from exc
     service_role_key = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
     with httpx.Client(
         base_url=os.environ["SUPABASE_URL"],
