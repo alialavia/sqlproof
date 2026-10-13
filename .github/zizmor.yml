@@ -1,0 +1,6 @@
+# zizmor configuration for the `workflows` job in ci.yml.
+rules:
+  # Suggests the `$/` self-repository syntax for local actions; the
+  # `./.github/actions/...` form is equivalent here.
+  self-repository:
+    disable: true

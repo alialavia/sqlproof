@@ -15,9 +15,13 @@ on:
         required: true
         type: string
 
+permissions: {}
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     services:
       postgres:
         # Mirror the CI service container so pre-publish testing
@@ -35,16 +39,45 @@ jobs:
     env:
       SQLPROOF_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
     steps:
-      - uses: actions/checkout@v7
+      # A manual run publishes whatever ref it is given, so only accept a
+      # release tag that exists.
+      - name: Validate the tag input
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          TAG: ${{ inputs.tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::tag must look like vMAJOR.MINOR.PATCH, got '$TAG'"
+            exit 1
+          fi
+          if ! git ls-remote --exit-code --tags "https://github.com/$REPO.git" "refs/tags/$TAG" >/dev/null; then
+            echo "::error::tag $TAG does not exist"
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # For workflow_dispatch, check out the tag the operator passed
           # as input. For push events, default behavior checks out the
           # tag-ref that triggered the workflow (no override needed).
-          ref: ${{ inputs.tag || github.ref }}
-      - uses: actions/setup-python@v7
+          ref: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          persist-credentials: false
+      - name: Check the package version matches the tag
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          version="$(sed -n 's/^__version__ = "\([^"]*\)".*/\1/p' src/sqlproof/_version.py)"
+          if [[ "v$version" != "$TAG" ]]; then
+            echo "::error::src/sqlproof/_version.py says $version but the tag is $TAG"
+            exit 1
+          fi
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
-      - uses: astral-sh/setup-uv@v7
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          # Never restore a cache into the job that builds what gets published.
+          enable-cache: false
       - name: Install PostgreSQL client development tools
         run: sudo apt-get update && sudo apt-get install -y libpq-dev
       - run: uv sync --extra dev
@@ -54,7 +87,7 @@ jobs:
           database-url: ${{ env.SQLPROOF_TEST_DATABASE_URL }}
       - run: uv run pytest -m "not nocover"
       - run: uv build
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dist
           path: dist/
@@ -66,8 +99,8 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: dist
           path: dist/
-      - uses: pypa/gh-action-pypi-publish@release/v1
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2

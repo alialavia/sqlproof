@@ -4,10 +4,10 @@ on:
   push:
     branches: [main]
 
-# No top-level permissions: release-please acts via the GitHub App token
-# below, not the default GITHUB_TOKEN. The App's installation token
-# carries its own permissions (contents:write, pull_requests:write,
-# metadata:read) configured when the App was created.
+# release-please acts via the GitHub App token below, not the default
+# GITHUB_TOKEN, so the default token gets no permissions at all. The App
+# token is limited to the two permissions release-please needs.
+permissions: {}
 
 jobs:
   release-please:
@@ -20,13 +20,15 @@ jobs:
       # That's what lets release.yml fire when release-please creates a
       # v*.*.* tag.
       - name: Mint release-please token from sqlproof-releases App
-        uses: actions/create-github-app-token@v3
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         id: app-token
         with:
           app-id: ${{ secrets.RELEASE_PLEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_PLEASE_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
 
-      - uses: googleapis/release-please-action@v5
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         with:
           token: ${{ steps.app-token.outputs.token }}
           config-file: release-please-config.json

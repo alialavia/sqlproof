@@ -8,6 +8,10 @@ updates:
     schedule:
       interval: weekly
       day: monday
+    # Wait a week after a release before proposing it, so a compromised
+    # release is likely to be caught and pulled first.
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 5
     labels:
       - dependencies
@@ -22,6 +26,10 @@ updates:
     schedule:
       interval: weekly
       day: monday
+    # Wait a week after a release before proposing it, so a compromised
+    # release is likely to be caught and pulled first.
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 5
     labels:
       - dependencies
@@ -36,6 +44,10 @@ updates:
     schedule:
       interval: weekly
       day: monday
+    # Wait a week after a release before proposing it, so a compromised
+    # release is likely to be caught and pulled first.
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 3
     labels:
       - dependencies
