@@ -20,7 +20,7 @@ jobs:
   classify:
     runs-on: ubuntu-latest
     steps:
-      - uses: dorny/paths-filter@v4
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         id: changes
         with:
           filters: |
@@ -31,6 +31,7 @@ jobs:
         if: steps.changes.outputs.actions == 'true'
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
         run: |
           set -euo pipefail
           echo "PR touches .github/actions/** — checking commit type."
@@ -44,7 +45,7 @@ jobs:
             exit 0
           fi
 
-          if [[ "${{ github.event.pull_request.body }}" == *"BREAKING CHANGE:"* ]]; then
+          if [[ "$PR_BODY" == *"BREAKING CHANGE:"* ]]; then
             echo "OK — PR body carries BREAKING CHANGE footer."
             exit 0
           fi

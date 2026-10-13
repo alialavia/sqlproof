@@ -18,18 +18,21 @@ jobs:
     # Only run on PRs opened by Dependabot. Other PRs that touch
     # pyproject.toml should update uv.lock manually (and reviewers can
     # catch drift).
-    if: github.actor == 'dependabot[bot]'
+    # Check the PR author, not github.actor: the actor is whoever triggered
+    # this run (e.g. someone pushing to a Dependabot branch).
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      # The push step below relies on the credentials checkout persists.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.head_ref }}
           # GH Actions can't push back to a PR branch by default; use a
           # PAT-less approach via `actions/checkout` with the default
           # token, which works because we're pushing to the same repo
           # the workflow runs in.
-          token: ${{ secrets.GITHUB_TOKEN }}
-      - uses: astral-sh/setup-uv@v7
+          token: ${{ secrets.GITHUB_TOKEN }} # zizmor: ignore[artipacked]
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
       - name: Refresh uv.lock
         run: uv lock
       - name: Commit and push if lockfile changed
