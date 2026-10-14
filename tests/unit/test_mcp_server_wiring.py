@@ -1,8 +1,8 @@
 """Smoke tests for the sqlproof MCP server wiring.
 
 The tool LOGIC is tested directly in ``test_mcp_tools.py``. This
-file verifies the FastMCP server **assembles correctly**: the three
-v1 tools are registered, their JSON schemas pull from the right
+file verifies the FastMCP server **assembles correctly**: the
+supported tools are registered, their JSON schemas pull from the right
 function signatures, and the server object exposes the expected
 interface.
 
@@ -16,12 +16,14 @@ from __future__ import annotations
 import asyncio
 
 
-def test_server_builds_with_three_v1_tools_registered() -> None:
+def test_server_builds_with_the_supported_tools_registered() -> None:
     """Invariant: ``_build_server`` returns a FastMCP server whose
-    tool registry contains exactly the v1 surface (inspect_schema,
-    generate_dataset, list_recipes). v2 tools (check_property,
-    run_rls_test) are deliberately NOT included until they have
-    live-DB plumbing.
+    tool registry contains exactly the supported surface: the v1
+    tools (inspect_schema, generate_dataset, list_recipes) and the
+    scenario tools (compile_scenario, load_scenario, whose live-DB
+    path is covered by tests/integration/test_scenarios_live.py).
+    check_property and run_rls_test are deliberately NOT included
+    until they have live-DB plumbing.
 
     Failure case: a contributor adds a v2 tool to server.py before
     its tests / DB plumbing exist; tool consumers see it advertised
@@ -34,7 +36,13 @@ def test_server_builds_with_three_v1_tools_registered() -> None:
     # the names because registration order isn't a stable surface.
     tools = asyncio.run(server.list_tools())
     names = sorted(t.name for t in tools)
-    assert names == ["generate_dataset", "inspect_schema", "list_recipes"]
+    assert names == [
+        "compile_scenario",
+        "generate_dataset",
+        "inspect_schema",
+        "list_recipes",
+        "load_scenario",
+    ]
 
 
 def test_inspect_schema_tool_has_a_description() -> None:
@@ -50,7 +58,13 @@ def test_inspect_schema_tool_has_a_description() -> None:
     server = _build_server()
     tools = asyncio.run(server.list_tools())
     by_name = {t.name: t for t in tools}
-    for name in ("inspect_schema", "generate_dataset", "list_recipes"):
+    for name in (
+        "inspect_schema",
+        "generate_dataset",
+        "list_recipes",
+        "compile_scenario",
+        "load_scenario",
+    ):
         description = by_name[name].description or ""
         assert len(description) > 20, (
             f"{name} has empty/trivial description: {description!r}"

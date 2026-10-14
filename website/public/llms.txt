@@ -119,6 +119,7 @@ def test_users_only_see_their_own_rows(supabase_proof, data):
 - [Stateful tests](https://sqlproof.com/api/state-machine/): bugs that need a sequence of operations
 - [CI/CD integration](https://sqlproof.com/guides/ci-cd/): GitHub Actions for vanilla Postgres and Supabase
 - [Mutation testing](https://sqlproof.com/guides/mutation-testing/): check that your tests would catch a bug
+- [Scenarios (experimental)](https://sqlproof.com/guides/scenarios/): seeded, reproducible database states in Python, YAML or JSON; `sqlproof scenarios up`, MCP `compile_scenario` / `load_scenario`; describe the data you need instead of writing seed SQL
 - [API reference](https://sqlproof.com/api/sqlproof-class/): `SqlProof` class
 
 ## Examples

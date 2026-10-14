@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sqlproof.com/schemas/scenario-v1.json",
+  "title": "SqlProof scenario (version 1)",
+  "description": "A named, seeded database state: pinned rows plus generated filler. See https://sqlproof.com/guides/scenarios/.",
+  "type": "object",
+  "required": ["version", "name", "seed", "tables"],
+  "properties": {
+    "version": {"const": 1},
+    "name": {"type": "string", "minLength": 1, "description": "Unique within a project."},
+    "seed": {"type": "integer", "description": "Every generated value is a function of this seed."},
+    "clock": {
+      "type": "string",
+      "description": "ISO 8601 timestamp that now()-style column defaults become. Defaults to 2026-01-01T00:00:00Z; no timezone means UTC."
+    },
+    "tables": {
+      "type": "object",
+      "description": "Table name (bare or schema-qualified) to its row groups, laid out in order.",
+      "additionalProperties": {"type": "array", "items": {"$ref": "#/$defs/group"}}
+    }
+  },
+  "patternProperties": {"^x-": {"description": "Extensions for tools building on scenarios; not part of the scenario."}},
+  "additionalProperties": false,
+  "$defs": {
+    "group": {
+      "oneOf": [
+        {
+          "type": "object",
+          "description": "n rows with the columns in `set` pinned; every other column is generated.",
+          "required": ["cohort"],
+          "properties": {"cohort": {"type": "integer", "minimum": 1}, "set": {"$ref": "#/$defs/pinned"}},
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "description": "n rows with nothing pinned.",
+          "required": ["fill"],
+          "properties": {"fill": {"type": "integer", "minimum": 0}},
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "description": "One row other rows can reference as {ref: <name>}.",
+          "required": ["row"],
+          "properties": {"row": {"type": "string", "minLength": 1}, "set": {"$ref": "#/$defs/pinned"}},
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "description": "Size this table by its parents. Cannot be combined with other groups in phase 1.",
+          "required": ["per_parent"],
+          "properties": {
+            "per_parent": {
+              "type": "object",
+              "required": ["parent", "count"],
+              "properties": {
+                "parent": {"type": "string", "minLength": 1},
+                "where": {
+                  "description": "Parents whose cohorts pin these values, a named row, or null for every parent.",
+                  "anyOf": [{"type": "null"}, {"$ref": "#/$defs/ref"}, {"$ref": "#/$defs/pinned"}]
+                },
+                "count": {"$ref": "#/$defs/count", "description": "Children per matching parent."},
+                "default": {"$ref": "#/$defs/count", "description": "Children per other parent. Defaults to 0."},
+                "column": {"type": ["string", "null"], "description": "The foreign-key column, when there is more than one into the parent."}
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "pinned": {
+      "type": "object",
+      "additionalProperties": {"$ref": "#/$defs/value"}
+    },
+    "value": {
+      "description": "A literal Postgres can read, or a reference to a named row. Pin json and array columns as strings.",
+      "oneOf": [
+        {"type": ["string", "number", "boolean", "null"]},
+        {"$ref": "#/$defs/ref"}
+      ]
+    },
+    "ref": {
+      "type": "object",
+      "required": ["ref"],
+      "properties": {"ref": {"type": "string", "minLength": 1}},
+      "additionalProperties": false
+    },
+    "count": {
+      "oneOf": [
+        {"type": "integer", "minimum": 0},
+        {"type": "array", "items": {"type": "integer", "minimum": 0}, "minItems": 2, "maxItems": 2}
+      ]
+    }
+  }
+}

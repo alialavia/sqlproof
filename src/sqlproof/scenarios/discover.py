@@ -1,8 +1,14 @@
-"""Find scenarios in a project: every `*_scenarios.py` under a directory.
+"""Find scenarios in a project, under one directory (default `scenarios/`).
 
-Mirrors how pytest collects tests: files are imported by path, and every
-module-level `Scenario` object they define is collected. Scenario names
-must be unique across the directory.
+Two kinds of file hold them:
+
+- `*_scenarios.py`: imported by path, the way pytest collects tests;
+  every module-level `Scenario` object is collected.
+- `*.scenario.yaml`, `*.scenario.yml`, `*.scenario.json`: one scenario
+  in its serialized form each (see `serialize.py`).
+
+Scenario names must be unique across the directory, whichever kind of
+file defines them.
 """
 
 from __future__ import annotations
@@ -14,22 +20,28 @@ from pathlib import Path
 
 from sqlproof.exceptions import SqlProofScenarioError
 from sqlproof.scenarios.model import Scenario
+from sqlproof.scenarios.serialize import SCENARIO_FILE_SUFFIXES, load_file
 
 DEFAULT_DIRECTORY = Path("scenarios")
 
 
 def discover(directory: str | Path = DEFAULT_DIRECTORY) -> list[Scenario]:
-    """Every scenario defined in `*_scenarios.py` files under `directory`,
-    sorted by name. Raises when two scenarios share a name."""
+    """Every scenario defined in scenario files under `directory`, sorted
+    by name. Raises when two scenarios share a name."""
     root = Path(directory)
     if not root.is_dir():
         msg = (
-            f"No scenarios directory at {root}. Pass the directory that holds *_scenarios.py files."
+            f"No scenarios directory at {root}. Pass the directory that holds "
+            "*_scenarios.py or *.scenario.yaml / *.scenario.json files."
         )
         raise SqlProofScenarioError(msg)
     found: dict[str, Scenario] = {}
-    for path in sorted(root.rglob("*_scenarios.py")):
-        for scenario in _scenarios_in(path):
+    paths = [*root.rglob("*_scenarios.py")]
+    for suffix in SCENARIO_FILE_SUFFIXES:
+        paths.extend(root.rglob(f"*{suffix}"))
+    for path in sorted(paths):
+        in_file = _scenarios_in(path) if path.suffix == ".py" else [load_file(path)]
+        for scenario in in_file:
             existing = found.get(scenario.name)
             if existing is not None:
                 msg = (

@@ -174,8 +174,7 @@ def test_to_dict_is_the_serializable_form() -> None:
     assert data["name"] == "tiered"
     assert data["seed"] == 42
     assert data["tables"]["customers"][0] == {
-        "row": 1,
-        "name": "acme",
+        "row": "acme",
         "set": {"owner_id": {"ref": "alice"}, "plan": "pro", "tier": 1},
     }
     assert data["tables"]["invoices"][0]["per_parent"]["count"] == [5, 10]

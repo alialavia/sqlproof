@@ -18,8 +18,10 @@ import hashlib
 import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, time
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Literal
+from uuid import UUID
 
 from sqlproof.exceptions import SqlProofScenarioError
 
@@ -176,7 +178,12 @@ class ScenarioBuilder:
     def row(self, table: str, *, name: str, **pinned: Any) -> RowRef:
         """One row other rows can reference by `name`. Returns its
         reference."""
-        if not name:
+        return self._named_row(table, name, pinned)
+
+    def _named_row(self, table: str, name: str, pinned: Mapping[str, Any]) -> RowRef:
+        """`row()` without the keyword clash: the serialized form uses this,
+        so a column called `name` can be pinned on a named row there."""
+        if not isinstance(name, str) or not name:  # pyright: ignore[reportUnnecessaryIsInstance]
             msg = "row names must be non-empty strings."
             raise SqlProofScenarioError(msg)
         if name in self._row_names:
@@ -212,7 +219,12 @@ class Scenario:
         _require_int(seed, "scenario seed", -(2**63))
         self.name = name or build.__name__
         self.seed = seed
-        self.clock = (clock or DEFAULT_CLOCK).astimezone(UTC)
+        clock = clock or DEFAULT_CLOCK
+        # A clock without a timezone is UTC, not the machine's local time:
+        # the same scenario must load the same rows on every machine.
+        if clock.tzinfo is None:
+            clock = clock.replace(tzinfo=UTC)
+        self.clock = clock.astimezone(UTC)
         self.source: str | None = None
         self._build = build
         self._spec_cache: ScenarioSpec | None = None
@@ -239,9 +251,18 @@ class Scenario:
         return hashlib.sha256(canonical.encode()).hexdigest()
 
     def to_dict(self) -> dict[str, Any]:
-        """The serializable form. Raises for a scenario that pins a callable,
-        since code cannot be stored."""
+        """The serializable form (see `sqlproof.scenarios.serialize`). Raises
+        for a scenario that pins a callable, since code cannot be stored."""
         return _normalize(self.spec, strict=True)
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> Scenario:
+        """The scenario a serialized form describes; the inverse of
+        `to_dict`. Raises `SqlProofScenarioError` naming the offending
+        path when `data` is not a valid version 1 scenario."""
+        from sqlproof.scenarios.serialize import scenario_from_dict
+
+        return scenario_from_dict(data)
 
     def compile(self, schema: SchemaInfo) -> CompiledScenario:
         from sqlproof.scenarios.compile import compile_scenario
@@ -290,12 +311,23 @@ def _normalize(spec: ScenarioSpec, *, strict: bool = False) -> dict[str, Any]:
             return {"callable": f"{module}.{qualname}"}
         if isinstance(v, str | int | float | bool) or v is None:
             return v
+        # Written as Postgres reads them, so a Python scenario and its
+        # export have the same fingerprint and load the same rows.
+        if isinstance(v, datetime | date | time):
+            return v.isoformat()
+        if isinstance(v, Decimal | UUID):
+            return str(v)
+        if strict:
+            msg = (
+                f"{where} is pinned to a {type(v).__name__}, which has no serialized "
+                "form. Pin a string Postgres can read instead."
+            )
+            raise SqlProofScenarioError(msg)
         return {"literal": repr(v)}
 
     def group(g: Group, table: str) -> dict[str, Any]:
-        out: dict[str, Any] = {g.kind: g.count}
-        if g.name is not None:
-            out["name"] = g.name
+        # A named row is written by name: `{"row": "acme"}`.
+        out: dict[str, Any] = {g.kind: g.name if g.kind == "row" else g.count}
         if g.pinned:
             out["set"] = {k: value(v, f"{table}.{k}") for k, v in sorted(g.pinned.items())}
         return out
@@ -312,17 +344,17 @@ def _normalize(spec: ScenarioSpec, *, strict: bool = False) -> dict[str, Any]:
                 where = None
             else:
                 where = {k: value(v, f"{pp.parent}.{k}") for k, v in sorted(pp.where.items())}
-            entries.append(
-                {
-                    "per_parent": {
-                        "parent": pp.parent,
-                        "where": where,
-                        "count": list(pp.count),
-                        "default": list(pp.default),
-                        "column": pp.column,
-                    }
-                }
-            )
+            per_parent: dict[str, Any] = {
+                "parent": pp.parent,
+                "count": list(pp.count),
+                "default": list(pp.default),
+            }
+            # Unset options are left out, so exported files stay short.
+            if where is not None:
+                per_parent["where"] = where
+            if pp.column is not None:
+                per_parent["column"] = pp.column
+            entries.append({"per_parent": per_parent})
         tables[table.name] = entries
     return {
         "version": 1,

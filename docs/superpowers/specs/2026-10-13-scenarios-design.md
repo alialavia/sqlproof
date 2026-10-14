@@ -1,6 +1,6 @@
 # Scenarios: declarative, reproducible database states
 
-**Status:** phase 1 implemented (experimental); later phases draft.
+**Status:** phases 1 and 2 implemented (experimental); phases 3 and 4 draft.
 **Date:** 2026-10-13
 **Builds on:** bulk generation (`2026-09-03-function-scale-analysis-design.md`,
 Phase 1, shipped in 0.11.0) and per-column overrides (#107).
@@ -169,6 +169,8 @@ tables:
     - cohort: 3
       set: {tier: 2}
     - fill: 20
+    - row: acme            # a named row: {ref: acme} elsewhere
+      set: {tier: 1}
   public.invoices:
     - per_parent:
         parent: public.customers
@@ -179,6 +181,28 @@ tables:
 
 Unknown top-level keys are rejected, except under `x-*`, which tools
 building on scenarios may use for their own settings.
+
+### Phase 2 as implemented
+
+- `Scenario.to_dict()` writes this form and `Scenario.from_dict()` reads
+  it (`sqlproof.scenarios.serialize`). A named row is `{row: <name>}`,
+  so in this form a column called `name` can be pinned on a named row.
+  Unset `per_parent` options (`where`, `column`) are left out.
+- Non-JSON pinned values are written as the strings Postgres reads:
+  dates and times in ISO 8601, decimals and UUIDs as text. The
+  fingerprint is computed from this same form, so a Python scenario and
+  its export have the same fingerprint and load the same rows.
+- Files: one scenario per `*.scenario.yaml`, `*.scenario.yml` or
+  `*.scenario.json`, discovered next to `*_scenarios.py`; names are
+  unique across both. YAML needs the `yaml` extra (PyYAML); JSON needs
+  nothing.
+- The parser checks every rule itself and names the path of what it
+  rejects (`$.tables['customers'][1].cohort must be an integer`). The
+  JSON Schema is for editors; it ships in the package and is served at
+  `https://sqlproof.com/schemas/scenario-v1.json`, and a test keeps the
+  two copies identical.
+- `sqlproof scenarios export NAME [--format yaml|json] [--output PATH]`.
+- A clock without a timezone is UTC, in Python and in files.
 
 ## Compilation
 
@@ -307,7 +331,9 @@ release, since scenarios make it a supported path anyway.
 - **MCP.** A `load_scenario` tool taking the serializable form and a
   DSN, and a `compile_scenario` tool that returns sizes and refs without
   touching a database. Agents describe states; they do not write seed
-  SQL.
+  SQL. `load_scenario` has no truncate option: it refuses tables that
+  hold rows, and emptying them is left to a person. Its errors are
+  scrubbed of the connection string and password. (Phase 2.)
 - **Counterexamples.** A shrunk counterexample can be exported as a
   scenario (`sqlproof replay FILE --as-scenario`), so a failure can be
   reloaded as a database with `scenarios up`.

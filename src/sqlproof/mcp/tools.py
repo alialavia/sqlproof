@@ -27,8 +27,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from sqlproof._dsn import conninfo_to_dict
 from sqlproof.generators.graph import dataset_strategy
 from sqlproof.generators.sampling import draw_example
+from sqlproof.scenarios.model import Scenario
 from sqlproof.schema.model import (
     CheckConstraint,
     Column,
@@ -246,7 +248,138 @@ def list_recipes() -> list[dict[str, Any]]:
                 "    proof.run_state_machine(<Subject>Machine)\n"
             ),
         },
+        {
+            "name": "scenario",
+            "summary": (
+                "A seeded, reproducible database state for a dev database, "
+                "preview branch, end-to-end test or bug report: pin the rows "
+                "the case depends on, generate the rest from the seed. Not "
+                "for property tests. Check it with compile_scenario, load it "
+                "with load_scenario (never deletes rows; refuses tables that "
+                "hold some). The template is the JSON both tools take."
+            ),
+            "template": (
+                "{\n"
+                '  "version": 1,\n'
+                '  "name": "<scenario_name>",\n'
+                '  "seed": 42,\n'
+                '  "tables": {\n'
+                '    "<parent_table>": [\n'
+                '      {"row": "<row_name>", "set": {"<column>": "<value>"}},\n'
+                '      {"cohort": 2, "set": {"<column>": "<value>"}},\n'
+                '      {"fill": 10}\n'
+                "    ],\n"
+                '    "<child_table>": [\n'
+                '      {"per_parent": {"parent": "<parent_table>",\n'
+                '                      "where": {"ref": "<row_name>"}, "count": [1, 5]}}\n'
+                "    ]\n"
+                "  }\n"
+                "}\n"
+            ),
+        },
     ]
+
+
+def compile_scenario(*, scenario: dict[str, Any], schema_sql: str) -> dict[str, Any]:
+    """Check a scenario against a schema without touching a database.
+
+    ``scenario`` is the serialized form (``version: 1``; see
+    ``sqlproof.scenarios.serialize``). Returns what a load would write::
+
+        {
+            "status": "ok",
+            "scenario": "tiered_customers",
+            "fingerprint": "...",
+            "rows": {"public.customers": 25, ...},
+            "refs": {"acme": 1, ...},
+            "nondeterministic_defaults": [...]
+        }
+
+    Every problem a load would hit before writing -- unknown tables or
+    columns, values that break a constraint, references to undeclared
+    rows -- comes back as ``{"status": "error", ...}`` here instead.
+    """
+    try:
+        schema = parse_schema_sql(schema_sql, schema="public")
+        compiled = Scenario.from_dict(scenario).compile(schema)
+    except Exception as exc:
+        return _error(exc)
+    rows: dict[str, int] = {}
+    if compiled.auth_users:
+        rows["auth.users"] = len(compiled.auth_users)
+    rows.update(compiled.sizes)
+    return {
+        "status": "ok",
+        "scenario": compiled.name,
+        "seed": compiled.seed,
+        "clock": compiled.clock.isoformat(),
+        "fingerprint": compiled.fingerprint,
+        "schema_fingerprint": compiled.schema_fingerprint,
+        "rows": rows,
+        "refs": {name: _json_scalar(value) for name, value in compiled.refs.items()},
+        "nondeterministic_defaults": list(compiled.nondeterministic_defaults),
+    }
+
+
+def load_scenario(*, scenario: dict[str, Any], dsn: str, schema: str = "public") -> dict[str, Any]:
+    """Load a scenario into the database at ``dsn``, in one transaction.
+
+    Never deletes anything: if a modelled table already holds rows, the
+    load refuses and changes nothing. Emptying the tables is left to a
+    person (``sqlproof scenarios up --truncate-existing``).
+
+    Returns ``{"status": "ok", "rows": {...}, "refs": {...}, ...}`` or a
+    structured error. Error text never contains the connection string
+    or its password.
+    """
+    try:
+        report = Scenario.from_dict(scenario).load(dsn, schema=schema)
+    except Exception as exc:
+        result = _error(exc, secrets=_dsn_secrets(dsn))
+        if "refused to load" in result["error"]:
+            result["hint"] = (
+                "This tool never deletes rows. Ask the user to empty these tables, "
+                "or to run `sqlproof scenarios up --truncate-existing` themselves."
+            )
+        return result
+    return {
+        "status": "ok",
+        "scenario": report.scenario,
+        "seed": report.seed,
+        "fingerprint": report.fingerprint,
+        "schema_fingerprint": report.schema_fingerprint,
+        "rows": report.rows,
+        "auth_users": report.auth_users,
+        "refs": {name: _json_scalar(value) for name, value in report.refs.items()},
+        "nondeterministic_defaults": list(report.nondeterministic_defaults),
+        "sqlproof_version": report.sqlproof_version,
+    }
+
+
+def _error(exc: Exception, *, secrets: tuple[str, ...] = ()) -> dict[str, Any]:
+    message = str(exc)
+    for secret in secrets:
+        message = message.replace(secret, "***")
+    return {"status": "error", "error": message, "error_kind": type(exc).__name__}
+
+
+def _dsn_secrets(dsn: str) -> tuple[str, ...]:
+    """The connection string and its password, longest first, to scrub
+    from error text."""
+    secrets = [dsn]
+    try:
+        password = conninfo_to_dict(dsn).get("password")
+    except Exception:
+        password = None
+    if password:
+        secrets.append(password)
+    return tuple(sorted({s for s in secrets if s}, key=len, reverse=True))
+
+
+def _json_scalar(value: Any) -> Any:
+    if value is None or isinstance(value, str | int | float | bool):
+        return value
+    return str(value)
 
 
 # ---------------------------------------------------------------------------
