@@ -16,6 +16,12 @@ Tools exposed in v1 (see ``sqlproof.mcp.tools``):
   property against generated datasets, return ok or counterexample.
 - ``list_recipes()`` — enumerate the named test patterns (RLS, RPC,
   stateful) the agent can ask for.
+- ``compile_scenario(scenario, schema_sql)`` — check a serialized
+  scenario against a schema and report the rows and keys a load would
+  write, without a database.
+- ``load_scenario(scenario, dsn, schema)`` — load a scenario into a
+  database in one transaction. Never deletes rows: refuses tables that
+  already hold some.
 
 The server transport is stdio. Users add it to their MCP client
 config (Claude Desktop, Cursor, Cline, Claude Code, etc.) via

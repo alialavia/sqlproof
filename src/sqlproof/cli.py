@@ -64,6 +64,12 @@ def main(argv: list[str] | None = None) -> int:
     source.add_argument("--schema-file", type=Path)
     source.add_argument("--dsn")
     scenarios_show.add_argument("--format", choices=["json", "text"], default="text")
+    scenarios_export = scenarios_sub.add_parser(
+        "export", help="print a scenario in its serialized YAML or JSON form"
+    )
+    scenarios_export.add_argument("name")
+    scenarios_export.add_argument("--format", choices=["yaml", "json"], default="yaml")
+    scenarios_export.add_argument("--output", type=Path)
     scenarios_up = scenarios_sub.add_parser("up")
     scenarios_up.add_argument("name")
     scenarios_up.add_argument("--dsn", required=True)
@@ -72,7 +78,7 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="DESTRUCTIVE: delete the rows of every modelled table before loading",
     )
-    for sub in (scenarios_list, scenarios_show, scenarios_up):
+    for sub in (scenarios_list, scenarios_show, scenarios_export, scenarios_up):
         sub.add_argument("--dir", type=Path, default=Path("scenarios"))
     for sub in (scenarios_show, scenarios_up):
         sub.add_argument("--schema", default="public")
@@ -229,6 +235,16 @@ def _scenarios(args: argparse.Namespace) -> int:
             print(f"{scenario.name}\tseed={scenario.seed}\t{scenario.source}")
         return 0
     scenario = find(args.name, args.dir)
+    if args.scenarios_command == "export":
+        from sqlproof.scenarios.serialize import dumps
+
+        text = dumps(scenario, args.format)
+        if args.output is None:
+            print(text, end="")
+        else:
+            args.output.write_text(text, encoding="utf-8")
+            print(f"wrote {args.output}")
+        return 0
     if args.scenarios_command == "show":
         if args.schema_file is not None:
             schema = parse_schema_sql(

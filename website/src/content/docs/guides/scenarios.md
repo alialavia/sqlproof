@@ -98,6 +98,90 @@ the scenario name, seed and row index, and their emails are
 `sqlproof+<scenario>+<index>@test.invalid`. A foreign key into
 `auth.users` that you do not pin is assigned one of the scenario's users.
 
+## YAML and JSON scenarios
+
+A scenario does not need Python. Put it in a `*.scenario.yaml` (or
+`.yml`, or `*.scenario.json`) file in the scenarios directory, one per
+file, and every `sqlproof scenarios` command finds it:
+
+```yaml
+# scenarios/tiered_customers.scenario.yaml
+# yaml-language-server: $schema=https://sqlproof.com/schemas/scenario-v1.json
+version: 1
+name: tiered_customers
+seed: 42
+tables:
+  auth.users:
+    - row: alice
+    - fill: 2
+  customers:
+    - row: acme
+      set: {tier: 1, owner_id: {ref: alice}}
+    - cohort: 2
+      set: {tier: 1}
+    - cohort: 3
+      set: {tier: 2}
+    - fill: 20
+  invoices:
+    - per_parent:
+        parent: customers
+        where: {tier: 1}
+        count: [5, 10]
+        default: [0, 2]
+```
+
+| Python | YAML |
+| --- | --- |
+| `.cohort(2, tier=1)` | `- cohort: 2` with `set: {tier: 1}` |
+| `.fill(20)` | `- fill: 20` |
+| `s.row("t", name="acme", tier=1)` | `- row: acme` with `set: {tier: 1}` |
+| `s.ref("alice")` | `{ref: alice}` |
+| `.per_parent("p", where=..., count=(5, 10))` | `- per_parent: {parent: p, where: ..., count: [5, 10]}` |
+| `@scenario(seed=42, clock=...)` | `seed: 42`, `clock: 2026-01-01T00:00:00Z` |
+
+YAML needs PyYAML: `pip install "sqlproof[yaml]"`. JSON files need
+nothing extra. A TypeScript project can run the CLI without adding
+Python to the project: `uvx --from "sqlproof[yaml]" sqlproof scenarios up
+tiered_customers --dsn "$DATABASE_URL"`.
+
+Values are scalars Postgres can read, or `{ref: <row name>}`. Pin a
+`json` or array column as a string. Keys starting with `x-` at the top
+level are left for other tools and do not change the scenario.
+
+The JSON Schema at
+[`/schemas/scenario-v1.json`](https://sqlproof.com/schemas/scenario-v1.json)
+gives editors completion and checks; the comment on the second line of
+the example turns it on in VS Code's YAML extension. The CLI checks the
+same rules and names the path of anything it rejects, such as
+`$.tables['customers'][1].cohort must be an integer`.
+
+### Exporting a Python scenario
+
+```bash
+sqlproof scenarios export tiered_customers               # YAML to stdout
+sqlproof scenarios export tiered_customers --format json --output tiered.scenario.json
+```
+
+An export is the same scenario: same fingerprint, same rows. Dates,
+decimals and UUIDs are written as the strings Postgres reads. A scenario
+that pins a callable cannot be exported.
+
+## For agents: MCP tools
+
+The `sqlproof-mcp` server has two scenario tools, so an agent can
+describe the database state it needs instead of writing seed SQL. Add it
+to your MCP client with `uvx --from "sqlproof[mcp]" sqlproof-mcp`. Both
+tools take the scenario as a JSON object in the form above:
+
+- `compile_scenario(scenario, schema_sql)` checks the scenario against
+  the schema and returns the rows per table and the key of every named
+  row. It touches no database.
+- `load_scenario(scenario, dsn, schema="public")` loads it. It never
+  deletes anything: if a table already holds rows it refuses, and
+  emptying the tables is left to a person
+  (`sqlproof scenarios up --truncate-existing`). Error messages never
+  include the connection string or its password.
+
 ## Loading
 
 ```python
@@ -155,11 +239,12 @@ table, and child rows whose required parent table would be empty.
   and takes one `per_parent`.
 - `auth.users` is the only table outside the loaded schema a scenario
   can seed.
-- `s.row()` takes the row name as `name=`, so a column called `name`
-  cannot be pinned on a named row. Pin it with `cohort(1, name=...)`.
-- Scenarios are Python only. A serializable YAML/JSON form, scenarios as
-  Hypothesis strategies, and scenarios as the base of a
-  [scale analysis](/guides/scale-analysis/) are planned.
+- In Python, `s.row()` takes the row name as `name=`, so a column called
+  `name` cannot be pinned on a named row. Pin it with
+  `cohort(1, name=...)`, or write the scenario in YAML, where `row:` and
+  `set: {name: ...}` do not collide.
+- Scenarios as Hypothesis strategies, and as the base of a
+  [scale analysis](/guides/scale-analysis/), are planned.
 
 ## Using `load_dataset` directly
 

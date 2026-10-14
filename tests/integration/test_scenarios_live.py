@@ -229,3 +229,37 @@ def test_cli_list_show_and_up(
 
 def test_scenario_is_importable_as_a_type() -> None:
     assert isinstance(tiered, Scenario)
+
+
+def test_an_exported_scenario_loads_the_same_rows(empty: str) -> None:
+    """The serialized form is the same scenario: loading the YAML export
+    writes exactly what the Python definition writes."""
+    from sqlproof.scenarios.serialize import dumps, load_file
+
+    tiered.load(empty)
+    expected = _dump(empty)
+    with database.connect(empty, autocommit=True) as connection:
+        connection.execute("TRUNCATE public.invoices, public.customers, auth.users CASCADE")
+
+    path = Path(empty.rsplit("/", 1)[-1] + ".scenario.yaml")
+    try:
+        path.write_text(dumps(tiered, "yaml"), encoding="utf-8")
+        load_file(path).load(empty)
+    finally:
+        path.unlink(missing_ok=True)
+    assert _dump(empty) == expected
+
+
+def test_mcp_load_scenario_loads_and_never_truncates(empty: str) -> None:
+    from sqlproof.mcp.tools import load_scenario
+
+    result = load_scenario(scenario=tiered.to_dict(), dsn=empty)
+    assert result["status"] == "ok", result
+    assert result["rows"]["public.customers"] == 10
+    assert result["auth_users"] == 3
+    loaded = _dump(empty)
+
+    again = load_scenario(scenario=tiered.to_dict(), dsn=empty)
+    assert again["status"] == "error"
+    assert "never deletes rows" in again["hint"]
+    assert _dump(empty) == loaded

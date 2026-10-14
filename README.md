@@ -214,7 +214,8 @@ Cursor, SqlProof was made for that workflow:
   Claude Code / Cursor plugin that teaches the agent how to drive SqlProof
   end-to-end.
 - **[`sqlproof-mcp`](./src/sqlproof/mcp/)** — an MCP server exposing schema
-  introspection and property generation as agent tools.
+  introspection, data generation and [scenarios](https://sqlproof.com/guides/scenarios/)
+  as agent tools.
 - **[Inbox sample](./examples/inbox/)** — a multi-tenant Supabase app
   (organizations, tickets, agents, messages, pgvector embeddings) with 10
   intentional bugs across RLS, RPCs, and triggers, each paired with a property

@@ -77,7 +77,9 @@ def _build_server() -> Any:
             "produce one valid example dataset that respects every "
             "FK/CHECK/UNIQUE/NOT NULL in the schema. Use `list_recipes` "
             "to discover the canonical test patterns (RLS, RPC, stateful) "
-            "and get template code for each."
+            "and get template code for each. Use `compile_scenario` and "
+            "`load_scenario` to describe a seeded database state (pinned rows "
+            "plus generated filler) instead of writing seed SQL."
         ),
     )
 
@@ -118,6 +120,36 @@ def _build_server() -> Any:
         explore.
         """
         return tools.generate_dataset(schema_sql=schema_sql, sizes=sizes)
+
+    @mcp.tool()
+    def compile_scenario(  # pragma: no cover
+        scenario: dict[str, Any], schema_sql: str
+    ) -> dict[str, Any]:
+        """Check a scenario against a schema; touches no database.
+
+        `scenario` is a version 1 scenario: {"version": 1, "name",
+        "seed", "tables": {table: [row groups]}}, where a row group is
+        {"cohort": n, "set": {column: value}}, {"fill": n},
+        {"row": "<name>", "set": {...}} or {"per_parent": {"parent",
+        "where", "count", "default"}}, and a value may be
+        {"ref": "<row name>"}. Returns the rows per table and the key of
+        every named row, or the first problem a load would hit.
+        """
+        return tools.compile_scenario(scenario=scenario, schema_sql=schema_sql)
+
+    @mcp.tool()
+    def load_scenario(  # pragma: no cover
+        scenario: dict[str, Any], dsn: str, schema: str = "public"
+    ) -> dict[str, Any]:
+        """Load a version 1 scenario into the Postgres database at `dsn`.
+
+        Describe the database state you need instead of writing seed
+        SQL; the same scenario loads the same rows every time. Runs in
+        one transaction and never deletes anything: it refuses if a
+        table it models already holds rows. Run `compile_scenario`
+        first to catch mistakes without a database.
+        """
+        return tools.load_scenario(scenario=scenario, dsn=dsn, schema=schema)
 
     @mcp.tool()
     def list_recipes() -> list[dict[str, Any]]:  # pragma: no cover

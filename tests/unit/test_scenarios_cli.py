@@ -123,3 +123,78 @@ def test_cli_reports_scenario_errors(project: Path, capsys: pytest.CaptureFixtur
     args = ["scenarios", "show", "ghost", "--dir", str(project / "scenarios")]
     assert main([*args, "--schema-file", str(project / "schema.sql")]) == 2
     assert "error: No scenario named 'ghost'" in capsys.readouterr().err
+
+
+def test_yaml_and_json_scenario_files_are_discovered(project: Path) -> None:
+    _write(
+        project / "scenarios",
+        "seeded.scenario.yaml",
+        """
+        version: 1
+        name: seeded
+        seed: 9
+        tables:
+          customers:
+            - cohort: 2
+              set: {tier: 3}
+        """,
+    )
+    _write(
+        project / "scenarios" / "nested",
+        "json.scenario.json",
+        '{"version": 1, "name": "from_json", "seed": 2, "tables": {"customers": [{"fill": 1}]}}',
+    )
+    found = {s.name: s for s in discover(project / "scenarios")}
+    assert sorted(found) == ["blank", "from_json", "seeded", "tiered"]
+    assert found["seeded"].source is not None
+    assert found["seeded"].source.endswith("seeded.scenario.yaml")
+
+
+def test_a_name_defined_in_python_and_yaml_is_a_duplicate(project: Path) -> None:
+    _write(
+        project / "scenarios",
+        "tiered.scenario.yaml",
+        "version: 1\nname: tiered\nseed: 1\ntables: {}\n",
+    )
+    with pytest.raises(SqlProofScenarioError, match="'tiered' is defined twice"):
+        discover(project / "scenarios")
+
+
+def test_cli_export_round_trips(project: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    directory = project / "scenarios"
+    assert main(["scenarios", "export", "tiered", "--dir", str(directory)]) == 0
+    exported = capsys.readouterr().out
+    assert exported.startswith("version: 1\nname: tiered\nseed: 5\n")
+    assert "- row: first" in exported
+
+    # Moved into a YAML file, it is the same scenario.
+    original = find("tiered", directory)
+    (directory / "billing_scenarios.py").unlink()
+    (directory / "tiered.scenario.yaml").write_text(exported, encoding="utf-8")
+    assert find("tiered", directory).fingerprint == original.fingerprint
+
+
+def test_cli_export_json_to_a_file(project: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    output = project / "out" / "tiered.scenario.json"
+    output.parent.mkdir()
+    args = ["scenarios", "export", "tiered", "--dir", str(project / "scenarios")]
+    assert main([*args, "--format", "json", "--output", str(output)]) == 0
+    assert f"wrote {output}" in capsys.readouterr().out
+    assert json.loads(output.read_text(encoding="utf-8"))["name"] == "tiered"
+
+
+def test_cli_export_refuses_callables(project: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    _write(
+        project / "scenarios",
+        "code_scenarios.py",
+        """
+        from sqlproof.scenarios import scenario
+
+        @scenario(seed=1)
+        def coded(s):
+            s.table("customers").cohort(1, tier=lambda ctx: 1)
+        """,
+    )
+    args = ["scenarios", "export", "coded", "--dir", str(project / "scenarios")]
+    assert main(args) == 2
+    assert "pinned to a callable" in capsys.readouterr().err
