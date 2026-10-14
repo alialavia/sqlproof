@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from sqlproof.mutation.result import MutantOutcome, MutationResult
     from sqlproof.mutation.runner import run_mutation_tests
     from sqlproof.runners import sqlproof
+    from sqlproof.scale.load import load_dataset
     from sqlproof.surface import DriftReport, SurfaceRegistry, SurfaceRegistryDrift
 
 __all__ = [
@@ -29,6 +30,7 @@ __all__ = [
     "SurfaceRegistry",
     "SurfaceRegistryDrift",
     "__version__",
+    "load_dataset",
     "run_mutation_tests",
     "sqlproof",
 ]
@@ -67,6 +69,10 @@ def __getattr__(name: str) -> object:
         from sqlproof.mutation import result
 
         return getattr(result, name)
+    if name == "load_dataset":
+        from sqlproof.scale.load import load_dataset
+
+        return load_dataset
     if name == "run_mutation_tests":
         from sqlproof.mutation.runner import run_mutation_tests
 

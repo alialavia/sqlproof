@@ -184,6 +184,23 @@ def _initial_edges(
     return tuple(edges)
 
 
+def _indegree_and_dependents(
+    tables: tuple[Table, ...],
+    edges: tuple[tuple[str, ForeignKey], ...],
+) -> tuple[dict[str, int], dict[str, set[str]]]:
+    """In-degree counts distinct parent TABLES, not foreign keys: draining
+    a parent decrements each dependent once, so a table with two foreign
+    keys into the same parent (lender_id and borrower_id, both into
+    people) would otherwise never reach zero and be reported as a cycle."""
+    parents: dict[str, set[str]] = defaultdict(set)
+    dependents: dict[str, set[str]] = defaultdict(set)
+    for source, fk in edges:
+        parents[source].add(fk.referenced_table)
+        dependents[fk.referenced_table].add(source)
+    indegree = {table.name: len(parents[table.name]) for table in tables}
+    return indegree, dependents
+
+
 def _try_topo_sort(
     tables: tuple[Table, ...],
     edges: tuple[tuple[str, ForeignKey], ...],
@@ -191,12 +208,7 @@ def _try_topo_sort(
 ) -> tuple[Table, ...] | None:
     """Run Kahn's algorithm. Return the ordered tables if it
     succeeds, ``None`` if a cycle blocks completion."""
-    indegree: dict[str, int] = {table.name: 0 for table in tables}
-    dependents: dict[str, set[str]] = defaultdict(set)
-
-    for source, fk in edges:
-        indegree[source] += 1
-        dependents[fk.referenced_table].add(source)
+    indegree, dependents = _indegree_and_dependents(tables, edges)
 
     ready = deque(sorted(name for name in indegree if indegree[name] == 0))
     ordered: list[Table] = []
@@ -262,11 +274,7 @@ def _tables_in_unprocessed_set(
     subgraph (i.e. didn't get drained by Kahn's algorithm). Used to
     constrain the deferrable-edge search to actual cycles, ignoring
     edges that would have resolved on their own."""
-    indegree: dict[str, int] = {table.name: 0 for table in tables}
-    dependents: dict[str, set[str]] = defaultdict(set)
-    for source, fk in edges:
-        indegree[source] += 1
-        dependents[fk.referenced_table].add(source)
+    indegree, dependents = _indegree_and_dependents(tables, edges)
 
     ready = deque(name for name in indegree if indegree[name] == 0)
     processed: set[str] = set()

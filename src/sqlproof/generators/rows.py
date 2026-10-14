@@ -4,6 +4,7 @@ import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from decimal import Decimal
+from enum import Enum
 from typing import Any
 from uuid import UUID
 
@@ -18,6 +19,20 @@ from sqlproof.schema.model import CheckConstraint, Column, ForeignKey, Table
 
 DatasetRows = dict[str, list[dict[str, Any]]]
 ColumnOverrides = Mapping[str, Any]
+
+
+class _Generate(Enum):
+    GENERATE = "GENERATE"
+
+    def __repr__(self) -> str:
+        return "GENERATE"
+
+
+GENERATE = _Generate.GENERATE
+"""Return this from a callable `columns=` override to mean "generate this
+value as if the column had no override". Both generators honour it, so a
+caller can pin a column for some rows and leave the rest to the
+generator -- which is how scenario cohorts compile."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,6 +117,25 @@ def table_rows_strategy(
     # that touches one of them may be violated, so say so.
     warn_unhonored_checks(table, unhonored_scope, refined_by_column)
 
+    def refined_strategy(column: Column) -> SearchStrategy[Any]:
+        """The column's CHECK-refined strategy, built on first use for a
+        column the hoist above skipped because it carries an override:
+        only an override that returns `GENERATE` ever needs it, and an
+        always-pinned column must never reach `strategy_for_column`."""
+        strategy = refined_by_column.get(column.name)
+        if strategy is None:
+            domain_checks = _domain_checks_as_column_checks(column)
+            strategy = refine_for_checks(
+                column,
+                strategy_for_column(column),
+                table.check_constraints + domain_checks,
+            )
+            refined_by_column[column.name] = strategy
+            warn_unhonored_checks(
+                table, list(table.check_constraints) + list(domain_checks), [column.name]
+            )
+        return strategy
+
     # Loop-invariant: one sampled_from per FK column, not per row.
     # Constructing it per row is O(len(parents)) each time.
     parent_strategy_by_column: dict[str, SearchStrategy[dict[str, Any]]] = {}
@@ -150,8 +184,10 @@ def table_rows_strategy(
                         table_rows=generated,
                         rows_by_table=rows_by_table,
                     )
-                    row[column.name] = _draw_override(draw, override, context)
-                    continue
+                    value = _draw_override(draw, override, context)
+                    if value is not GENERATE:
+                        row[column.name] = value
+                        continue
                 if column.default is not None:
                     continue
                 fk = _foreign_key_for_column(table, column.name)
@@ -173,8 +209,7 @@ def table_rows_strategy(
                 if _is_single_column_unique(table, column.name):
                     row[column.name] = _unique_value(column.name, column.type.name, index)
                     continue
-                strategy = refined_by_column[column.name]
-                row[column.name] = draw(strategy)
+                row[column.name] = draw(refined_strategy(column))
 
             # Composite uniqueness check. SQL's standard UNIQUE
             # semantics treat NULL as distinct (no two NULLs collide),

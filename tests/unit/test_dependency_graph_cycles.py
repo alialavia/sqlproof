@@ -499,3 +499,25 @@ def test_resolve_is_pure_and_returns_insertion_plan(tables: tuple[Table, ...]) -
     assert isinstance(plan_a, InsertionPlan)
     assert [t.name for t in plan_a.ordered_tables] == [t.name for t in plan_b.ordered_tables]
     assert plan_a.deferred_edges == plan_b.deferred_edges
+
+
+def test_two_foreign_keys_into_the_same_parent_are_not_a_cycle() -> None:
+    """Regression: in-degree counted foreign keys while draining a parent
+    decremented once per dependent table, so a table with two FKs into one
+    parent was reported as a circular dependency."""
+    from sqlproof.schema.dependency_graph import resolve_insertion_plan
+    from sqlproof.schema.parse_sql import parse_schema_sql
+
+    schema = parse_schema_sql(
+        """
+        CREATE TABLE people (id bigint PRIMARY KEY);
+        CREATE TABLE loans (
+          id bigint PRIMARY KEY,
+          lender_id bigint NOT NULL REFERENCES people(id),
+          borrower_id bigint NOT NULL REFERENCES people(id)
+        );
+        """
+    )
+    plan = resolve_insertion_plan(schema.tables)
+    assert [t.name for t in plan.ordered_tables] == ["people", "loans"]
+    assert plan.deferred_edges == ()

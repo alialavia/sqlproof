@@ -7,7 +7,7 @@ from hypothesis import strategies as st
 from hypothesis.strategies import SearchStrategy
 
 from sqlproof.schema.dependency_graph import resolve_insertion_plan
-from sqlproof.schema.model import SchemaInfo
+from sqlproof.schema.model import SchemaInfo, Table
 
 from .rows import ColumnOverrides, table_rows_strategy
 
@@ -39,7 +39,7 @@ def dataset_strategy(
     def dataset(draw: st.DrawFn) -> Dataset:
         rows_by_table: Dataset = {}
         for table in ordered_tables:
-            count = _draw_size(draw, sizes.get(table.name, 0))
+            count = _draw_size(draw, _size_for(sizes, table))
             available_parent_rows = {**external_parent_rows, **rows_by_table}
             rows_by_table[table.name] = draw(
                 table_rows_strategy(
@@ -53,6 +53,14 @@ def dataset_strategy(
         return rows_by_table
 
     return dataset()
+
+
+def _size_for(sizes: Mapping[str, SizeSpec], table: Table) -> SizeSpec:
+    """The schema-qualified key wins over the bare table name, matching
+    the bulk loader's `size_for`."""
+    if table.qualified_name in sizes:
+        return sizes[table.qualified_name]
+    return sizes.get(table.name, 0)
 
 
 def _draw_size(draw: st.DrawFn, size: SizeSpec) -> int:

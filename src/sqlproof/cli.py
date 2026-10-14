@@ -53,6 +53,30 @@ def main(argv: list[str] | None = None) -> int:
     mutation_report.add_argument("--output", type=Path, default=Path("mutation-report.html"))
     mutation_report.add_argument("--open", action="store_true", dest="open_browser")
 
+    scenarios = subcommands.add_parser(
+        "scenarios", help="list, inspect and load seeded database scenarios (experimental)"
+    )
+    scenarios_sub = scenarios.add_subparsers(dest="scenarios_command", required=True)
+    scenarios_list = scenarios_sub.add_parser("list")
+    scenarios_show = scenarios_sub.add_parser("show")
+    scenarios_show.add_argument("name")
+    source = scenarios_show.add_mutually_exclusive_group(required=True)
+    source.add_argument("--schema-file", type=Path)
+    source.add_argument("--dsn")
+    scenarios_show.add_argument("--format", choices=["json", "text"], default="text")
+    scenarios_up = scenarios_sub.add_parser("up")
+    scenarios_up.add_argument("name")
+    scenarios_up.add_argument("--dsn", required=True)
+    scenarios_up.add_argument(
+        "--truncate-existing",
+        action="store_true",
+        help="DESTRUCTIVE: delete the rows of every modelled table before loading",
+    )
+    for sub in (scenarios_list, scenarios_show, scenarios_up):
+        sub.add_argument("--dir", type=Path, default=Path("scenarios"))
+    for sub in (scenarios_show, scenarios_up):
+        sub.add_argument("--schema", default="public")
+
     args = parser.parse_args(argv)
     if args.command == "version":
         print(f"sqlproof {__version__}")
@@ -105,6 +129,14 @@ def main(argv: list[str] | None = None) -> int:
         if args.mutation_command == "report":
             return _mutation_report(args.runs_dir, args.output, open_browser=args.open_browser)
         return 1
+    if args.command == "scenarios":
+        from sqlproof.exceptions import SqlProofScenarioError
+
+        try:
+            return _scenarios(args)
+        except SqlProofScenarioError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
     return 1
 
 
@@ -186,6 +218,65 @@ def _mutation_report(runs_dir: Path, output: Path, *, open_browser: bool) -> int
         import webbrowser
 
         webbrowser.open(output.resolve().as_uri())
+    return 0
+
+
+def _scenarios(args: argparse.Namespace) -> int:
+    from sqlproof.scenarios.discover import discover, find
+
+    if args.scenarios_command == "list":
+        for scenario in discover(args.dir):
+            print(f"{scenario.name}\tseed={scenario.seed}\t{scenario.source}")
+        return 0
+    scenario = find(args.name, args.dir)
+    if args.scenarios_command == "show":
+        if args.schema_file is not None:
+            schema = parse_schema_sql(
+                args.schema_file.read_text(encoding="utf-8"), schema=args.schema
+            )
+        else:
+            from sqlproof import _database as database
+            from sqlproof._database import dict_row
+            from sqlproof.schema.introspect import introspect_schema
+
+            with database.connect(str(args.dsn), row_factory=dict_row) as conn:
+                schema = introspect_schema(conn, schema=args.schema)
+        compiled = scenario.compile(schema)
+        payload: dict[str, object] = {
+            "scenario": compiled.name,
+            "seed": compiled.seed,
+            "clock": compiled.clock.isoformat(),
+            "fingerprint": compiled.fingerprint,
+            "schema_fingerprint": compiled.schema_fingerprint,
+            "rows": {"auth.users": len(compiled.auth_users)} if compiled.auth_users else {},
+            "refs": compiled.refs,
+            "nondeterministic_defaults": list(compiled.nondeterministic_defaults),
+        }
+        rows = cast("dict[str, int]", payload["rows"])
+        rows.update(compiled.sizes)
+        if args.format == "json":
+            print(json.dumps(payload, default=str))
+            return 0
+        print(f"{compiled.name} (seed {compiled.seed}, clock {compiled.clock.isoformat()})")
+        print(f"fingerprint {compiled.fingerprint[:12]}  schema {compiled.schema_fingerprint[:12]}")
+        for table, count in rows.items():
+            print(f"  {table}: {count} rows")
+        for ref, value in compiled.refs.items():
+            print(f"  ref {ref} = {value}")
+        for column in compiled.nondeterministic_defaults:
+            print(f"  warning: {column} has a default that is not reproducible")
+        return 0
+    report = scenario.load(
+        str(args.dsn), schema=args.schema, truncate_existing=args.truncate_existing
+    )
+    total = sum(report.rows.values()) + report.auth_users
+    print(f"loaded {report.scenario} (seed {report.seed}): {total} rows")
+    if report.auth_users:
+        print(f"  auth.users: {report.auth_users} rows")
+    for table, count in report.rows.items():
+        print(f"  {table}: {count} rows")
+    for column in report.nondeterministic_defaults:
+        print(f"  warning: {column} has a default that is not reproducible")
     return 0
 
 
