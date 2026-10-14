@@ -1,6 +1,6 @@
 # Scenarios: declarative, reproducible database states
 
-**Status:** draft, awaiting review.
+**Status:** phase 1 implemented (experimental); later phases draft.
 **Date:** 2026-10-13
 **Builds on:** bulk generation (`2026-09-03-function-scale-analysis-design.md`,
 Phase 1, shipped in 0.11.0) and per-column overrides (#107).
@@ -26,9 +26,13 @@ def empty_workspace(s):
     s.row("workspaces", name="acme", title="Acme")
     s.row("workspaces", name="initech", title="Initech")
     s.row("auth.users", name="alice")
-    s.row("workspace_members", user_id=s.ref("alice"), workspace_id=s.ref("acme"))
-    s.row("workspace_members", user_id=s.ref("alice"), workspace_id=s.ref("initech"))
-    s.table("workspace_documents").fill(10).never_under(s.ref("initech"))
+    members = s.table("workspace_members")
+    members.cohort(1, user_id=s.ref("alice"), workspace_id=s.ref("acme"))
+    members.cohort(1, user_id=s.ref("alice"), workspace_id=s.ref("initech"))
+    # Ten documents under acme, none under initech.
+    s.table("workspace_documents").per_parent(
+        "workspaces", where=s.ref("acme"), count=10
+    )
 ```
 
 ```bash
@@ -115,7 +119,7 @@ to zero.
 ```python
 from sqlproof.scenarios import scenario, Scenario
 
-@scenario(seed: int, *, name: str | None = None, schema: str = "public")
+@scenario(*, seed: int, name: str | None = None, clock: datetime | None = None)
 def build(s: ScenarioBuilder) -> None: ...
 
 class ScenarioBuilder:
@@ -127,14 +131,15 @@ class TableBuilder:
     def cohort(self, n: int, **pinned: object) -> TableBuilder: ...
     def fill(self, n: int) -> TableBuilder: ...
     def per_parent(self, parent: str, *, where: Mapping[str, object] | RowRef | None = None,
-                   count: int | tuple[int, int], default: int | tuple[int, int] = 0) -> TableBuilder: ...
-    def never_under(self, parent: RowRef) -> TableBuilder: ...
+                   count: int | tuple[int, int], default: int | tuple[int, int] = 0,
+                   column: str | None = None) -> TableBuilder: ...
 
 class Scenario:
     name: str
     seed: int
     def compile(self, schema: SchemaInfo) -> CompiledScenario: ...
-    def load(self, dsn: str, *, truncate_existing: bool = False) -> LoadReport: ...
+    def load(self, dsn: str, *, schema: str = "public",
+             truncate_existing: bool = False) -> LoadReport: ...
     def strategy(self, proof: SqlProof) -> SearchStrategy[Dataset]: ...
     def to_dict(self) -> dict[str, object]: ...   # the serializable form
 ```
@@ -332,6 +337,34 @@ how they would use this at all.
 
 Phase 1 alone already answers the original request: "2 Tier 1 users, 3
 Tier 2 users, the rest generated, the same every time".
+
+### Phase 1 as implemented
+
+Restrictions in phase 1, each a clear compile-time error:
+
+- A table sized by `per_parent` cannot also have cohorts, named rows or
+  fills, and a table takes one `per_parent` distribution. "Exclude a
+  parent" is `per_parent(where=..., count=0, default=...)`; the
+  `never_under` sketched in an earlier draft was dropped as redundant.
+- `where=` as a mapping matches parent rows whose *cohort pins* those
+  values. A fill row that happens to draw the same value gets
+  `default=`.
+- The only external table is `auth.users`, which takes `fill(n)` and
+  named rows but no pinned columns.
+- `row()` takes the row name as `name=`, so a column called `name`
+  cannot be pinned on a named row; pin it with `cohort(1, name=...)`.
+
+What `Scenario.load` adds beyond `load_dataset`: one transaction,
+refusal of non-empty tables (RLS-hidden rows included) unless
+`truncate_existing=True`, owned sequences reset before the load and set
+past the generated keys after it, `auth.users` rows inserted with ids
+derived from the scenario name, seed and index, then `ANALYZE`.
+
+This phase also fixes a pre-existing bug in the dependency graph: a
+table with two foreign keys into the same parent (`lender_id` and
+`borrower_id`, both into `people`) was reported as a circular
+dependency, because in-degree counted foreign keys while draining a
+parent decremented once per dependent table.
 
 ## Testing strategy
 

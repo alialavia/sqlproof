@@ -51,6 +51,12 @@ class SqlProofMutationError(SqlProofError):
     """Mutation testing: bad mutant definition, apply failure, or surviving mutants."""
 
 
+class SqlProofScenarioError(SqlProofUsageError):
+    """A scenario that cannot be compiled or loaded as written. Raised
+    before any database work wherever the problem is visible in the
+    scenario and schema alone."""
+
+
 class SqlProofScaleError(SqlProofError):
     """A scale measurement could not produce the answer that was asked
     for -- an inconclusive fit, or no stable plan regime. Raised rather

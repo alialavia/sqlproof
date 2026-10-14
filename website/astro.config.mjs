@@ -86,6 +86,7 @@ export default defineConfig({
             { label: 'Custom Generators', slug: 'guides/custom-generators' },
             { label: 'Mutation Testing', slug: 'guides/mutation-testing' },
             { label: 'Scale Analysis (experimental)', slug: 'guides/scale-analysis' },
+            { label: 'Scenarios (experimental)', slug: 'guides/scenarios' },
             { label: 'CI/CD Integration', slug: 'guides/ci-cd' },
             { label: 'Local Development', slug: 'guides/local-dev' },
             { label: 'Security & Credentials', slug: 'guides/security' },

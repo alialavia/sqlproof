@@ -32,6 +32,7 @@ from sqlproof.generators.narrowing import narrow_spec_for_checks
 # here would be the kind of drift this design exists to prevent, so we
 # reach across the module boundary deliberately rather than duplicate.
 from sqlproof.generators.rows import (
+    GENERATE,
     ColumnOverrides,
     _column_override,  # pyright: ignore[reportPrivateUsage]
     _domain_checks_as_column_checks,  # pyright: ignore[reportPrivateUsage]
@@ -626,24 +627,26 @@ def bulk_table_rows(
             continue
         if column.name in unique_names:
             continue
-        # Narrow the spec by this column's CHECK constraints (and any
-        # inherited from a domain) BEFORE building the sampler, so the
-        # values are in-range by construction rather than by rejection.
-        # sampler_for_column already handles nullability -- passing it
-        # the narrowed spec (rather than re-deriving null-wrapping here)
-        # keeps null handling in exactly one place.
-        spec, _nullable = spec_for_column(column)
-        domain_checks = _domain_checks_as_column_checks(column)
-        unhonored_scope.extend(domain_checks)
-        spec = narrow_spec_for_checks(
-            spec,
-            column,
-            table.check_constraints + domain_checks,
-        )
-        samplers[column.name] = sampler_for_column(
-            column, rng, null_frac=null_frac, spec=spec
+        samplers[column.name] = _narrowed_sampler(
+            table, column, rng, null_frac=null_frac, unhonored_scope=unhonored_scope
         )
     warn_unhonored_checks(table, unhonored_scope, samplers)
+
+    def sampler(column: Column) -> Callable[[], Any]:
+        """The column's sampler, built on first use for a column the loop
+        above skipped because it carries an override: only an override
+        that returns `GENERATE` needs one, and an always-pinned column
+        must never reach `spec_for_column`. Built from the same `rng`, so
+        the values stay a pure function of the seed."""
+        built = samplers.get(column.name)
+        if built is None:
+            scope: list[CheckConstraint] = list(table.check_constraints)
+            built = _narrowed_sampler(
+                table, column, rng, null_frac=null_frac, unhonored_scope=scope
+            )
+            samplers[column.name] = built
+            warn_unhonored_checks(table, scope, [column.name])
+        return built
 
     for index in range(count):
         row: dict[str, Any] = {}
@@ -669,13 +672,15 @@ def bulk_table_rows(
             if column.is_generated:
                 continue
             if name in override_map:
-                row[name] = _resolve_override(
+                value = _resolve_override(
                     override_map[name],
                     BulkColumnContext(
                         table=table, column_name=name, row_index=index, row=row
                     ),
                 )
-                continue
+                if value is not GENERATE:
+                    row[name] = value
+                    continue
             if column.default is not None:
                 continue
             fk = fk_map.get(name)
@@ -699,5 +704,31 @@ def bulk_table_rows(
             if name in unique_names:
                 row[name] = _unique_value(name, column.type.name, index)
                 continue
-            row[name] = samplers[name]()
+            row[name] = sampler(column)()
         yield row
+
+
+def _narrowed_sampler(
+    table: Table,
+    column: Column,
+    rng: random.Random,
+    *,
+    null_frac: float,
+    unhonored_scope: list[CheckConstraint],
+) -> Callable[[], Any]:
+    """A sampler for `column`, with its spec narrowed by the table's CHECK
+    constraints (and any inherited from a domain) BEFORE the sampler is
+    built, so values are in range by construction rather than by
+    rejection. sampler_for_column already handles nullability -- passing
+    it the narrowed spec (rather than re-deriving null-wrapping here)
+    keeps null handling in exactly one place. Appends the domain's checks
+    to `unhonored_scope` for the caller's warning pass."""
+    spec, _nullable = spec_for_column(column)
+    domain_checks = _domain_checks_as_column_checks(column)
+    unhonored_scope.extend(domain_checks)
+    spec = narrow_spec_for_checks(
+        spec,
+        column,
+        table.check_constraints + domain_checks,
+    )
+    return sampler_for_column(column, rng, null_frac=null_frac, spec=spec)

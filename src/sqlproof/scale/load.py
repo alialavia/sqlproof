@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import itertools
 import random
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from tempfile import SpooledTemporaryFile
 from typing import Any
 
@@ -42,6 +42,16 @@ from sqlproof.schema.model import SchemaInfo, Table
 
 def _quote(identifier: str) -> str:
     return '"' + identifier.replace('"', '""') + '"'
+
+
+def size_for(sizes: Mapping[str, int], table: Table) -> int:
+    """`table`'s row count in `sizes`: the schema-qualified key
+    (`"public.customers"`) when present, else the bare table name. The
+    qualified key lets two modelled tables that share a name in different
+    schemas be sized separately."""
+    if table.qualified_name in sizes:
+        return sizes[table.qualified_name]
+    return sizes.get(table.name, 0)
 
 
 def copy_table(
@@ -80,16 +90,29 @@ def copy_table(
     # Text chunks let PyGreSQL honor the connection's client encoding.
     with SpooledTemporaryFile(max_size=1024 * 1024, mode="w+t", encoding="utf-8") as stream:
         for row in rows:
-            values = (
-                database.copy_text(_adapt_copy_value(row.get(name), kind))
-                for name, kind in zip(column_names, wrap_kinds, strict=True)
-            )
-            stream.write("\t".join(values) + "\n")
+            stream.write(copy_line(row, column_names, wrap_kinds))
             written += 1
         stream.seek(0)
         with conn.cursor() as cur:
             cur.execute(copy_sql, stream=stream)
     return written
+
+
+def copy_line(
+    row: Mapping[str, Any], column_names: Sequence[str], wrap_kinds: Sequence[str | None]
+) -> str:
+    """One row in `COPY ... FROM STDIN` text format, exactly as `copy_table`
+    sends it. Public so a determinism check can hash the bytes a load
+    would send without a database."""
+    values = (
+        database.copy_text(_adapt_copy_value(row.get(name), kind))
+        for name, kind in zip(column_names, wrap_kinds, strict=True)
+    )
+    return "\t".join(values) + "\n"
+
+
+def column_wrap_kinds(table: Table, column_names: Sequence[str]) -> list[str | None]:
+    return [_column_wrap_kind(table, name) for name in column_names]
 
 
 def _column_wrap_kind(table: Table, column_name: str) -> str | None:
@@ -175,14 +198,15 @@ def missing_required_parents(
     loader matches them. A foreign key into a table outside the model is
     left to the loader and to Postgres.
     """
-    modelled = {table.name for table in schema.tables}
+    modelled = {table.name: table for table in schema.tables}
     missing: list[str] = []
     for table in schema.tables:
-        if sizes.get(table.name, 0) <= 0:
+        if size_for(sizes, table) <= 0:
             continue
         for fk in table.foreign_keys:
             parent = fk.referenced_table
-            if parent not in modelled or sizes.get(parent, 0) > 0:
+            parent_table = modelled.get(parent)
+            if parent_table is None or size_for(sizes, parent_table) > 0:
                 continue
             if all(not table.column(name).nullable for name in fk.columns):
                 missing.append(f"{table.name}.{', '.join(fk.columns)} -> {parent}")
@@ -205,28 +229,24 @@ def load_dataset(
     always land before children -- the same ordering the Hypothesis path
     uses.
 
+    `sizes` is keyed by table name, or by schema-qualified name
+    (`"public.customers"`), which wins when both are given.
+
     `columns` takes the same `"table.column"` keys as the Hypothesis
     path's `sqlproof(..., columns={...})`, so a caller pins a column the
     same way whichever generator produced the rows. The one difference
     is that a Hypothesis `SearchStrategy` is rejected here rather than
     drawn -- see `bulk._resolve_override`.
     """
-    plan = insertion_plan(schema)
-    rng = random.Random(seed)
     loaded: dict[str, int] = {}
-    for table in plan.ordered_tables:
-        count = sizes.get(table.name, 0)
-        if count <= 0:
-            continue
-        rows = bulk_table_rows(
-            table,
-            count=count,
-            rng=rng,
-            parent_counts=loaded,
-            distribution=distribution,
-            null_frac=null_frac,
-            columns=columns,
-        )
+    for table, rows in generate_dataset(
+        schema,
+        sizes,
+        seed=seed,
+        distribution=distribution,
+        null_frac=null_frac,
+        columns=columns,
+    ):
         # The column list is derived from a real row `bulk_table_rows`
         # produced, not re-filtered from `table.columns` independently.
         # A single-column primary key is assigned a value regardless
@@ -241,6 +261,44 @@ def load_dataset(
         all_rows = itertools.chain([first_row], rows)
         loaded[table.name] = copy_table(conn, table, all_rows, column_names)
     return loaded
+
+
+def generate_dataset(
+    schema: SchemaInfo,
+    sizes: Mapping[str, int],
+    *,
+    seed: int = 0,
+    distribution: str = "uniform",
+    null_frac: float = DEFAULT_NULL_FRAC,
+    columns: ColumnOverrides | None = None,
+) -> Iterator[tuple[Table, Iterator[dict[str, Any]]]]:
+    """The rows `load_dataset` loads, as `(table, rows)` in FK-safe order,
+    without a database.
+
+    Every table draws from one seeded RNG in turn, so a consumer must
+    exhaust each table's rows before asking for the next table -- exactly
+    what `load_dataset` does -- or the values change.
+    """
+    plan = insertion_plan(schema)
+    rng = random.Random(seed)
+    counts: dict[str, int] = {}
+    for table in plan.ordered_tables:
+        count = size_for(sizes, table)
+        if count <= 0:
+            continue
+        yield (
+            table,
+            bulk_table_rows(
+                table,
+                count=count,
+                rng=rng,
+                parent_counts=counts,
+                distribution=distribution,
+                null_frac=null_frac,
+                columns=columns,
+            ),
+        )
+        counts[table.name] = count
 
 
 def truncate(conn: database.Connection, schema: SchemaInfo) -> None:
