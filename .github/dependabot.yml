@@ -13,6 +13,11 @@ updates:
     cooldown:
       default-days: 7
     open-pull-requests-limit: 5
+    ignore:
+      # mcp 2.x removes mcp.server.fastmcp.FastMCP, which sqlproof's MCP
+      # server imports. Drop this once the server is ported (#142).
+      - dependency-name: mcp
+        update-types: ["version-update:semver-major"]
     labels:
       - dependencies
       - python
