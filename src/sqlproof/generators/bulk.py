@@ -661,6 +661,17 @@ def bulk_table_rows(
         for column in table.columns:
             name = column.name
             if name in key_values:
+                # A pinned key column wins, as on the Hypothesis path.
+                if name in override_map:
+                    value = _resolve_override(
+                        override_map[name],
+                        BulkColumnContext(
+                            table=table, column_name=name, row_index=index, row=row
+                        ),
+                    )
+                    if value is not GENERATE:
+                        row[name] = value
+                        continue
                 row[name] = key_values[name]
                 continue
             if name == single_pk:

@@ -75,10 +75,12 @@
       "additionalProperties": {"$ref": "#/$defs/value"}
     },
     "value": {
-      "description": "A literal Postgres can read, or a reference to a named row. Pin json and array columns as strings.",
-      "oneOf": [
+      "description": "A literal Postgres can read, a reference to a named row, a list (an array column) or an object (a json column). An object that is exactly {ref: <name>} is always a reference.",
+      "anyOf": [
         {"type": ["string", "number", "boolean", "null"]},
-        {"$ref": "#/$defs/ref"}
+        {"$ref": "#/$defs/ref"},
+        {"type": "array"},
+        {"type": "object"}
       ]
     },
     "ref": {

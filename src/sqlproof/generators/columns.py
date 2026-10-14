@@ -110,19 +110,19 @@ def _strategy_for_spec(spec: TypeSpec) -> SearchStrategy[Any]:
         # this is a known, accepted leak in the registry design, so
         # the recursion is hard-coded here rather than read from spec.
         json_scalar = (
-            st.none()
-            | st.booleans()
-            | st.floats(allow_nan=False, allow_infinity=False)
-            | _postgres_text()
+            st.booleans() | st.floats(allow_nan=False, allow_infinity=False) | _postgres_text()
         )
-        return st.recursive(
-            json_scalar,
-            lambda children: (
-                st.lists(children, max_size=5)
-                | st.dictionaries(_postgres_text(max_size=20), children, max_size=5)
-            ),
-            max_leaves=10,
-        )
+
+        def containers(children: st.SearchStrategy[Any]) -> st.SearchStrategy[Any]:
+            return st.lists(children, max_size=5) | st.dictionaries(
+                _postgres_text(max_size=20), children, max_size=5
+            )
+
+        # JSON null only inside a document: a top-level None is SQL NULL
+        # (the column's nullability decides that), so drawing it here put
+        # NULL into NOT NULL json columns.
+        nested = st.recursive(st.none() | json_scalar, containers, max_leaves=10)
+        return json_scalar | containers(nested)
     if spec.kind == "binary":
         return st.binary(
             min_size=spec.min_size or 0,

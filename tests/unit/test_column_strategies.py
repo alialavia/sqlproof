@@ -204,6 +204,9 @@ def test_jsonb_strategy_yields_json_serializable_structures(data) -> None:
 
     value = data.draw(strategy_for_type(_scalar("jsonb")))
     json.dumps(value)
+    # None is SQL NULL, which the column's nullability decides; JSON null
+    # only appears inside a document.
+    assert value is not None
 
 
 @NON_NULL_KW

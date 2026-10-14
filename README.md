@@ -276,7 +276,13 @@ with:
 sqlproof report .sqlproof/failures/test_name.json
 sqlproof report .sqlproof/failures/test_name.json --format json
 sqlproof replay .sqlproof/failures/test_name.json
+# Reload the failing rows into a database as a scenario:
+sqlproof replay .sqlproof/failures/test_name.json --as-scenario \
+  --schema-file schema.sql --output scenarios/failure.scenario.yaml
 ```
+
+Each counterexample records the seed it ran under; pass it back as
+`seed=` to repeat the search.
 
 ## Supported PostgreSQL types
 

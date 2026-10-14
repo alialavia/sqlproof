@@ -16,11 +16,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, time
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import UUID
 
 from sqlproof.exceptions import SqlProofScenarioError
@@ -427,6 +427,13 @@ def _normalize(spec: ScenarioSpec, *, strict: bool = False) -> dict[str, Any]:
             return v.isoformat()
         if isinstance(v, Decimal | UUID):
             return str(v)
+        # Arrays and json values: lists and mappings of the same.
+        if isinstance(v, list | tuple):
+            seq = cast("Sequence[Any]", v)
+            return [value(item, f"{where}[{i}]") for i, item in enumerate(seq)]
+        if isinstance(v, dict):
+            mapping = cast("dict[Any, Any]", v)  # type: ignore[redundant-cast]
+            return {str(k): value(item, f"{where}.{k}") for k, item in sorted(mapping.items())}
         if strict:
             msg = (
                 f"{where} is pinned to a {type(v).__name__}, which has no serialized "

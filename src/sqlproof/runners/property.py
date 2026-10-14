@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import inspect
+import random
 from collections.abc import Callable, Generator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, ParamSpec, TypeVar
 
 from hypothesis import HealthCheck, given, settings
+from hypothesis import seed as hypothesis_seed
 
 from sqlproof.exceptions import SqlProofPropertyFailure
 from sqlproof.generators.graph import ColumnOverrides, SizeSpec, dataset_strategy
@@ -62,8 +64,12 @@ def sqlproof(
         to counterexamples.
 
     Parameters not declared in the signature are not passed.
+
+    `seed` fixes Hypothesis's random choices. Without one, each run picks
+    a seed at random; either way the counterexample file records it, so
+    passing it back reproduces the same search.
     """
-    del seed, timeout_ms, commit
+    del timeout_ms, commit
 
     def decorate(function: Callable[..., None]) -> Callable[..., None]:
         def wrapped() -> None:
@@ -74,6 +80,7 @@ def sqlproof(
                 columns=columns,
                 runs=runs,
                 failure_dir=Path(failure_dir),
+                seed=seed,
             )
 
         wrapped.__name__ = function.__name__
@@ -91,6 +98,7 @@ def run_property(
     columns: ColumnOverrides | None = None,
     runs: int,
     failure_dir: Path,
+    seed: int | None = None,
 ) -> None:
     if hasattr(proof, "dataset_strategy"):
         strategy = proof.dataset_strategy(sizes=sizes, columns=columns)
@@ -100,7 +108,9 @@ def run_property(
     wants_check = "check" in signature.parameters
     wants_dataset = "dataset" in signature.parameters
     run_count = 0
+    run_seed = seed if seed is not None else random.SystemRandom().getrandbits(32)
 
+    @hypothesis_seed(run_seed)
     @given(strategy)
     @settings(
         max_examples=runs,
@@ -124,7 +134,7 @@ def run_property(
                 "$schema": "https://sqlproof.dev/schemas/counterexample-v1.json",
                 "version": 1,
                 "property_name": function.__name__,
-                "seed": None,
+                "seed": run_seed,
                 "runs": run_count,
                 "shrink_steps": 0,
                 "schema_fingerprint": proof.schema_fingerprint,

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import bisect
 import hashlib
+import json
 import random
 import re
 import uuid
@@ -303,7 +304,9 @@ def _check_pinnable(table: Table, column_name: str, where: str) -> Column:
         )
         raise SqlProofScenarioError(msg)
     column = table.column(column_name)
-    if column_name in table.primary_key:
+    # A composite key's columns are pinnable (a join table's keys are its
+    # references); keeping the pairs distinct is then the scenario's job.
+    if table.primary_key == (column_name,):
         msg = (
             f"{where}: {table.qualified_name}.{column_name} is part of the primary "
             "key, which the generator assigns; name the row with s.row(...) and "
@@ -613,6 +616,8 @@ def _check_unique_collisions(
     for group, value in zip(layout.groups, pinned, strict=True):
         if value is _UNSET or callable(value):
             continue
+        if isinstance(value, list | dict):
+            value = json.dumps(value, sort_keys=True, default=str)
         seen[value] = seen.get(value, 0) + group.count
         if seen[value] > 1:
             msg = (

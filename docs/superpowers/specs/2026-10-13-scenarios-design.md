@@ -1,6 +1,6 @@
 # Scenarios: declarative, reproducible database states
 
-**Status:** phases 1-3 implemented (experimental); phase 4 draft.
+**Status:** phases 1-4 implemented (experimental).
 **Date:** 2026-10-13
 **Builds on:** bulk generation (`2026-09-03-function-scale-analysis-design.md`,
 Phase 1, shipped in 0.11.0) and per-column overrides (#107).
@@ -387,6 +387,48 @@ Tier 2 users, the rest generated, the same every time".
 - The scenario's seed is the sweep's (a conflicting `seed=` is refused),
   `columns=` cannot be combined with a scenario, and the scenario's
   `auth.users` rows are removed when the sweep ends.
+
+### Phase 4 as implemented
+
+- **Reproducibility.** `sqlproof(..., seed=)` now seeds Hypothesis
+  (it was accepted and ignored). Without a seed, each run picks one at
+  random; either way the counterexample's `seed` field records it, so
+  the same seed repeats the same search. `sqlproof replay FILE` prints
+  it.
+- **`sqlproof replay FILE --as-scenario`** (`--schema-file` or `--dsn`,
+  `--name`, `--format`, `--output`) builds the scenario in
+  `sqlproof.scenarios.counterexample`. Each row becomes a pinned row:
+  named `<table>_<n>` when its table has a single-column key, a
+  one-row cohort otherwise. Every column the dataset holds is pinned
+  except that key and generated columns. A single-column foreign key to
+  a row in the dataset becomes a reference, and one to `auth.users`
+  becomes a reference to a seeded auth user, so relationships survive
+  the new keys. Keys are reassigned in row order; the counterexample
+  file keeps the original numbers. The scenario is compiled before it
+  is written, and a schema whose fingerprint differs from the recorded
+  one is a warning, not a refusal.
+- **Decision: refs, not pinned keys.** Pinning the original key values
+  would need key pinning, which the compiler refuses because generated
+  rows would collide with them. References keep the scenario valid at
+  any seed and readable.
+- What it needed elsewhere:
+  - Serialized values may be lists (array columns) and objects (json
+    columns). A json column pinned to a string used to load as a JSON
+    string, not the document the earlier docs implied.
+  - The columns of a *composite* primary key are pinnable (a join
+    table's key is its references), and the bulk generator honours an
+    override on them, as the Hypothesis path already did. Keeping the
+    pairs distinct is then the scenario's job; a duplicate is a unique
+    violation at load.
+  - Counterexample files write `bytea` values as `\x...` (they failed
+    to serialize).
+  - The Hypothesis path drew a top-level `None` for json columns,
+    which loads as SQL NULL and broke `NOT NULL json` columns. JSON
+    null now appears only inside a document.
+- Not covered: array columns are not generated yet (they parse as
+  their element type; see the v0.1 scope in SPEC.md), so a
+  counterexample never holds one. The exporter passes lists through
+  for when they are.
 
 ### Phase 1 as implemented
 

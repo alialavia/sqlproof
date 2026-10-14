@@ -200,14 +200,30 @@ def _value(value: Any, where: str) -> Any:
     ref = _ref(value)
     if ref is not None:
         return ref
-    if isinstance(value, Mapping | list):
-        _fail(
-            where,
-            "must be a scalar or {ref: <row name>}; to pin a json or array column, "
-            "write the value as a string",
-        )
+    if isinstance(value, list):
+        items = cast("list[Any]", value)  # type: ignore[redundant-cast]
+        return [_json_value(item, f"{where}[{i}]") for i, item in enumerate(items)]
+    if isinstance(value, Mapping):
+        # A json/jsonb value. {ref: name} alone is always a reference.
+        return _json_value(value, where)
     if value is None or isinstance(value, str | int | float | bool | date | datetime | time):
         return value
+    _fail(where, f"has unsupported type {type(value).__name__}")
+
+
+def _json_value(value: Any, where: str) -> Any:
+    """A list (an array, or a json array) or a mapping (a json object), with
+    scalar leaves."""
+    if isinstance(value, list):
+        items = cast("list[Any]", value)  # type: ignore[redundant-cast]
+        return [_json_value(item, f"{where}[{i}]") for i, item in enumerate(items)]
+    if isinstance(value, Mapping):
+        mapping = cast("Mapping[Any, Any]", value)  # type: ignore[redundant-cast]
+        return {str(k): _json_value(v, f"{where}.{k}") for k, v in mapping.items()}
+    if value is None or isinstance(value, str | int | float | bool):
+        return value
+    if isinstance(value, date | datetime | time):
+        return value.isoformat()
     _fail(where, f"has unsupported type {type(value).__name__}")
 
 

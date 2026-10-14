@@ -144,9 +144,11 @@ nothing extra. A TypeScript project can run the CLI without adding
 Python to the project: `uvx --from "sqlproof[yaml]" sqlproof scenarios up
 tiered_customers --dsn "$DATABASE_URL"`.
 
-Values are scalars Postgres can read, or `{ref: <row name>}`. Pin a
-`json` or array column as a string. Keys starting with `x-` at the top
-level are left for other tools and do not change the scenario.
+Values are scalars Postgres can read, `{ref: <row name>}`, a list (an
+array column) or an object (a `json` or `jsonb` column). An object that
+is exactly `{ref: <name>}` is always a reference. Keys starting with
+`x-` at the top level are left for other tools and do not change the
+scenario.
 
 The JSON Schema at
 [`/schemas/scenario-v1.json`](https://sqlproof.com/schemas/scenario-v1.json)
@@ -276,10 +278,37 @@ scenario's seed is the sweep's, its `auth.users` rows are inserted before
 each load and removed at the end, and the run artifact records the
 scenario's name and fingerprint.
 
+## From a failing property
+
+A failing property writes its counterexample to
+`.sqlproof/failures/<test>.json`, with the seed it ran under. Turn the
+counterexample into a scenario and load it into a database to look at
+the rows that broke the property:
+
+```bash
+sqlproof replay .sqlproof/failures/test_totals.json --as-scenario \
+  --dsn "$DATABASE_URL" --output scenarios/totals_failure.scenario.yaml
+sqlproof scenarios up counterexample_test_totals --dsn "$DEV_DATABASE_URL"
+```
+
+`--schema-file schema.sql` works in place of `--dsn`; the schema
+supplies the keys and references. Each row becomes a pinned row, named
+`<table>_<n>` when its table has a single-column key, and every foreign
+key to a row in the counterexample becomes a reference to it. The
+scenario assigns new keys in the same order, so relationships survive
+but key values do not: a property that depends on the numbers
+themselves keeps the counterexample file for that. Pass `--name` to
+choose the scenario's name.
+
+To repeat the search instead, pass the recorded seed back:
+`@sqlproof(proof, sizes=..., seed=<seed>)`. `sqlproof replay FILE`
+prints it.
+
 ## Errors before the database
 
 The scenario is checked against the schema before any row is written:
-unknown tables and columns, pinned primary keys or generated columns,
+unknown tables and columns, a pinned single-column primary key or a
+generated column,
 values that break a `NOT NULL`, enum or `CHECK` constraint, a unique
 value pinned on two rows, references to undeclared rows or to the wrong
 table, and child rows whose required parent table would be empty.

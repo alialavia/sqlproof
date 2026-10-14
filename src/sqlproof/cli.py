@@ -33,6 +33,18 @@ def main(argv: list[str] | None = None) -> int:
 
     replay = subcommands.add_parser("replay")
     replay.add_argument("counterexample", type=Path)
+    replay.add_argument(
+        "--as-scenario",
+        action="store_true",
+        help="print the counterexample's dataset as a scenario, for `scenarios up`",
+    )
+    replay_source = replay.add_mutually_exclusive_group()
+    replay_source.add_argument("--schema-file", type=Path)
+    replay_source.add_argument("--dsn")
+    replay.add_argument("--schema", default="public")
+    replay.add_argument("--name", help="the scenario's name (default: counterexample_<property>)")
+    replay.add_argument("--format", choices=["yaml", "json"], default="yaml")
+    replay.add_argument("--output", type=Path)
 
     report = subcommands.add_parser("report")
     report.add_argument("counterexample", type=Path)
@@ -113,7 +125,19 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "replay":
         payload = json.loads(args.counterexample.read_text(encoding="utf-8"))
+        if args.as_scenario:
+            if args.schema_file is None and args.dsn is None:
+                parser.error("--as-scenario needs --schema-file or --dsn")
+            from sqlproof.exceptions import SqlProofScenarioError
+
+            try:
+                return _replay_as_scenario(args, payload)
+            except SqlProofScenarioError as exc:
+                print(f"error: {exc}", file=sys.stderr)
+                return 2
         print(format_failure(payload))
+        if isinstance(payload.get("seed"), int):
+            print(f"Reproduce the search with seed={payload['seed']}.")
         print(f"replay loaded {payload.get('property_name', 'counterexample')}")
         return 0
     if args.command == "report":
@@ -209,6 +233,41 @@ def _counterexample_report(payload: dict[str, object]) -> dict[str, object]:
     }
 
 
+def _read_schema(schema_file: Path | None, dsn: str | None, schema_name: str) -> SchemaInfo:
+    if schema_file is not None:
+        return parse_schema_sql(schema_file.read_text(encoding="utf-8"), schema=schema_name)
+    from sqlproof import _database as database
+    from sqlproof._database import dict_row
+    from sqlproof.schema.introspect import introspect_schema
+
+    with database.connect(str(dsn), row_factory=dict_row) as conn:
+        return introspect_schema(conn, schema=schema_name)
+
+
+def _replay_as_scenario(args: argparse.Namespace, payload: dict[str, Any]) -> int:
+    from sqlproof.scenarios.counterexample import scenario_from_counterexample
+    from sqlproof.scenarios.serialize import dumps
+    from sqlproof.schema.fingerprint import compute
+
+    schema = _read_schema(args.schema_file, args.dsn, args.schema)
+    recorded = payload.get("schema_fingerprint")
+    if recorded and recorded != compute(schema):
+        print(
+            "warning: the schema differs from the one the counterexample was "
+            "recorded against; the scenario may not load.",
+            file=sys.stderr,
+        )
+    scenario = scenario_from_counterexample(payload, schema, name=args.name)
+    scenario.compile(schema)  # refuse here, not at `scenarios up`
+    text = dumps(scenario, args.format)
+    if args.output is None:
+        print(text, end="")
+    else:
+        args.output.write_text(text, encoding="utf-8")
+        print(f"wrote {args.output}", file=sys.stderr)
+    return 0
+
+
 def _mutation_report(runs_dir: Path, output: Path, *, open_browser: bool) -> int:
     from sqlproof.mutation.report import build_report, load_runs, render_html
 
@@ -246,17 +305,7 @@ def _scenarios(args: argparse.Namespace) -> int:
             print(f"wrote {args.output}")
         return 0
     if args.scenarios_command == "show":
-        if args.schema_file is not None:
-            schema = parse_schema_sql(
-                args.schema_file.read_text(encoding="utf-8"), schema=args.schema
-            )
-        else:
-            from sqlproof import _database as database
-            from sqlproof._database import dict_row
-            from sqlproof.schema.introspect import introspect_schema
-
-            with database.connect(str(args.dsn), row_factory=dict_row) as conn:
-                schema = introspect_schema(conn, schema=args.schema)
+        schema = _read_schema(args.schema_file, args.dsn, args.schema)
         compiled = scenario.compile(schema)
         payload: dict[str, object] = {
             "scenario": compiled.name,

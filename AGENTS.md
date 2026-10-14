@@ -669,6 +669,11 @@ sqlproof scenarios up tiered_customers --dsn "$SQLPROOF_DATABASE_URL"
 With the `sqlproof-mcp` server, use the `compile_scenario` and
 `load_scenario` tools with the same JSON shape.
 
+To look at the rows behind a failing property, turn its counterexample
+into a scenario: `sqlproof replay .sqlproof/failures/<test>.json
+--as-scenario --schema-file <schema.sql> --output scenarios/<name>.scenario.yaml`,
+then load it with `scenarios up` into a scratch database.
+
 **Important rules:**
 - **Check before loading.** `scenarios show` (or `compile_scenario`)
   validates against the schema without a database and prints the row
