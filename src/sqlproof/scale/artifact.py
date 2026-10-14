@@ -108,6 +108,7 @@ def save_run(
         "argument_policy": [dict(entry) for entry in result.argument_policy],
         "scenario": None if result.scenario is None else dict(result.scenario),
         "distribution": result.distribution,
+        "nested_plans": result.nested_plans,
         "spill_point_rows": result.spill_point_rows,
         "factor_at_spill": result.factor_at_spill,
         "points": [

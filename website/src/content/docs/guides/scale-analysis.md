@@ -134,9 +134,15 @@ test.
   faster than the work (and the last call took at least 20 ms),
   `exponent` refuses instead of reporting the smaller number. Below
   that, CPU growth passes unseen.
-- **Plans inside a function.** `EXPLAIN` of `SELECT fn()` shows only the
-  outer statement. For PL/pgSQL and non-inlined SQL functions, work is
-  still measured, but plan changes and peak memory inside them are not.
+- **Plans inside a function, by default.** `EXPLAIN` of `SELECT fn()`
+  shows only the outer statement. For PL/pgSQL and non-inlined SQL
+  functions, work is still measured, but plan changes and peak memory
+  inside them are not, unless you pass `nested_plans=True`. Then
+  `auto_explain` reports the plan of every statement the function runs,
+  so an inner plan change splits the fit and inner sorts report memory.
+  It needs a superuser, or a server that preloads `auto_explain` and lets
+  your role set it (the Supabase images do), and it slows functions that
+  run many statements, so it is off by default.
 - **O(n log n) versus O(n).** An in-memory sort touches no buffers.
 - **What `work_blocks` counts.** Only buffers of the modelled tables, their
   indexes and TOAST storage. System catalog reads are excluded, so neither

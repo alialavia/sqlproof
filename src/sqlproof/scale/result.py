@@ -48,6 +48,8 @@ class ScaleResult:
     scenario: Mapping[str, object] | None = None
     # How children were spread over parents: "uniform" or "zipf".
     distribution: str = "uniform"
+    # Whether plans inside the function counted (auto_explain).
+    nested_plans: bool = False
 
     @property
     def exponent(self) -> float:

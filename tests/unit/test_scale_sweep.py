@@ -84,7 +84,7 @@ def _install_db_stubs(
 
     def _probe(
         conn: Any, function: Any, args: Any, *, factor: int, total_rows: int,
-        relations: Any = None, timeout_s: Any = None,
+        relations: Any = None, timeout_s: Any = None, nested_plans: bool = False,
     ) -> Any:
         if log is not None:
             log.append(("probe", factor, total_rows))

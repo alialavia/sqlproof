@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import os
-from itertools import pairwise
 from uuid import uuid4
 
 import pytest
@@ -94,15 +93,17 @@ def test_resolved_arguments_are_recorded_per_point(proof, tmp_path):
     # (with the default 32 the sweep stops at 16 on fit quality).
     assert max(p.factor for p in result.points) == 8
     assert all(len(p.args) == 1 for p in result.points)
-    # The heaviest key grows with the data, so it must strictly increase
-    # with factor (points arrive in ascending factor order).
-    resolved_values = [p.args[0] for p in result.points]
-    assert all(a < b for a, b in pairwise(resolved_values))
+    # Each point's argument is re-resolved against that point's data: the
+    # most-referenced org, which exists at that factor (ids 1..20*factor).
+    for point in result.points:
+        assert 1 <= point.args[0] <= 20 * point.factor
     # Ruling AO: the artifact says how the argument was chosen -- the
-    # largest key value, by `heaviest` -- and claims no worst case.
+    # most-referenced key, by `heaviest` -- and claims no worst case.
     (artifact,) = tmp_path.glob("*.json")
     data = json.loads(artifact.read_text())
-    assert data["argument_policy"] == [{"kind": "heaviest", "column": "api_test.orgs.id"}]
+    assert data["argument_policy"] == [
+        {"kind": "heaviest", "column": "api_test.orgs.id", "by": "references"}
+    ]
 
 
 # --- Ruling AM: the sweep empties and repopulates every modelled table ---

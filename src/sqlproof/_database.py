@@ -290,6 +290,27 @@ class Connection:
     def in_transaction(self) -> bool:
         return self._native.transaction() in {pg.core.TRANS_INTRANS, pg.core.TRANS_INERROR}
 
+    @contextmanager
+    def notices(self, receive: Callable[[str], bool]) -> Generator[None]:
+        """Hand the text of each server notice to `receive` meanwhile.
+
+        `receive` returns whether it consumed the notice; one it did not is
+        passed to the receiver that was installed before, so a function's
+        own RAISE NOTICE still reaches whoever was listening."""
+        # PyGreSQL's stubs leave the receiver's signature unspecified.
+        native = cast(Any, self._native)
+        previous: Callable[[Any], object] | None = native.get_notice_receiver()
+
+        def on_notice(notice: Any) -> None:
+            if not receive(str(notice.message)) and previous is not None:
+                previous(notice)
+
+        native.set_notice_receiver(on_notice)
+        try:
+            yield
+        finally:
+            native.set_notice_receiver(previous)
+
     def _begin(self) -> None:
         if not self._autocommit and self._native.transaction() == pg.core.TRANS_IDLE:
             self._native.source().execute("BEGIN")

@@ -119,7 +119,7 @@ So the worst case is not what gets measured. The docstrings and the artifact's p
 
 ## 8. See plans inside functions
 
-**Label:** `enhancement`. **Needs a privilege check.**
+**Label:** `enhancement`. **Status:** done, opt-in: `nested_plans=True` on `probe_function`, `run_sweep` and `scale_analysis`, recorded in the artifact. Privilege check: on the Supabase image `auto_explain` is in `shared_preload_libraries` and the non-superuser `postgres` role can set its options; on plain Postgres a superuser can `LOAD` it, and anyone else gets a `SqlProofUsageError` saying so. The plan-flip xfail is replaced by tests that pass with the option (and one showing the default still cannot see the flip).
 
 **Problem.** EXPLAIN of `SELECT fn()` shows only the outer statement. For a function Postgres doesn't inline — which means any function that reads a table — the plan hash is the same at every point. So plan-change splitting, peak memory and naming the dominant relation never see inside it.
 

@@ -517,8 +517,17 @@ open silently, except where noted.
   segmentation on plan flips, peak memory and naming the dominant
   relation apply only to plans visible at that level: for an opaque
   function the hash never changes, peak memory reads 0, and an inner
-  plan flip is fitted straight through (Ruling AK). Pinned by
-  `test_a_flip_inside_a_function_is_segmented`.
+  plan flip is fitted straight through (Ruling AK). Scale follow-up 8
+  adds `nested_plans=True`: auto_explain (`log_nested_statements`,
+  JSON, notice level, analyze without per-node timing) reports every
+  inner statement's plan during the probe; their distinct shapes join
+  the outer one in `plan_hash`, and their sort and hash memory in
+  `peak_memory_kb`. Opt-in, because it instruments every inner statement
+  and so slows functions that run many. It needs a superuser (which can
+  `LOAD` it) or a server that preloads it and lets the role set its
+  options; the Supabase images do, as non-superuser `postgres`. Pinned
+  by `test_a_flip_inside_a_function_is_segmented_with_nested_plans` and
+  `test_a_sort_inside_a_function_reports_its_memory`.
 - **Flat-but-noisy work was refused** until follow-up 2 replaced the
   R² ≥ 0.98 acceptance with the exponent's standard error. A
   primary-key lookup whose work wobbles by a block or two (R² 0.000 to

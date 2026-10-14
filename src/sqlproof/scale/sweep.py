@@ -128,6 +128,7 @@ def run_sweep(
     columns: ColumnOverrides | None = None,
     truncate_existing: bool = False,
     distribution: str = "uniform",
+    nested_plans: bool = False,
 ) -> ScaleResult:
     """Measure how `function`'s buffer work grows as the `sizes` profile
     is scaled 1x, 2x, 4x, ..., and fit a complexity exponent to it.
@@ -173,6 +174,9 @@ def run_sweep(
     `distribution` spreads children over their parents: `"uniform"`
     (default) or `"zipf"`, where a few parents own most children -- the
     skew real tenants have, and the one `heaviest` then finds.
+    `nested_plans` makes the plans of the statements inside the function
+    count, through auto_explain (see `probe_function`): a plan change in
+    a PL/pgSQL function then splits the fit, and its sorts report memory.
 
     Instead of `sizes`, pass a `scenario` (`sqlproof.scenarios`): its
     compiled sizes are the 1x profile. At factor `k` its fills and
@@ -248,7 +252,7 @@ def run_sweep(
             conn, schema, function,
             profile=profile, args=args, max_factor=max_factor,
             min_points=min_points, probe_timeout_s=probe_timeout_s, seed=seed,
-            distribution=distribution,
+            distribution=distribution, nested_plans=nested_plans,
         )
     except BaseException as original:
         try:
@@ -368,6 +372,7 @@ def _measure(
     probe_timeout_s: float,
     seed: int,
     distribution: str = "uniform",
+    nested_plans: bool = False,
 ) -> ScaleResult:
     """Calibrate, climb the ladder and fit -- the part of the sweep that
     writes to the database, run only after `run_sweep`'s checks pass."""
@@ -426,6 +431,7 @@ def _measure(
             return probe_function(
                 conn, function, calibration_args, factor=0, total_rows=0,
                 relations=relations, timeout_s=probe_timeout_s,
+                nested_plans=nested_plans,
             )
         except ProbeTimedOut as exc:
             msg = (
@@ -454,6 +460,7 @@ def _measure(
                 conn, function, resolved,
                 factor=factor, total_rows=sum(step.sizes.values()),
                 relations=relations, timeout_s=probe_timeout_s,
+                nested_plans=nested_plans,
             )
         except ProbeTimedOut:
             truncated = True
@@ -489,4 +496,5 @@ def _measure(
         probe_timeout_s=probe_timeout_s,
         argument_policy=argument_policy(args),
         distribution=distribution,
+        nested_plans=nested_plans,
     )
