@@ -80,7 +80,7 @@ def _install_db_stubs(
 
     def _probe(
         conn: Any, function: Any, args: Any, *, factor: int, total_rows: int,
-        relations: Any = None,
+        relations: Any = None, timeout_s: Any = None,
     ) -> Any:
         if log is not None:
             log.append(("probe", factor, total_rows))
@@ -582,3 +582,35 @@ def test_every_probe_counts_only_the_modelled_tables(monkeypatch: pytest.MonkeyP
 
     assert seen
     assert all(relations == [("public", "a"), ("public", "b")] for relations in seen)
+
+
+def test_a_cancelled_probe_ends_the_sweep_without_a_point(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Follow-up 10: Postgres cancels a probe at probe_timeout_s; the sweep
+    ends truncated and keeps only what it measured."""
+    from sqlproof.scale.probe import ProbeTimedOut
+
+    def fake_probe(conn, function, args, *, factor, total_rows, relations=None):
+        if factor == 4:
+            raise ProbeTimedOut(function, 0.5)
+        return _point(factor, total_rows, 100 + factor)
+
+    _install_db_stubs(monkeypatch, fake_probe)
+    result = run_sweep(
+        object(), _schema("t"), "fn", sizes={"t": 10}, max_factor=64, probe_timeout_s=0.5,
+    )
+    assert result.truncated is True
+    assert [p.factor for p in result.points] == [1, 2]
+
+
+def test_a_calibration_timeout_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    from sqlproof.exceptions import SqlProofScaleError
+    from sqlproof.scale.probe import ProbeTimedOut
+
+    def fake_probe(conn, function, args, *, factor, total_rows, relations=None):
+        raise ProbeTimedOut(function, 0.5)
+
+    _install_db_stubs(monkeypatch, fake_probe)
+    with pytest.raises(SqlProofScaleError, match="calibration dataset"):
+        run_sweep(object(), _schema("t"), "fn", sizes={"t": 10}, probe_timeout_s=0.5)

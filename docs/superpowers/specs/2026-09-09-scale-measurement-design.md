@@ -340,8 +340,9 @@ Without that, a surprising result is unreproducible.
    - ≥ 5 points **and** R² ≥ 0.98 — enough is known; stop paying
    - `max_factor` reached (default 32×)
    - a single probe exceeds `probe_timeout_s` (default 30s) — safety
-     valve; marks the fit truncated. Checked after the probe returns:
-     a runaway probe is not cancelled.
+     valve; marks the fit truncated. Postgres cancels the probe at the
+     timeout (`SET LOCAL statement_timeout` inside the probe's savepoint;
+     scale follow-up 10), and the cancelled point is not kept.
 
 All three are keyword arguments.
 
@@ -523,8 +524,6 @@ open silently, except where noted.
   beyond it (Ruling AP).
 - **The sweep is destructive** to the modelled tables, and guarded
   accordingly (Ruling AM; see "Data safety").
-- **A runaway probe is not cancelled.** `probe_timeout_s` is checked
-  after a probe returns.
 - **Raw buffer counts are not reproducible across connections.** Two
   sweeps with the same seed and profile always measured identical row
   counts, plan hashes, temp blocks, peak memory and resolved

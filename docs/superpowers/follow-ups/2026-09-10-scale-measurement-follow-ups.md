@@ -143,7 +143,10 @@ First check whether the `postgres` role in the Supabase image, which is not a su
 
 ## 10. Cancel runaway probes
 
-**Label:** `enhancement`.
+**Label:** `enhancement`. **Status:** done: `probe_function(timeout_s=)`
+sets `SET LOCAL statement_timeout` after its savepoint and raises
+`ProbeTimedOut` on SQLSTATE 57014; the sweep ends truncated without the
+cancelled point, and a calibration timeout raises `SqlProofScaleError`.
 
 **Problem.** `probe_timeout_s` is checked after a probe returns, so a runaway probe runs to completion before the sweep stops.
 

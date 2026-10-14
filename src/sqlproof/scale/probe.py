@@ -133,6 +133,19 @@ def _shape(node: dict[str, Any]) -> str:
     return f"{node.get('Node Type', '?')}({children})"
 
 
+# SQLSTATE 57014: the statement was cancelled (here, by statement_timeout).
+_QUERY_CANCELED = "57014"
+
+
+class ProbeTimedOut(Exception):
+    """Postgres cancelled the probe at its timeout."""
+
+    def __init__(self, function: str, timeout_s: float) -> None:
+        super().__init__(f"{function} did not return within {timeout_s:g}s and was cancelled")
+        self.function = function
+        self.timeout_s = timeout_s
+
+
 def probe_function(
     conn: database.Connection,
     function: str,
@@ -141,6 +154,7 @@ def probe_function(
     factor: int,
     total_rows: int,
     relations: Sequence[tuple[str, str]] | None = None,
+    timeout_s: float | None = None,
 ) -> ProbePoint:
     """Measure one call of `function` under EXPLAIN.
 
@@ -169,6 +183,11 @@ def probe_function(
     -- that transaction is left untouched; only the savepoint rolls
     back, so callers can compose several probes inside one transaction.
 
+    `timeout_s` makes Postgres cancel the call when it runs longer, and
+    raises `ProbeTimedOut`. It is set with `SET LOCAL statement_timeout`
+    after the savepoint, so rolling back to the savepoint restores the
+    previous timeout.
+
     `function` is interpolated into the statement, so it is checked
     first -- every dot-separated part a bare identifier -- and a bad name
     raises `SqlProofUsageError` before any SQL runs (see
@@ -191,8 +210,17 @@ def probe_function(
             # never happens inside a transaction: the difference across the
             # call, both reads in this one transaction, is exactly its work.
             before = _blocks_fetched(cur, oids) if oids is not None else 0
-            cur.execute(statement, tuple(args) or None)
+            if timeout_s is not None:
+                cur.execute(f"SET LOCAL statement_timeout = {max(1, round(timeout_s * 1000))}")
+            try:
+                cur.execute(statement, tuple(args) or None)
+            except Exception as exc:
+                if timeout_s is not None and database.sqlstate(exc) == _QUERY_CANCELED:
+                    raise ProbeTimedOut(function, timeout_s) from exc
+                raise
             row: Any = cur.fetchone()
+            if timeout_s is not None:
+                cur.execute("SET LOCAL statement_timeout = 0")
             if oids is not None:
                 relation_blocks = _blocks_fetched(cur, oids) - before
         finally:

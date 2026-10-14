@@ -262,3 +262,24 @@ def test_a_function_that_raises_mid_sweep_propagates_and_leaves_tables_empty(pro
             artifact_dir=None,
         )
     assert _row_counts() == {"orgs": 0, "events": 0}
+
+
+def test_a_runaway_probe_is_cancelled_at_the_timeout(proof):
+    """Follow-up 10: Postgres cancels the call at the timeout, rather than
+    the sweep noticing after it returns."""
+    import time
+
+    from sqlproof.scale.probe import ProbeTimedOut, probe_function
+
+    dsn = os.environ[DSN_ENV]
+    with database.connect(dsn, autocommit=True) as connection:
+        connection.execute(
+            "CREATE FUNCTION api_test.slow() RETURNS void LANGUAGE sql VOLATILE AS "
+            "$$ SELECT pg_sleep(3) $$"
+        )
+        started = time.monotonic()
+        with pytest.raises(ProbeTimedOut, match=r"api_test\.slow did not return within 0\.5s"):
+            probe_function(connection, "api_test.slow", (), factor=1, total_rows=0, timeout_s=0.5)
+        assert time.monotonic() - started < 1.5
+        # The savepoint rollback restored the session's timeout.
+        assert connection.execute("SHOW statement_timeout").fetchone()[0] == "0"

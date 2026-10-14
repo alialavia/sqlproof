@@ -67,8 +67,8 @@ def scale_analysis(
 
     Options forwarded to `run_sweep` through `**kwargs`: `max_factor`
     (default 32), `min_points` (default 5; at least `fit.MIN_POINTS`),
-    `probe_timeout_s` (default 30.0; checked after each probe returns,
-    never cancelling one), `seed` (default 0) and `columns` (per-column
+    `probe_timeout_s` (default 30.0; Postgres cancels a probe that runs
+    longer, and the sweep ends truncated), `seed` (default 0) and `columns` (per-column
     overrides, as `load_dataset` takes them), and `scale_cohorts`.
 
     Pass `scenario=` instead of `sizes=` to sweep a scenario: its fills and

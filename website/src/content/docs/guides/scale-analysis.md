@@ -65,7 +65,9 @@ noisy CI runner.
 3. **Climb a geometric ladder** (×1, ×2, ×4, …): truncate, bulk load with
    `COPY`, `ANALYZE`, resolve the arguments against the new data, probe.
 4. **Stop** when at least `min_points` points fit with R² ≥ 0.98, at
-   `max_factor`, or when a probe exceeds `probe_timeout_s`.
+   `max_factor`, or when a probe exceeds `probe_timeout_s`. Postgres
+   cancels such a probe at the timeout, and the result is marked
+   truncated.
 5. **Split the fit** wherever the plan's shape changes, and report each
    regime.
 
@@ -118,8 +120,6 @@ function.
   by a block or two fails the R² check, so `exponent` raises instead of
   reporting about 0.
 - **O(n log n) versus O(n).** An in-memory sort touches no buffers.
-- **Runaway probes.** `probe_timeout_s` is checked after a probe returns;
-  a probe that never returns hangs the sweep.
 - **What `work_blocks` counts.** Only buffers of the modelled tables, their
   indexes and TOAST storage. System catalog reads are excluded, so neither
   per-connection cache state nor other sessions' activity on a shared server

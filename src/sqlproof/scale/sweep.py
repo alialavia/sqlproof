@@ -24,6 +24,7 @@ from sqlproof import _database as database
 from sqlproof.exceptions import (
     CircularDependencyError,
     SqlProofGenerationError,
+    SqlProofScaleError,
     SqlProofUsageError,
 )
 from sqlproof.generators.rows import ColumnOverrides
@@ -38,7 +39,7 @@ from sqlproof.scale.load import (
     row_counts,
     truncate,
 )
-from sqlproof.scale.probe import ProbePoint, probe_function
+from sqlproof.scale.probe import ProbePoint, ProbeTimedOut, probe_function
 from sqlproof.scale.result import ScaleResult
 from sqlproof.schema.model import SchemaInfo
 
@@ -179,9 +180,13 @@ def run_sweep(
     The ladder stops at the first of: `min_points` points whose final
     plan regime fits (R^2 >= `fit.MIN_R_SQUARED`); `max_factor` reached;
     or a probe taking longer than `probe_timeout_s`, which marks the
-    result truncated. That timeout is checked AFTER a probe returns: a
-    runaway probe is not cancelled, so a function that never returns
-    hangs the sweep.
+    result truncated. Postgres cancels such a probe at the timeout
+    (`statement_timeout`); the cancelled point is not kept, since it
+    measured nothing. A timeout during calibration -- on at most one row
+    per table -- raises `SqlProofScaleError` instead: there is nothing to
+    measure a curve from. A probe that returns just under the timeout but
+    took longer overall (planning, transfer) is kept and still ends the
+    ladder.
     """
     profile: Profile
     scenario_profile: ScenarioProfile | None = None
@@ -401,10 +406,18 @@ def _measure(
         step = profile(0)
         _load(step)
         calibration_args = resolve_args(conn, _with_refs(args, step.refs))
-        return probe_function(
-            conn, function, calibration_args, factor=0, total_rows=0,
-            relations=relations,
-        )
+        try:
+            return probe_function(
+                conn, function, calibration_args, factor=0, total_rows=0,
+                relations=relations, timeout_s=probe_timeout_s,
+            )
+        except ProbeTimedOut as exc:
+            msg = (
+                f"{exc}, on the calibration dataset of at most one row per table. "
+                "There is no curve to measure; raise probe_timeout_s or check that "
+                "the function returns."
+            )
+            raise SqlProofScaleError(msg) from exc
 
     # Since probes count only the modelled tables, the compile and replan
     # work described above (catalog reads) no longer reaches work_blocks.
@@ -420,11 +433,15 @@ def _measure(
 
         resolved = resolve_args(conn, _with_refs(args, step.refs))
         started = time.perf_counter()
-        point = probe_function(
-            conn, function, resolved,
-            factor=factor, total_rows=sum(step.sizes.values()),
-            relations=relations,
-        )
+        try:
+            point = probe_function(
+                conn, function, resolved,
+                factor=factor, total_rows=sum(step.sizes.values()),
+                relations=relations, timeout_s=probe_timeout_s,
+            )
+        except ProbeTimedOut:
+            truncated = True
+            break
         elapsed = time.perf_counter() - started
         points.append(point)
 
