@@ -8,19 +8,19 @@ so a literal that exists at 8x may not exist at 1x.
 What each built-in resolver picks -- plainly, since none of them is a
 worst-case guarantee:
 
-- `heaviest`: the LARGEST KEY VALUE. The sweep loads the bulk
-  generator's default uniform distribution, so that is an arbitrary
-  parent, not the most-referenced one (under zipf, the most-referenced
-  parent would be key 1, the smallest key).
+- `heaviest`: the MOST-REFERENCED KEY: the one with the most rows
+  pointing at it through single-column foreign keys, counted over every
+  table that references the column. Ties, and a column nothing
+  references, fall back to the largest key value.
 - `median_key`: the middle key in key order.
 - `random_key`: the key whose hash with `seed` sorts first.
 
 The question this feature asks is "will this fall over?", and the case to
-measure for that is the most-referenced parent under realistic skew.
-Nothing here picks it yet: that needs a resolver that counts referencing
-rows and a sweep that loads skewed data, both deliberately deferred. So
-the run artifact records, per argument, which resolver chose it
-(`argument_policy`), and never labels a run "worst case".
+measure for that is the most-referenced parent under realistic skew:
+`heaviest` with `distribution="zipf"`. Even that is the heaviest parent
+by row count, not by cost, so the run artifact records, per argument,
+which resolver chose it (`argument_policy`), and never labels a run
+"worst case".
 """
 
 from __future__ import annotations
@@ -75,29 +75,59 @@ def _mark(resolve: Resolver, **policy: Any) -> Resolver:
     return resolve
 
 
+_REFERENCING = """
+SELECT format('%%I.%%I', n.nspname, child.relname), quote_ident(a.attname)
+FROM pg_constraint c
+JOIN pg_class child ON child.oid = c.conrelid
+JOIN pg_namespace n ON n.oid = child.relnamespace
+JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = c.conkey[1]
+JOIN pg_attribute p ON p.attrelid = c.confrelid AND p.attnum = c.confkey[1]
+WHERE c.contype = 'f'
+  AND cardinality(c.conkey) = 1
+  AND c.confrelid = %s::regclass
+  AND p.attname = %s
+ORDER BY 1, 2
+"""
+
+
 def heaviest(column: str) -> Resolver:
-    """The LARGEST KEY VALUE in `column` (`"table.column"`, optionally
+    """The MOST-REFERENCED key in `column` (`"table.column"`, optionally
     schema-qualified), re-resolved against each freshly loaded dataset.
 
-    Not the most-referenced parent, and no worst-case guarantee: it
-    orders by the key itself and never counts referencing rows. The
-    sweep loads the bulk generator's default UNIFORM distribution, under
-    which children spread evenly across parents, so the largest key is an
-    arbitrary parent. Under zipf skew it would be the opposite of the
-    worst case: the most-referenced parent is then key 1, the SMALLEST
-    key. Counting referencing rows -- and loading skewed data for that to
-    matter -- is future work; meanwhile the artifact records this
-    argument as `{"kind": "heaviest", ...}`, never as a worst case.
+    Counts the rows pointing at each key through every single-column
+    foreign key into `column`, from any table, and picks the key with
+    the most; ties go to the largest key, and so does a column nothing
+    references (the earlier behaviour). Under the sweep's default
+    uniform distribution that is whichever parent drew the most
+    children; with `distribution="zipf"` it is the parent that owns a
+    disproportionate share -- the realistic heavy tenant. Heaviest by
+    row count, not by what the function does with them, so the artifact
+    records `{"kind": "heaviest", "by": "references"}`, never a worst
+    case.
     """
     table, name = _split(column)
 
     def resolve(conn: Any) -> Any:
-        # Identifiers come from the caller's schema (table/column names),
-        # never from row data, so this interpolation is not user input.
-        sql = f"SELECT {name} FROM {table} ORDER BY {name} DESC LIMIT 1"
+        children = conn.execute(_REFERENCING, [table, name]).fetchall()
+        if not children:
+            # Identifiers come from the caller's schema (table/column
+            # names), never from row data, so this is not user input.
+            sql = f"SELECT {name} FROM {table} ORDER BY {name} DESC LIMIT 1"
+            return _scalar(conn, sql, column)
+        # Child names come from the catalog, quoted there.
+        counts = " UNION ALL ".join(
+            f"SELECT {fk} AS k, count(*) AS n FROM {child} WHERE {fk} IS NOT NULL GROUP BY {fk}"
+            for child, fk in children
+        )
+        sql = (
+            f"SELECT t.{name} FROM {table} t "
+            f"LEFT JOIN (SELECT k, sum(n) AS n FROM ({counts}) c GROUP BY k) r "
+            f"ON r.k = t.{name} "
+            f"ORDER BY coalesce(r.n, 0) DESC, t.{name} DESC LIMIT 1"
+        )
         return _scalar(conn, sql, column)
 
-    return _mark(resolve, kind="heaviest", column=column)
+    return _mark(resolve, kind="heaviest", column=column, by="references")
 
 
 def random_key(column: str, *, seed: int = 0) -> Resolver:

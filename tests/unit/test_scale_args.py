@@ -25,8 +25,9 @@ class FakeConn:
     resolver builds the query it claims to; the real query is exercised
     in the integration tests."""
 
-    def __init__(self, value):
+    def __init__(self, value, children=()):
         self.value = value
+        self.children = list(children)
         self.sql = []
 
     def execute(self, sql, params=None):
@@ -35,6 +36,9 @@ class FakeConn:
 
     def fetchone(self):
         return (self.value,)
+
+    def fetchall(self):
+        return self.children
 
 
 def test_literals_pass_through_untouched():
@@ -46,15 +50,24 @@ def test_literals_pass_through_untouched():
 def test_resolver_is_called_with_the_connection():
     conn = FakeConn(7)
     assert resolve_args(conn, [heaviest("customers.id")]) == (7,)
-    assert len(conn.sql) == 1
+    assert len(conn.sql) == 2  # the catalog lookup, then the key
 
 
-def test_heaviest_picks_the_largest_key_value_not_a_child_count():
-    """Ruling AO: `heaviest` orders by the key itself and never counts
-    referencing rows -- pinned exactly, since its name suggests more."""
+def test_heaviest_falls_back_to_the_largest_key_when_nothing_references_it():
     conn = FakeConn(3)
     heaviest("customers.id")(conn)
-    assert conn.sql == ["SELECT id FROM customers ORDER BY id DESC LIMIT 1"]
+    assert conn.sql[-1] == "SELECT id FROM customers ORDER BY id DESC LIMIT 1"
+
+
+def test_heaviest_counts_the_rows_referencing_each_key():
+    """Follow-up 7: every single-column foreign key into the column counts,
+    from every referencing table; ties go to the largest key."""
+    conn = FakeConn(3, children=[("public.invoices", "customer_id"), ("public.notes", "cid")])
+    heaviest("customers.id")(conn)
+    sql = conn.sql[-1]
+    assert "FROM public.invoices WHERE customer_id IS NOT NULL GROUP BY customer_id" in sql
+    assert "UNION ALL SELECT cid AS k" in sql
+    assert sql.endswith("ORDER BY coalesce(r.n, 0) DESC, t.id DESC LIMIT 1")
 
 
 def test_median_key_uses_an_offset_rather_than_ordering_by_count():
@@ -144,7 +157,7 @@ def test_argument_policy_names_how_each_position_is_chosen():
         lambda conn: 1,
     ]
     assert argument_policy(args) == (
-        {"kind": "heaviest", "column": "customers.id"},
+        {"kind": "heaviest", "column": "customers.id", "by": "references"},
         {"kind": "literal"},
         {"kind": "random_key", "column": "billing.invoices.id", "seed": 7},
         {"kind": "median_key", "column": "t.id"},

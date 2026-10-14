@@ -74,7 +74,10 @@ noisy CI runner.
 
 Options passed through to the sweep: `max_factor` (default 32),
 `min_points` (default 5), `probe_timeout_s` (default 30), `seed`
-(default 0) and `columns` (per-column overrides, as for bulk generation).
+(default 0), `columns` (per-column overrides, as for bulk generation) and
+`distribution`. With `distribution="zipf"`, a few parents own most of
+the children, as real tenants do; uniform data (the default) spreads
+them evenly. Pair it with `heaviest` to measure the heavy tenant.
 
 ## Choosing arguments
 
@@ -83,7 +86,7 @@ resolvers are re-run against each freshly loaded dataset:
 
 | Resolver | Picks |
 | --- | --- |
-| `heaviest("t.col")` | The largest key value. Not the most-referenced row, and no worst-case guarantee. |
+| `heaviest("t.col")` | The most-referenced key: the most rows pointing at it, over every foreign key into the column. The largest key when nothing references it. Heaviest by row count, not a worst-case guarantee. |
 | `median_key("t.col")` | The middle key in key order: a typical value. |
 | `random_key("t.col", seed=0)` | An arbitrary key, deterministic for a seed. |
 

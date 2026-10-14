@@ -46,6 +46,8 @@ class ScaleResult:
     # The scenario the sweep scaled, when it scaled one instead of `sizes`:
     # its name, fingerprint and whether cohorts grew with the factor.
     scenario: Mapping[str, object] | None = None
+    # How children were spread over parents: "uniform" or "zipf".
+    distribution: str = "uniform"
 
     @property
     def exponent(self) -> float:

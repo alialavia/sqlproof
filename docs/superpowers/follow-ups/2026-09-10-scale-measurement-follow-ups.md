@@ -103,7 +103,7 @@ A second defect makes it worse. `fit_exponent` sets `r2 = 1.0 if ss_tot == 0 els
 
 ## 7. Make `heaviest` a real worst case
 
-**Label:** `enhancement`.
+**Label:** `enhancement`. **Status:** done. `distribution` is a sweep option recorded in the artifact, and `heaviest` counts referencing rows over every single-column foreign key into the column (`{"kind": "heaviest", "by": "references"}`); a live test checks it against a direct count under zipf.
 
 **Problem.** `run_sweep` always loads the bulk generator's default uniform distribution, and `heaviest` returns the largest key value.
 - Under uniform data, the largest key is an arbitrary parent.

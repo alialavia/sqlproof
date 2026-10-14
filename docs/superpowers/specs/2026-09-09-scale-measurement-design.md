@@ -314,17 +314,19 @@ heaviest tenant is the worst case, and reporting "fast" because the probe
 happened to pick a customer with three invoices would be exactly the
 silent-wrong-answer failure this project keeps guarding against.
 
-**What was built falls short of that, and says so.** `heaviest(column)`
-returns the LARGEST KEY VALUE; it never counts referencing rows. The
-sweep loads the bulk generator's default uniform distribution, under
-which the largest key is an arbitrary parent -- and under zipf the
-most-referenced parent is key 1, the smallest key. So no resolver
-measures a worst case, and none is labelled one: the artifact records,
-per argument position, how it was chosen (`{"kind": "heaviest",
-"column": ...}`, `median_key`, `random_key` with its seed, `callable`
-or `literal`) instead of a run-wide "worst-case" label (Ruling AO). A
-resolver that counts referencing rows, and a sweep that loads skewed
-data for it to matter, are deferred.
+**As built (scale follow-up 7).** `heaviest(column)` returns the
+MOST-REFERENCED key: it counts the rows pointing at each key through
+every single-column foreign key into the column, from every table, and
+takes the most (ties, and a column nothing references, go to the largest
+key). `run_sweep`/`scale_analysis` take `distribution="zipf"` to load
+skewed data, where a few parents own most children; the artifact
+records the distribution. Heaviest by row count is still not a
+worst-case guarantee -- a function may be slowest on a parent with few
+but expensive children -- so the artifact records, per argument
+position, how it was chosen (`{"kind": "heaviest", "column": ...,
+"by": "references"}`, `median_key`, `random_key` with its seed,
+`callable` or `literal`) instead of a run-wide "worst-case" label
+(Ruling AO).
 
 Resolved argument values are recorded in the artifact per scale point.
 Without that, a surprising result is unreproducible.
@@ -522,9 +524,10 @@ open silently, except where noted.
   primary-key lookup whose work wobbles by a block or two (R² 0.000 to
   0.75) now fits about 0; `test_a_primary_key_lookup_recovers_exponent_near_zero`
   passes and its xfail is gone.
-- **No argument is a worst case.** `heaviest` returns the largest key
-  value and the sweep loads uniform data; the artifact labels each
-  argument by how it was chosen (Ruling AO; see "Arguments").
+- **No argument is a worst case.** `heaviest` is the most-referenced key
+  (with `distribution="zipf"`, the heavy tenant), which is heaviest by
+  row count, not by cost; the artifact labels each argument by how it
+  was chosen (Ruling AO; see "Arguments").
 - **`spills_below` answers only within the measured range**, and raises
   beyond it (Ruling AP).
 - **The sweep is destructive** to the modelled tables, and guarded

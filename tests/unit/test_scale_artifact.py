@@ -104,7 +104,7 @@ def test_artifact_records_how_each_argument_was_chosen_and_claims_no_worst_case(
     path = save_run(result, tmp_path)
     data = json.loads(path.read_text())
     assert data["argument_policy"] == [
-        {"kind": "heaviest", "column": "customers.id"},
+        {"kind": "heaviest", "column": "customers.id", "by": "references"},
         {"kind": "literal"},
         {"kind": "random_key", "column": "customers.id", "seed": 3},
         {"kind": "median_key", "column": "t.id"},
@@ -229,6 +229,7 @@ def test_the_artifact_records_how_the_sweep_was_run(tmp_path):
     assert data["max_factor"] == 32
     assert data["min_points"] == 5
     assert data["probe_timeout_s"] == 30.0
+    assert data["distribution"] == "uniform"
 
 
 @pytest.mark.parametrize(("sha", "dirty"), [("abc1234", True), (None, False)])

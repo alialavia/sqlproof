@@ -70,9 +70,13 @@ def _install_db_stubs(
         if truncate_fn is not None:
             truncate_fn()
 
-    def _load_dataset(conn: Any, schema: Any, sizes: Any, *, seed: Any, columns: Any) -> None:
+    def _load_dataset(
+        conn: Any, schema: Any, sizes: Any, *, seed: Any, columns: Any, distribution: Any
+    ) -> None:
         if log is not None:
             log.append(("load", dict(sizes)))
+            if distribution != "uniform":
+                log.append(("distribution", distribution))
 
     def _analyze(conn: Any, schema: Any) -> None:
         if log is not None:
@@ -566,7 +570,7 @@ def test_the_result_records_how_each_argument_is_chosen(
         args=[heaviest("t.id"), 5], max_factor=64,
     )
     assert result.argument_policy == (
-        {"kind": "heaviest", "column": "t.id"},
+        {"kind": "heaviest", "column": "t.id", "by": "references"},
         {"kind": "literal"},
     )
 
@@ -614,3 +618,22 @@ def test_a_calibration_timeout_is_refused(monkeypatch: pytest.MonkeyPatch) -> No
     _install_db_stubs(monkeypatch, fake_probe)
     with pytest.raises(SqlProofScaleError, match="calibration dataset"):
         run_sweep(object(), _schema("t"), "fn", sizes={"t": 10}, probe_timeout_s=0.5)
+
+
+def test_the_distribution_reaches_the_loader_and_the_result(monkeypatch):
+    """Follow-up 7: zipf data is what makes `heaviest` find a heavy parent."""
+    log: list[Any] = []
+    _install_db_stubs(monkeypatch, _quadratic_probe, log)
+    result = run_sweep(
+        object(), _schema("t"), "fn", sizes={"t": 10}, max_factor=64, distribution="zipf"
+    )
+    assert ("distribution", "zipf") in log
+    assert result.distribution == "zipf"
+
+
+def test_an_unknown_distribution_is_refused_before_anything_runs(monkeypatch):
+    log: list[Any] = []
+    _install_db_stubs(monkeypatch, _quadratic_probe, log)
+    with pytest.raises(SqlProofUsageError, match="distribution must be one of uniform, zipf"):
+        run_sweep(object(), _schema("t"), "fn", sizes={"t": 10}, distribution="normal")
+    assert log == []

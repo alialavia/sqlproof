@@ -60,6 +60,9 @@ class LoadStep:
 
 Profile = Callable[[int], LoadStep]
 
+DISTRIBUTIONS = ("uniform", "zipf")
+"""How the sweep spreads children over parents (`bulk.parent_index_for`)."""
+
 
 def sizes_profile(sizes: Mapping[str, int], columns: ColumnOverrides | None) -> Profile:
     """`sizes` times the factor; at most one row per table to calibrate."""
@@ -124,6 +127,7 @@ def run_sweep(
     seed: int | None = None,
     columns: ColumnOverrides | None = None,
     truncate_existing: bool = False,
+    distribution: str = "uniform",
 ) -> ScaleResult:
     """Measure how `function`'s buffer work grows as the `sizes` profile
     is scaled 1x, 2x, 4x, ..., and fit a complexity exponent to it.
@@ -166,6 +170,9 @@ def run_sweep(
     catalog changes, and moved a single probe by tens of blocks. The
     calibration baseline is taken on the same connection as the ladder.
     `columns` pins generated columns, as `load_dataset`'s does.
+    `distribution` spreads children over their parents: `"uniform"`
+    (default) or `"zipf"`, where a few parents own most children -- the
+    skew real tenants have, and the one `heaviest` then finds.
 
     Instead of `sizes`, pass a `scenario` (`sqlproof.scenarios`): its
     compiled sizes are the 1x profile. At factor `k` its fills and
@@ -194,6 +201,9 @@ def run_sweep(
     scenario_info: dict[str, object] | None = None
     if (sizes is None) == (scenario is None):
         msg = "Pass exactly one of sizes or scenario."
+        raise SqlProofUsageError(msg)
+    if distribution not in DISTRIBUTIONS:
+        msg = f"distribution must be one of {', '.join(DISTRIBUTIONS)}; got {distribution!r}."
         raise SqlProofUsageError(msg)
     if scenario is not None:
         if columns is not None:
@@ -238,6 +248,7 @@ def run_sweep(
             conn, schema, function,
             profile=profile, args=args, max_factor=max_factor,
             min_points=min_points, probe_timeout_s=probe_timeout_s, seed=seed,
+            distribution=distribution,
         )
     except BaseException as original:
         try:
@@ -356,6 +367,7 @@ def _measure(
     min_points: int,
     probe_timeout_s: float,
     seed: int,
+    distribution: str = "uniform",
 ) -> ScaleResult:
     """Calibrate, climb the ladder and fit -- the part of the sweep that
     writes to the database, run only after `run_sweep`'s checks pass."""
@@ -400,7 +412,10 @@ def _measure(
         truncate(conn, schema)
         if step.before_load is not None:
             step.before_load(conn)
-        load_dataset(conn, schema, step.sizes, seed=seed, columns=step.columns)
+        load_dataset(
+            conn, schema, step.sizes, seed=seed, columns=step.columns,
+            distribution=distribution,
+        )
         analyze(conn, schema)
 
     def _calibration_round() -> ProbePoint:
@@ -473,4 +488,5 @@ def _measure(
         min_points=min_points,
         probe_timeout_s=probe_timeout_s,
         argument_policy=argument_policy(args),
+        distribution=distribution,
     )
