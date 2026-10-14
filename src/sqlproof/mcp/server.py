@@ -156,8 +156,9 @@ def _build_server() -> Any:
         """Enumerate sqlproof's canonical test patterns.
 
         Returns a list of recipes with `name`, `summary`, and (where
-        applicable) a `template` Python snippet. Three patterns
-        ship in v1: rls-policy-test, rpc-function-test, stateful-test.
+        applicable) a `template` snippet: rls-policy-test,
+        rpc-function-test and stateful-test (Python), and scenario (the
+        JSON that compile_scenario and load_scenario take).
         """
         return tools.list_recipes()
 

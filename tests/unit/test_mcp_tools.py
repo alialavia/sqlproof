@@ -22,9 +22,10 @@ exception.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
-from sqlproof.mcp.tools import generate_dataset, inspect_schema, list_recipes
+from sqlproof.mcp.tools import compile_scenario, generate_dataset, inspect_schema, list_recipes
 
 # ---------------------------------------------------------------------------
 # inspect_schema
@@ -134,9 +135,9 @@ def test_list_recipes_returns_named_patterns() -> None:
         assert isinstance(recipe["summary"], str)
 
 
-def test_list_recipes_includes_the_three_canonical_patterns() -> None:
-    """Invariant: the three patterns documented in AGENTS.md (RLS,
-    RPC, stateful) are all enumerated.
+def test_list_recipes_includes_the_canonical_patterns() -> None:
+    """Invariant: the test patterns documented in AGENTS.md (RLS,
+    RPC, stateful) and its scenario pattern are all enumerated.
 
     Failure case: a contributor adds a new pattern to AGENTS.md but
     forgets to register it as a recipe; the MCP-using agent never
@@ -150,6 +151,28 @@ def test_list_recipes_includes_the_three_canonical_patterns() -> None:
     assert "rls-policy-test" in names
     assert "rpc-function-test" in names
     assert "stateful-test" in names
+    assert "scenario" in names
+
+
+def test_scenario_recipe_template_is_a_valid_scenario_shape() -> None:
+    """The scenario recipe's template, with its placeholders filled in,
+    is a scenario `compile_scenario` accepts."""
+    recipe = next(r for r in list_recipes() if r["name"] == "scenario")
+    filled = (
+        recipe["template"]
+        .replace("<scenario_name>", "demo")
+        .replace("<parent_table>", "customers")
+        .replace("<child_table>", "invoices")
+        .replace("<row_name>", "acme")
+        .replace('"<column>": "<value>"', '"tier": 1')
+    )
+    schema_sql = (
+        "CREATE TABLE customers (id bigint PRIMARY KEY, tier int NOT NULL);"
+        "CREATE TABLE invoices (id bigint PRIMARY KEY,"
+        " customer_id bigint NOT NULL REFERENCES customers(id));"
+    )
+    result = compile_scenario(scenario=json.loads(filled), schema_sql=schema_sql)
+    assert result["status"] == "ok", result
 
 
 def test_list_recipes_recipe_has_optional_template_field() -> None:

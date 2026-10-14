@@ -59,6 +59,7 @@ Use SqlProof for any Supabase project test that touches:
 - **Triggers** — verify the side effect a trigger produces on a parent table change.
 - **Migrations** — verify the new query produces the same answer as the old query for any input dataset.
 - **Aggregates and reports** — verify the database's aggregate matches a Python recomputation.
+- **A seeded database state** — "two tier 1 customers, three tier 2, invoices for the tier 1 ones", identical on every load, for a dev database, a preview branch, an end-to-end test or a bug report. Use a scenario (Pattern 5), not hand-written seed SQL.
 
 Do **not** use SqlProof for:
 - Schema-shape assertions ("does this column exist") — write a one-line `information_schema` query in pgTAP or skip entirely.
@@ -608,6 +609,94 @@ workflow guide at <https://sqlproof.com/guides/mutation-testing/>.
 
 ---
 
+## Pattern 5: Scenarios (a seeded, reproducible database state)
+
+**Experimental.** If `import sqlproof.scenarios` fails, the installed
+sqlproof predates scenarios; upgrade it.
+
+**When to write:** the user needs a database *holding specific rows* —
+to run the app against, for an end-to-end or UI test, a demo, a preview
+branch, or to reproduce a bug report ("it breaks when a customer has
+more than 5 invoices"). Pin the rows the case depends on; the generator
+fills everything else from the seed, respecting every FK, CHECK, UNIQUE
+and NOT NULL. The same scenario, seed and schema load the same rows
+every time.
+
+**Not for property tests.** A property test wants *many* generated
+datasets (`@sqlproof`, Patterns 1–3). A scenario is *one* fixed state.
+
+**Template** — Python, in `scenarios/<area>_scenarios.py`:
+
+```python
+from sqlproof.scenarios import scenario
+
+
+@scenario(seed=42)
+def tiered_customers(s):
+    alice = s.row("auth.users", name="alice")
+    s.row("customers", name="acme", tier=1, owner_id=alice)
+    s.table("customers").cohort(2, tier=1).cohort(3, tier=2).fill(20)
+    s.table("invoices").per_parent("customers", where={"tier": 1}, count=(5, 10))
+```
+
+Or YAML, in `scenarios/<name>.scenario.yaml` (needs `sqlproof[yaml]`;
+JSON needs nothing extra) — the form to use in a project that does not
+otherwise use Python:
+
+```yaml
+# yaml-language-server: $schema=https://sqlproof.com/schemas/scenario-v1.json
+version: 1
+name: tiered_customers
+seed: 42
+tables:
+  auth.users:
+    - row: alice
+  customers:
+    - row: acme
+      set: {tier: 1, owner_id: {ref: alice}}
+    - cohort: 2
+      set: {tier: 1}
+    - fill: 20
+  invoices:
+    - per_parent: {parent: customers, where: {tier: 1}, count: [5, 10]}
+```
+
+```bash
+sqlproof scenarios show tiered_customers --schema-file supabase/schemas/schema.sql  # no DB
+sqlproof scenarios up tiered_customers --dsn "$SQLPROOF_DATABASE_URL"
+```
+
+With the `sqlproof-mcp` server, use the `compile_scenario` and
+`load_scenario` tools with the same JSON shape.
+
+**Important rules:**
+- **Check before loading.** `scenarios show` (or `compile_scenario`)
+  validates against the schema without a database and prints the row
+  counts and the key of every named row. Fix what it reports first.
+- **Never pass `--truncate-existing` (`truncate_existing=True`) without
+  asking the user.** It deletes every row in the modelled tables. A load
+  refuses tables that already hold rows, including rows RLS hides from
+  you; that refusal is the safety net, not an error to work around. The
+  MCP `load_scenario` tool has no truncate option at all.
+- **Pin only what the case is about.** Everything else should stay
+  generated, so the scenario keeps loading as the schema grows.
+- **Reference rows by name, not by id.** `s.ref("acme")` / `{ref: acme}`
+  resolves to the row's key. Never hard-code a generated id or UUID; read
+  it from `report.refs` (Python) or `scenarios show`.
+- **`auth.users` rows** take `fill(n)` and named rows only (no pinned
+  columns). Their ids derive from the scenario name and seed; their
+  emails are `sqlproof+<scenario>+<n>@test.invalid`.
+- **Timestamps are fixed.** `now()`-style defaults become the scenario
+  clock (2026-01-01 UTC unless `clock=` is given), `gen_random_uuid()`
+  a seeded UUID. SQL functions that call `now()` at query time still see
+  the real clock.
+- **A callable pin cannot be exported** to YAML; prefer literals and
+  references when the scenario will be shared.
+
+Full guide: <https://sqlproof.com/guides/scenarios/>.
+
+---
+
 ## Anti-patterns: things agents commonly get wrong
 
 ### ❌ Don't write hand-rolled `_insert_user` / `_insert_project` helpers
@@ -793,6 +882,9 @@ project_root/
 │   ├── test_migration_<n>_<desc>.py   # migration safety tests
 │   └── mutation/
 │       └── test_mutation_<area>.py    # marker-gated mutation runs (Pattern 4)
+├── scenarios/                         # seeded database states (Pattern 5)
+│   ├── <area>_scenarios.py            # Python scenarios, any number per file
+│   └── <name>.scenario.yaml           # or one YAML/JSON scenario per file
 └── supabase/
     ├── migrations/...
     ├── schemas/...

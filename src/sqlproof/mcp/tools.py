@@ -248,6 +248,35 @@ def list_recipes() -> list[dict[str, Any]]:
                 "    proof.run_state_machine(<Subject>Machine)\n"
             ),
         },
+        {
+            "name": "scenario",
+            "summary": (
+                "A seeded, reproducible database state for a dev database, "
+                "preview branch, end-to-end test or bug report: pin the rows "
+                "the case depends on, generate the rest from the seed. Not "
+                "for property tests. Check it with compile_scenario, load it "
+                "with load_scenario (never deletes rows; refuses tables that "
+                "hold some). The template is the JSON both tools take."
+            ),
+            "template": (
+                "{\n"
+                '  "version": 1,\n'
+                '  "name": "<scenario_name>",\n'
+                '  "seed": 42,\n'
+                '  "tables": {\n'
+                '    "<parent_table>": [\n'
+                '      {"row": "<row_name>", "set": {"<column>": "<value>"}},\n'
+                '      {"cohort": 2, "set": {"<column>": "<value>"}},\n'
+                '      {"fill": 10}\n'
+                "    ],\n"
+                '    "<child_table>": [\n'
+                '      {"per_parent": {"parent": "<parent_table>",\n'
+                '                      "where": {"ref": "<row_name>"}, "count": [1, 5]}}\n'
+                "    ]\n"
+                "  }\n"
+                "}\n"
+            ),
+        },
     ]
 
 
