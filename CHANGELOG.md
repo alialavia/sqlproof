@@ -5,6 +5,21 @@ All notable changes to SqlProof will be documented here. The format is based on
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While SqlProof
 remains in `0.x`, minor versions may include breaking changes.
 
+## [0.13.0](https://github.com/alialavia/sqlproof/compare/v0.12.0...v0.13.0) (2026-10-14)
+
+
+### Added
+
+* **scenarios:** declarative, reproducible database states (phase 1) ([#156](https://github.com/alialavia/sqlproof/issues/156)) ([546b0fa](https://github.com/alialavia/sqlproof/commit/546b0fab939b97f793e28bd7a437dfdf1d3474fe))
+
+
+### Fixed
+
+* **deps:** bump vulnerable dependencies and cap the mcp extra below 2.0 ([#147](https://github.com/alialavia/sqlproof/issues/147)) ([76b58a5](https://github.com/alialavia/sqlproof/commit/76b58a52af99b84419767d025670dc021830fb0f))
+* **mutation:** don't let a visiting background worker block a template clone ([#153](https://github.com/alialavia/sqlproof/issues/153)) ([05cd5d5](https://github.com/alialavia/sqlproof/commit/05cd5d5027f121fef46942d80326b34e3bbe0eb0))
+* **mutation:** give each run its own clone databases ([#151](https://github.com/alialavia/sqlproof/issues/151)) ([7fea2f4](https://github.com/alialavia/sqlproof/commit/7fea2f48f323aca731266a145a821d39509028d0))
+* **supabase:** declare httpx in a supabase extra for seed_supabase_test_users ([#148](https://github.com/alialavia/sqlproof/issues/148)) ([f370015](https://github.com/alialavia/sqlproof/commit/f370015770fa8db2b1d01e65cfa19b1179479194))
+
 ## [0.12.0](https://github.com/alialavia/sqlproof/compare/v0.11.2...v0.12.0) (2026-10-12)
 
 
