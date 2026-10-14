@@ -178,7 +178,8 @@ def run_sweep(
     with a scenario: pin columns in the scenario.
 
     The ladder stops at the first of: `min_points` points whose final
-    plan regime fits (R^2 >= `fit.MIN_R_SQUARED`); `max_factor` reached;
+    plan regime fits (exponent standard error at most
+    `fit.MAX_SLOPE_STDERR`); `max_factor` reached;
     or a probe taking longer than `probe_timeout_s`, which marks the
     result truncated. Postgres cancels such a probe at the timeout
     (`statement_timeout`); the cancelled point is not kept, since it

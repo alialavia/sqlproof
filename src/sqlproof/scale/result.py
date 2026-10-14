@@ -11,7 +11,14 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from sqlproof.exceptions import SqlProofScaleError
-from sqlproof.scale.fit import FitResult, PlanFlip, find_spill, project_rows_before_timeout
+from sqlproof.scale.fit import (
+    FitResult,
+    PlanFlip,
+    cpu_growth_reason,
+    find_spill,
+    project_rows_before_timeout,
+    segment_by_plan,
+)
 from sqlproof.scale.probe import ProbePoint
 
 
@@ -47,6 +54,10 @@ class ScaleResult:
         Raises rather than returning None. `assert result.exponent < 1.5`
         against a None would fail with a TypeError that explains nothing;
         the reason the fit failed is what the caller actually needs.
+
+        Also raises when execution time grows clearly faster than the
+        buffer work the exponent measures (`fit.cpu_growth_reason`): the
+        exponent would pass a function whose cost is CPU-bound growth.
         """
         if not self.regimes:
             msg = (
@@ -61,6 +72,14 @@ class ScaleResult:
                 f"Could not fit a complexity exponent for {self.function}: "
                 f"{final.reason}. Measured factors {final.from_factor}x-"
                 f"{final.to_factor}x."
+            )
+            raise SqlProofScaleError(msg)
+        segments, _flips = segment_by_plan(self.points)
+        reason = cpu_growth_reason(segments[-1], final.exponent) if segments else None
+        if reason is not None:
+            msg = (
+                f"Refusing the exponent {final.exponent} for {self.function}: {reason}. "
+                f"Measured factors {final.from_factor}x-{final.to_factor}x."
             )
             raise SqlProofScaleError(msg)
         return final.exponent

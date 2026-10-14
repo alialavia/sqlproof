@@ -37,7 +37,7 @@ Items 2 and 3 are the ones that decide whether `scale_analysis` can be advertise
 
 ## 2. The fit refuses flat but noisy functions
 
-**Label:** `bug`.
+**Label:** `bug`. **Status:** done. Acceptance is on the exponent's standard error (≤ 0.15), and an all-equal series is exponent 0 at any baseline; the primary-key test passes (20 of 20 runs on each image) and its xfail is gone.
 
 **Problem.** `fit_exponent` accepts a fit only when R² ≥ `MIN_R_SQUARED` (0.98). For a flat series with a little noise, R² is near zero by construction. So a well-behaved O(1) function is refused, and `assert result.exponent < 1.5` fails CI for good code.
 
@@ -54,7 +54,7 @@ A second defect makes it worse. `fit_exponent` sets `r2 = 1.0 if ss_tot == 0 els
 
 ## 3. Growth in CPU work alone is invisible to the exponent
 
-**Label:** `enhancement`. **Needs a spec decision.**
+**Label:** `enhancement`. **Status:** done, as proposed: a refuse-only guard (`fit.cpu_growth_reason`) when time grows more than 0.5 faster than work, the last point takes at least 20 ms, and the time fit is tight. The spec decision: time may veto the exponent, never replace it.
 
 **Problem.** The exponent is fitted on buffer blocks touched. Work that burns CPU without touching new pages doesn't show up in it: a nested loop over a `Materialize`, a large in-memory sort, hash-heavy work.
 

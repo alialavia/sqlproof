@@ -231,11 +231,20 @@ spike:
 ### Time-work
 
 Least-squares fit of `log(work − baseline)` against `log(factor)`. The
-slope is the complexity exponent; R² is reported alongside it, and an
-exponent is claimed only at R² ≥ 0.98. A poor fit is a finding in itself
-and must never be presented as a confident exponent -- which also means
-a flat series with a block or two of noise is refused rather than fitted
-~0 (see "Known limitations").
+slope is the complexity exponent. It is claimed only when its standard
+error is at most 0.15 (`fit.MAX_SLOPE_STDERR`): at five points, a 95%
+interval within about ±0.5, and real growth measures near 0.01. R² is
+reported alongside it but no longer decides: against a flat series it
+measures only the noise, so the earlier R² ≥ 0.98 rule refused
+well-behaved O(1) functions (scale follow-up 2). A poor fit is a finding
+in itself and must never be presented as a confident exponent.
+
+Execution time can veto the exponent, never replace it (scale follow-up
+3): when the final regime's time grows as n^t with t more than 0.5 above
+the work exponent, the last point took at least 20 ms, and the time fit
+is itself tight (standard error ≤ 0.3), `exponent` raises, naming CPU
+growth the buffers cannot see. Time stays machine-dependent, so it
+never becomes the number a gate compares.
 
 Fits are **segmented on plan-shape changes** the probe can see. When the
 plan hash changes between points, each regime is fitted separately and
@@ -337,7 +346,8 @@ Without that, a surprising result is unreproducible.
    fitted exponent, though not its raw buffer counts (see "Known
    limitations").
 3. **Stop** at the first of:
-   - ≥ 5 points **and** R² ≥ 0.98 — enough is known; stop paying
+   - ≥ 5 points **and** an accepted fit (exponent standard error ≤ 0.15)
+     — enough is known; stop paying
    - `max_factor` reached (default 32×)
    - a single probe exceeds `probe_timeout_s` (default 30s) — safety
      valve; marks the fit truncated. Postgres cancels the probe at the
@@ -396,8 +406,11 @@ reason and the raw points.
 
 ## Error handling and edge cases
 
-- **Inconclusive fit (low R²)** — `exponent` raises with the reason and
-  the points. Never a confident number over a bad fit.
+- **Inconclusive fit (exponent standard error above 0.15)** — `exponent`
+  raises with the reason and the points. Never a confident number over a
+  bad fit.
+- **CPU growth the buffers miss** — `exponent` raises when execution time
+  clearly outgrows the work (see "Time-work").
 - **Plan flips at every point** — no stable regime; the flips are the
   finding and no exponent is claimed.
 - **Truncated sweep** — the fit covers the range actually measured and is
@@ -410,8 +423,8 @@ reason and the raw points.
 - **Extrapolation across a plan flip** — refused when the flip is
   observed: each regime is fitted on its own. A flip inside a
   non-inlined function is NOT observed (the probe sees only the outer
-  plan), so it is fitted straight through, with only R² ≥ 0.98 standing
-  between it and a confident exponent (Ruling AK). `rows_before_timeout`
+  plan), so it is fitted straight through, with only the fit's standard
+  error standing between it and a confident exponent (Ruling AK). `rows_before_timeout`
   returns a range, labelled machine-dependent, and declines entirely
   when the sweep was truncated or a spill was seen.
 - **Cyclic schemas** — the bulk loader refuses FK cycles (Phase 1's
@@ -485,15 +498,15 @@ What the measurement cannot see, or refuses, as built. Every gap a test
 can pin is pinned by an xfail -- strict, so it cannot close or stay
 open silently, except where noted.
 
-- **CPU-only growth is invisible.** Buffers count I/O-visible work --
-  pages touched -- not CPU. A quadratic that re-reads nothing passes the
-  gate: the final review swept `SELECT count(*) FROM items a JOIN items
-  b ON a.v < b.v` (a Nested Loop over a Materialize) and measured an
-  exponent of 1.04 at R² 0.9998 while execution time grew as n^1.84.
-  Pinned by `test_a_cpu_only_quadratic_recovers_exponent_near_two`.
-  Guarding on wall-clock -- refusing when time grows far faster than
-  work -- would change the rule that wall-clock anchors only the
-  timeout projection; that is the user's decision (Ruling AS).
+- **CPU-only growth is refused, not measured.** Buffers count I/O-visible
+  work -- pages touched -- not CPU. The final review swept `SELECT
+  count(*) FROM items a JOIN items b ON a.v < b.v` (a Nested Loop over a
+  Materialize) and measured a work exponent of 1.04 while execution time
+  grew as n^1.84. Since follow-up 3, the clock vetoes such a result:
+  `exponent` raises (`test_a_cpu_only_quadratic_is_refused`). It still
+  cannot say *how* fast CPU cost grows in a machine-independent way, and
+  growth under 20 ms per call, or within 0.5 of the work exponent, passes
+  unseen.
 - **The probe sees only the outer statement.** `EXPLAIN` of `SELECT
   fn()` shows the plan of that statement, not of the queries a
   non-inlined function runs -- every plpgsql function, and SQL
@@ -504,19 +517,11 @@ open silently, except where noted.
   function the hash never changes, peak memory reads 0, and an inner
   plan flip is fitted straight through (Ruling AK). Pinned by
   `test_a_flip_inside_a_function_is_segmented`.
-- **Flat-but-noisy work is refused.** Against a flat series R² measures
-  only the noise, so an O(1) function whose work moves by a block or two
-  from point to point -- a primary-key lookup, at R² 0.000 to 0.75 --
-  fails the R² ≥ 0.98 acceptance, and `exponent` raises rather than
-  report ~0: a false alarm, never a wrong number. Only an exactly-flat
-  series is accepted as 0. Tracked by
-  `test_a_primary_key_lookup_recovers_exponent_near_zero`, a NON-strict
-  xfail (Ruling AW): the noise is run-to-run, so a run whose five points
-  happen to land on one block count is exactly flat, is accepted as
-  0.0, and XPASSes by chance -- a strict xfail would turn a clean
-  branch red at random. Gating on the slope's standard error instead
-  would change the acceptance rule; that is the user's decision
-  (Ruling AT).
+- **Flat-but-noisy work was refused** until follow-up 2 replaced the
+  R² ≥ 0.98 acceptance with the exponent's standard error. A
+  primary-key lookup whose work wobbles by a block or two (R² 0.000 to
+  0.75) now fits about 0; `test_a_primary_key_lookup_recovers_exponent_near_zero`
+  passes and its xfail is gone.
 - **No argument is a worst case.** `heaviest` returns the largest key
   value and the sweep loads uniform data; the artifact labels each
   argument by how it was chosen (Ruling AO; see "Arguments").

@@ -64,7 +64,8 @@ noisy CI runner.
    mistaken for growth.
 3. **Climb a geometric ladder** (×1, ×2, ×4, …): truncate, bulk load with
    `COPY`, `ANALYZE`, resolve the arguments against the new data, probe.
-4. **Stop** when at least `min_points` points fit with R² ≥ 0.98, at
+4. **Stop** when at least `min_points` points fit well enough to claim
+   an exponent (its standard error at most 0.15), at
    `max_factor`, or when a probe exceeds `probe_timeout_s`. Postgres
    cancels such a probe at the timeout, and the result is marked
    truncated.
@@ -96,8 +97,8 @@ the named row's key, the same at every factor.
 
 | Member | Meaning |
 | --- | --- |
-| `exponent` | Exponent of the final plan regime. Raises `SqlProofScaleError`, with the reason, when the fit is inconclusive. |
-| `r_squared` | Fit quality of the final regime. |
+| `exponent` | Exponent of the final plan regime. Raises `SqlProofScaleError`, with the reason, when the fit is inconclusive or execution time grows clearly faster than the work (see below). |
+| `r_squared` | Fit quality of the final regime, for reading. Acceptance uses the exponent's standard error (`regimes[-1].slope_stderr`): R² of a flat series measures only its noise. |
 | `regimes`, `plan_flips` | Each plan regime's fit, and where the plan changed. |
 | `spills_below(rows)` | Whether a sort or hash spilled to disk at or below `rows`. Raises beyond the measured range rather than guess. |
 | `rows_before_timeout(ms)` | Projected row band where the function crosses a timeout. Machine-dependent, unlike `exponent`. |
@@ -112,13 +113,13 @@ function.
 
 - **Growth in CPU work alone.** Buffers count pages touched, not CPU. A
   join on `a.v < b.v` over a materialized inner side is quadratic in CPU
-  but fits about 1.
+  but its work fits about 1. When execution time grows more than 0.5
+  faster than the work (and the last call took at least 20 ms),
+  `exponent` refuses instead of reporting the smaller number. Below
+  that, CPU growth passes unseen.
 - **Plans inside a function.** `EXPLAIN` of `SELECT fn()` shows only the
   outer statement. For PL/pgSQL and non-inlined SQL functions, work is
   still measured, but plan changes and peak memory inside them are not.
-- **Flat but noisy functions.** A primary-key lookup whose work wobbles
-  by a block or two fails the R² check, so `exponent` raises instead of
-  reporting about 0.
 - **O(n log n) versus O(n).** An in-memory sort touches no buffers.
 - **What `work_blocks` counts.** Only buffers of the modelled tables, their
   indexes and TOAST storage. System catalog reads are excluded, so neither

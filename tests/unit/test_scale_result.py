@@ -178,3 +178,11 @@ def test_rows_before_timeout_with_no_regimes_returns_none():
     flips = [PlanFlip(2, "a", "b")]
     r = _result(regimes=[], plan_flips=flips)
     assert r.rows_before_timeout(10_000) is None
+
+
+def test_exponent_is_refused_when_time_outgrows_the_work():
+    """Follow-up 3: buffer work ~n while the clock sees ~n^1.84."""
+    timings = {1: 1.6, 2: 5.0, 4: 17.0, 8: 60.0, 16: 254.0}
+    result = _result(points=[_pt(f, f * 100, ms=ms) for f, ms in timings.items()])
+    with pytest.raises(SqlProofScaleError, match=r"execution time grows as about n\^1\.8"):
+        result.exponent  # noqa: B018

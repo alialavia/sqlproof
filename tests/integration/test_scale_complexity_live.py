@@ -192,55 +192,23 @@ def test_the_same_seed_and_profile_measure_the_same_points(
         assert abs(first.exponent - second.exponent) <= 0.01
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason=(
-        "C2 / Ruling AS: buffers measure I/O-visible work, not CPU. "
-        "cpu_quadratic_fn's non-equi self-join runs as a Nested Loop over a "
-        "Materialize that replays the inner side from memory, so its buffer "
-        "work grows ~n while its CPU work grows ~n^2: the final review "
-        "measured an exponent of ~1.04 (R^2 0.9998) while wall-clock grew "
-        "~n^1.84. The gate passes a real quadratic. strict=True: the day the "
-        "gate can see CPU-only growth, this XPASSes and fails, so the blind "
-        "spot cannot close -- or stay open -- silently."
-    ),
-)
-def test_a_cpu_only_quadratic_recovers_exponent_near_two(conn):
+def test_a_cpu_only_quadratic_is_refused(conn):
+    """Follow-up 3. cpu_quadratic_fn's non-equi self-join runs as a Nested
+    Loop over a Materialize that replays the inner side from memory, so
+    its buffer work grows ~n while its CPU work grows ~n^2 (the final
+    review measured a work exponent of ~1.04 against wall-clock ~n^1.84).
+    Reporting 1.04 would pass a quadratic; the clock vetoes it instead."""
     result = run_sweep(
         conn, _schema(), "scale_test.cpu_quadratic_fn",
         sizes={"items": 200}, max_factor=16,
     )
-    assert result.exponent > 1.6, (
-        f"fitted {result.exponent} on buffer work; the non-equi join's O(n^2) "
-        "comparisons touch no buffers after the first scan"
-    )
+    with pytest.raises(SqlProofScaleError, match="CPU cost"):
+        result.exponent  # noqa: B018
 
 
-# Ruling AW: NOT strict, unlike the other xfails here. The wobble is
-# run-to-run noise, and a run whose five points happen to land on one
-# block count is exactly flat: the fit accepts it as 0.0, so the test
-# XPASSes by chance (every other 10-13-block pattern is refused). A
-# strict xfail that can turn a clean branch red at random is worse than
-# one that reports XPASS. `raises=` stays, so an unrelated crash still
-# fails loudly; the gap stays tracked here and in the spec's "Known
-# limitations".
-@pytest.mark.xfail(
-    strict=False,
-    raises=SqlProofScaleError,
-    reason=(
-        "I1 / Ruling AT: flat-but-noisy work is refused. pk_lookup_fn is a "
-        "primary-key lookup, O(1), yet its buffer work moves by a block or "
-        "two from point to point with no trend (the final review saw 9-13 "
-        "blocks against a calibrated baseline of 4). A flat series' R^2 "
-        "measures only that wobble, which reshuffles between runs, so it "
-        "lands far below the spec's MIN_R_SQUARED of 0.98 (0.000 to 0.75 on "
-        "the patterns measured here), and .exponent raises instead of "
-        "reporting ~0 -- `assert exponent < 1.5` fails CI for a well-behaved "
-        "function. Not strict (Ruling AW): a run that happens to come out "
-        "exactly flat is accepted as 0.0 and XPASSes by chance."
-    ),
-)
+# Follow-up 2: its buffer work wobbles by a block or two with no trend
+# (9-13 blocks against a baseline of 4). R^2 measured only that wobble
+# and refused the fit; the slope's standard error accepts it as flat.
 def test_a_primary_key_lookup_recovers_exponent_near_zero(conn):
     result = run_sweep(
         conn, _schema(), "scale_test.pk_lookup_fn",
