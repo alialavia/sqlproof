@@ -49,8 +49,11 @@ def test_heaviest_is_the_most_referenced_customer_under_zipf(conn):
     with database.connect(os.environ[DSN_ENV], row_factory=database.dict_row) as c:
         schema = introspect_schema(c, schema=SCHEMA)
     load_dataset(
-        conn, schema, {"customers": 50, "invoices": 2000, "notes": 300},
-        seed=3, distribution="zipf",
+        conn,
+        schema,
+        {"customers": 50, "invoices": 2000, "notes": 300},
+        seed=3,
+        distribution="zipf",
     )
     expected = conn.execute(
         f"SELECT k FROM ("

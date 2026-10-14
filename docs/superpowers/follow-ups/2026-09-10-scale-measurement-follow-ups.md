@@ -83,7 +83,7 @@ A second defect makes it worse. `fit_exponent` sets `r2 = 1.0 if ss_tot == 0 els
 
 ## 5. `sqlproof scale report`: a CLI over saved runs
 
-**Label:** `enhancement`.
+**Label:** `enhancement`. **Status:** done. `sqlproof scale report [--runs-dir] [--format html|text] [--output] [--open]` (`sqlproof.scale.report`): per-function history with each run's exponent, standard error, measured range, spill, plan flips and distribution; a rise of more than 0.3 over the previous run is flagged. Runs are re-read into `ScaleResult`, so refusals match what a test sees. The `sqlproof scale <function>` gate command is not built: the assertion API is the gate.
 
 **Problem.** The umbrella spec's Phase 2 includes a `sqlproof scale` CLI; #110 ships the Python API only. The Phase 2 spec reframed the CLI as `sqlproof scale report` over saved artifacts, mirroring `sqlproof mutation report`.
 

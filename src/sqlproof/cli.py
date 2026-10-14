@@ -65,6 +65,16 @@ def main(argv: list[str] | None = None) -> int:
     mutation_report.add_argument("--output", type=Path, default=Path("mutation-report.html"))
     mutation_report.add_argument("--open", action="store_true", dest="open_browser")
 
+    scale = subcommands.add_parser("scale", help="read saved scale_analysis runs")
+    scale_sub = scale.add_subparsers(dest="scale_command", required=True)
+    scale_report = scale_sub.add_parser(
+        "report", help="per-function exponent history over .sqlproof/scale-runs"
+    )
+    scale_report.add_argument("--runs-dir", type=Path, default=Path(".sqlproof/scale-runs"))
+    scale_report.add_argument("--format", choices=["html", "text"], default="html")
+    scale_report.add_argument("--output", type=Path, default=Path("scale-report.html"))
+    scale_report.add_argument("--open", action="store_true", dest="open_browser")
+
     scenarios = subcommands.add_parser(
         "scenarios", help="list, inspect and load seeded database scenarios (experimental)"
     )
@@ -159,6 +169,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.mutation_command == "report":
             return _mutation_report(args.runs_dir, args.output, open_browser=args.open_browser)
         return 1
+    if args.command == "scale":
+        return _scale_report(args)
     if args.command == "scenarios":
         from sqlproof.exceptions import SqlProofScenarioError
 
@@ -283,6 +295,26 @@ def _mutation_report(runs_dir: Path, output: Path, *, open_browser: bool) -> int
         import webbrowser
 
         webbrowser.open(output.resolve().as_uri())
+    return 0
+
+
+def _scale_report(args: argparse.Namespace) -> int:
+    from sqlproof.scale.report import load_report, render_html, render_text
+
+    report = load_report(args.runs_dir)
+    for skipped in report.skipped:
+        print(f"warning: skipped {skipped.path}: {skipped.reason}", file=sys.stderr)
+    if args.format == "text":
+        print(render_text(report), end="")
+        return 0
+    if args.output.parent != Path(""):
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(render_html(report), encoding="utf-8")
+    print(f"wrote {args.output} ({len(report.functions)} function(s))")
+    if args.open_browser:
+        import webbrowser
+
+        webbrowser.open(args.output.resolve().as_uri())
     return 0
 
 

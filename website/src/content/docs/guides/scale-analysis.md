@@ -112,6 +112,20 @@ Each run also writes a JSON artifact to `.sqlproof/scale-runs/` (pass
 [mutation runs](/guides/mutation-testing/), so you can keep a history per
 function.
 
+To read the history, render a report over those runs:
+
+```bash
+sqlproof scale report                 # writes scale-report.html
+sqlproof scale report --format text   # one line per function, for CI logs
+```
+
+Per function, it shows the exponent over time, with each run's standard
+error, the rows measured, any spill, plan flips and the data
+distribution. A run whose exponent is more than 0.3 above the
+function's previous one is flagged `REGRESSED`. A refused exponent shows
+as refused, with the reason, by the same rules `exponent` applies in a
+test.
+
 ## What it cannot see
 
 - **Growth in CPU work alone.** Buffers count pages touched, not CPU. A
