@@ -105,6 +105,7 @@ def save_run(
         # One entry per argument position (see the docstring) -- deliberately
         # not a run-wide "worst case" label: no resolver guarantees one.
         "argument_policy": [dict(entry) for entry in result.argument_policy],
+        "scenario": None if result.scenario is None else dict(result.scenario),
         "spill_point_rows": result.spill_point_rows,
         "factor_at_spill": result.factor_at_spill,
         "points": [

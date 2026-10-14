@@ -86,6 +86,10 @@ resolvers are re-run against each freshly loaded dataset:
 
 Plain values are passed through unchanged.
 
+To measure one particular row as everything else grows, sweep a
+[scenario](/guides/scenarios/#in-scale-sweeps) and pass `RowRef("name")`:
+the named row's key, the same at every factor.
+
 ## Reading the result
 
 | Member | Meaning |

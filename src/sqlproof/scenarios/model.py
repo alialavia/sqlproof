@@ -26,6 +26,10 @@ from uuid import UUID
 from sqlproof.exceptions import SqlProofScenarioError
 
 if TYPE_CHECKING:
+    from hypothesis.strategies import SearchStrategy
+
+    from sqlproof.core import SqlProof
+    from sqlproof.generators.graph import Dataset
     from sqlproof.scenarios.compile import CompiledScenario
     from sqlproof.scenarios.load import LoadReport
     from sqlproof.schema.model import SchemaInfo
@@ -254,6 +258,112 @@ class Scenario:
         """The serializable form (see `sqlproof.scenarios.serialize`). Raises
         for a scenario that pins a callable, since code cannot be stored."""
         return _normalize(self.spec, strict=True)
+
+    def strategy(self, proof: SqlProof | SchemaInfo) -> SearchStrategy[Dataset]:
+        """A Hypothesis strategy of datasets that contain this scenario.
+
+        Every drawn dataset has the scenario's row counts, and every pinned
+        value -- cohorts, named rows, references, per-parent children --
+        in every draw; only the unpinned values vary, so a failing property
+        shrinks those and nothing the scenario fixed. Use it to say "for
+        every dataset shaped like this scenario":
+
+            @given(dataset=tiered_customers.strategy(proof))
+            def test_tier_one_never_pays_more(dataset):
+                with proof.client_for_dataset(dataset) as db:
+                    ...
+
+        Unlike `load`, there is no byte-identity promise: Hypothesis chooses
+        the unpinned values. A scenario that seeds `auth.users` is refused,
+        because a dataset cannot carry rows for a table outside the schema;
+        load it with `load` instead."""
+        from sqlproof.generators.graph import dataset_strategy
+        from sqlproof.schema.model import SchemaInfo
+
+        schema = proof if isinstance(proof, SchemaInfo) else proof.schema_info
+        compiled = self.compile(schema)
+        if compiled.auth_users:
+            msg = (
+                f"scenario {self.name!r} seeds auth.users, which a Hypothesis "
+                "dataset cannot carry. Load it with Scenario.load instead, or drop "
+                "the auth.users rows for property tests."
+            )
+            raise SqlProofScenarioError(msg)
+        return dataset_strategy(schema, sizes=compiled.sizes, columns=compiled.columns)
+
+    def scaled(self, factor: int, *, scale_cohorts: bool = False) -> Scenario:
+        """This scenario at about `factor` times the size, for a scale sweep.
+
+        Fills grow by `factor`; cohorts too when `scale_cohorts` is set.
+        Named rows never do: they are identities, referenced by name.
+        Per-parent children grow so totals stay linear in `factor`: parents
+        that stay fixed (a named row, or cohorts unless `scale_cohorts`)
+        get `factor` times the children each, while parents that multiply
+        keep their per-parent counts, since there are already `factor`
+        times as many of them. The seed and clock stay the same."""
+        _require_int(factor, "scale factor", 1)
+        spec = self.spec
+
+        def build(s: ScenarioBuilder) -> None:
+            for table in spec.tables:
+                builder = s.table(table.name)
+                for group in table.groups:
+                    if group.kind == "row":
+                        assert group.name is not None
+                        s._named_row(table.name, group.name, group.pinned)  # pyright: ignore[reportPrivateUsage]
+                    elif group.kind == "fill":
+                        builder.fill(group.count * factor)
+                    else:
+                        count = group.count * factor if scale_cohorts else group.count
+                        builder.cohort(count, **group.pinned)
+                if table.per_parent is not None:
+                    pp = table.per_parent
+                    # `where=None` matches every parent, fills included, so
+                    # the matched parents multiply; a named row never does,
+                    # and cohorts only with scale_cohorts. `default` covers
+                    # the unmatched parents, which include the fills.
+                    fixed = isinstance(pp.where, RowRef) or (
+                        pp.where is not None and not scale_cohorts
+                    )
+                    grow = factor if fixed else 1
+                    builder.per_parent(
+                        pp.parent,
+                        where=pp.where,
+                        count=(pp.count[0] * grow, pp.count[1] * grow),
+                        default=pp.default,
+                        column=pp.column,
+                    )
+
+        return Scenario(build, seed=self.seed, name=self.name, clock=self.clock)
+
+    def minimal(self) -> Scenario:
+        """At most one row per group, for a scale sweep's calibration round:
+        the same shape, so the same tables and references exist, with as
+        little data as the scenario allows."""
+        spec = self.spec
+
+        def build(s: ScenarioBuilder) -> None:
+            for table in spec.tables:
+                builder = s.table(table.name)
+                for group in table.groups:
+                    if group.kind == "row":
+                        assert group.name is not None
+                        s._named_row(table.name, group.name, group.pinned)  # pyright: ignore[reportPrivateUsage]
+                    elif group.kind == "fill":
+                        builder.fill(min(group.count, 1))
+                    else:
+                        builder.cohort(1, **group.pinned)
+                if table.per_parent is not None:
+                    pp = table.per_parent
+                    builder.per_parent(
+                        pp.parent,
+                        where=pp.where,
+                        count=(min(pp.count[0], 1), min(pp.count[1], 1)),
+                        default=0,
+                        column=pp.column,
+                    )
+
+        return Scenario(build, seed=self.seed, name=self.name, clock=self.clock)
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> Scenario:

@@ -36,6 +36,9 @@ class ScaleResult:
     # How each argument position was chosen (`args.argument_policy`): a
     # built-in resolver's kind and column, "callable", or "literal".
     argument_policy: Sequence[Mapping[str, object]] = ()
+    # The scenario the sweep scaled, when it scaled one instead of `sizes`:
+    # its name, fingerprint and whether cohorts grew with the factor.
+    scenario: Mapping[str, object] | None = None
 
     @property
     def exponent(self) -> float:

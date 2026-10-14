@@ -30,6 +30,7 @@ from sqlproof.scale.sweep import run_sweep
 
 if TYPE_CHECKING:
     from sqlproof.core import SqlProof
+    from sqlproof.scenarios.model import Scenario
 
 __all__ = [
     "ScaleResult",
@@ -44,7 +45,8 @@ def scale_analysis(
     proof: SqlProof,
     function: str,
     *,
-    sizes: Mapping[str, int],
+    sizes: Mapping[str, int] | None = None,
+    scenario: Scenario | None = None,
     args: Sequence[Any] = (),
     artifact_dir: Path | str | None = ".sqlproof/scale-runs",
     truncate_existing: bool = False,
@@ -67,7 +69,12 @@ def scale_analysis(
     (default 32), `min_points` (default 5; at least `fit.MIN_POINTS`),
     `probe_timeout_s` (default 30.0; checked after each probe returns,
     never cancelling one), `seed` (default 0) and `columns` (per-column
-    overrides, as `load_dataset` takes them).
+    overrides, as `load_dataset` takes them), and `scale_cohorts`.
+
+    Pass `scenario=` instead of `sizes=` to sweep a scenario: its fills and
+    per-parent counts grow with the factor while its cohorts and named
+    rows stay fixed, and `ref("name")` arguments resolve to named rows at
+    every factor. See `run_sweep`.
 
     Opens its own autocommit connection: the sweep issues TRUNCATE,
     COPY and ANALYZE, which want a lifecycle of their own rather than
@@ -100,7 +107,8 @@ def scale_analysis(
     with database.connect(dsn, autocommit=True) as conn:
         result = run_sweep(
             conn, proof.schema_info, function,
-            sizes=sizes, args=args, truncate_existing=truncate_existing, **kwargs,
+            sizes=sizes, scenario=scenario, args=args,
+            truncate_existing=truncate_existing, **kwargs,
         )
     duration_s = time.monotonic() - monotonic_start
     if artifact_dir is not None:

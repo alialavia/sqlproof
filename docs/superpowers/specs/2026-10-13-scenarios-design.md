@@ -1,6 +1,6 @@
 # Scenarios: declarative, reproducible database states
 
-**Status:** phases 1 and 2 implemented (experimental); phases 3 and 4 draft.
+**Status:** phases 1-3 implemented (experimental); phase 4 draft.
 **Date:** 2026-10-13
 **Builds on:** bulk generation (`2026-09-03-function-scale-analysis-design.md`,
 Phase 1, shipped in 0.11.0) and per-column overrides (#107).
@@ -363,6 +363,30 @@ how they would use this at all.
 
 Phase 1 alone already answers the original request: "2 Tier 1 users, 3
 Tier 2 users, the rest generated, the same every time".
+
+### Phase 3 as implemented
+
+- `Scenario.strategy(proof)` wraps `dataset_strategy` with the compiled
+  sizes and overrides, so pinned values are fixed in every draw and
+  Hypothesis shrinks only the rest. A scenario that seeds `auth.users`
+  is refused: a dataset cannot carry rows for a table outside the schema.
+- `scale_analysis(..., scenario=...)` (and `run_sweep`) take a scenario
+  instead of `sizes`. Internally both become a per-factor load profile.
+  `Scenario.scaled(k)` is the profile at factor `k` and
+  `Scenario.minimal()` the calibration round.
+- **Scaling rule, refined from the sketch above.** Multiplying every
+  per-parent count by `k` while fill parents also multiply grows the
+  children as `k^2`, which a first live test measured as an exponent of
+  about 1.7 for a linear function. So per-parent counts grow only for
+  parents that stay fixed (a named row, or cohorts unless
+  `scale_cohorts`), and totals stay linear in `k`.
+- `RowRef` arguments resolve to the named row's key at every factor and
+  are recorded as `{"kind": "ref"}` in the artifact's `argument_policy`.
+  The artifact gains a `scenario` entry (name, fingerprint,
+  `scale_cohorts`).
+- The scenario's seed is the sweep's (a conflicting `seed=` is refused),
+  `columns=` cannot be combined with a scenario, and the scenario's
+  `auth.users` rows are removed when the sweep ends.
 
 ### Phase 1 as implemented
 

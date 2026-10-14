@@ -159,13 +159,18 @@ def argument_policy(args: Sequence[Any]) -> tuple[dict[str, Any], ...]:
       ...}` for a built-in resolver, read from its marker;
     - `{"kind": "callable"}` for any other callable, which sqlproof
       cannot describe;
+    - `{"kind": "ref", "name": ...}` for a scenario's named row;
     - `{"kind": "literal"}` for a value passed through as given (the
       value itself is recorded in every point's `args`).
     """
+    from sqlproof.scenarios.model import RowRef
+
     policy: list[dict[str, Any]] = []
     for arg in args:
         marker = getattr(arg, "_sqlproof_resolver", None)
-        if isinstance(marker, dict):
+        if isinstance(arg, RowRef):
+            policy.append({"kind": "ref", "name": arg.name})
+        elif isinstance(marker, dict):
             policy.append(dict(cast("dict[str, Any]", marker)))
         elif callable(arg):
             policy.append({"kind": "callable"})
