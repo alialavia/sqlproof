@@ -163,6 +163,14 @@ First check whether the `postgres` role in the Supabase image, which is not a su
 
 **Label:** `enhancement`. **Source:** open question 1 of the umbrella spec, which marks it top priority for the generation foundation.
 
+**Status:** done. Both generators read one window per kind from
+`typespec.py`; the bulk path's output is unchanged (the golden test still
+passes), the Hypothesis path narrowed to the bulk windows. Values are
+checked across paths in `tests/unit/test_shared_windows.py`; `n_distinct`
+and `correlation` are checked for the bulk path against analytic
+expectations in `tests/integration/test_bulk_statistics_live.py`, not
+across paths, for the reason given there.
+
 **Problem.** `TypeSpec` carries bounds for `integer`, `decimal` and `text` only. For `date`, `datetime`, `float`, `interval`, `binary` and `vector`, the Hypothesis and bulk generators each hold their own ranges, and those have measurably diverged: dates run 2000–2054 in one and 0066–9988 in the other. The cross-path `pg_stats` check covers only `null_frac`.
 
 **Fix.** Two changes, landed together:

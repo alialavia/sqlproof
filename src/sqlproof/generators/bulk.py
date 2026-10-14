@@ -15,7 +15,7 @@ import random
 import string
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import UTC, time, timedelta
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
@@ -41,9 +41,14 @@ from sqlproof.generators.rows import (
     _unique_value,  # pyright: ignore[reportPrivateUsage]
 )
 from sqlproof.generators.typespec import (
+    BINARY_MAX_SIZE,
+    DATE_WINDOW,
+    DATETIME_WINDOW,
+    INTERVAL_WINDOW,
+    VECTOR_COMPONENT_WINDOW,
     TypeSpec,
     float32_ceil,
-    float32_floor,
+    float_bounds,
     spec_for_column,
     spec_is_empty,
 )
@@ -95,8 +100,6 @@ DEFAULT_NULL_FRAC = 0.1
 # enum) can never produce two distinct draws, so the loop must give up
 # loudly instead of spinning forever.
 _RANGE_RETRY_LIMIT = 100
-
-_EPOCH_DATE = date(2000, 1, 1)
 
 
 # Bound for rejecting draws that hit a CHECK-excluded value (see
@@ -201,17 +204,21 @@ def _base_sampler_for_spec(spec: TypeSpec, rng: random.Random) -> Callable[[], A
     if kind == "uuid":
         return lambda: str(UUID(int=rng.getrandbits(128)))
     if kind == "datetime":
+        start, end = DATETIME_WINDOW
         if spec.tz_aware:
-            return lambda: datetime(2000, 1, 1, tzinfo=UTC) + timedelta(
-                seconds=rng.randint(0, 10**9)
-            )
-        return lambda: datetime(2000, 1, 1) + timedelta(seconds=rng.randint(0, 10**9))
+            start = start.replace(tzinfo=UTC)
+        seconds = int((end - DATETIME_WINDOW[0]).total_seconds())
+        return lambda: start + timedelta(seconds=rng.randint(0, seconds))
     if kind == "date":
-        return lambda: _EPOCH_DATE + timedelta(days=rng.randint(0, 20_000))
+        first, last = DATE_WINDOW
+        days = (last - first).days
+        return lambda: first + timedelta(days=rng.randint(0, days))
     if kind == "time":
         return lambda: time(rng.randint(0, 23), rng.randint(0, 59), rng.randint(0, 59))
     if kind == "interval":
-        return lambda: timedelta(seconds=rng.randint(0, 10**7))
+        shortest, longest = INTERVAL_WINDOW
+        lo_s, hi_s = int(shortest.total_seconds()), int(longest.total_seconds())
+        return lambda: timedelta(seconds=rng.randint(lo_s, hi_s))
     if kind == "json":
         # TypeSpec has no representation for the recursive JSON shape
         # (unlike range/composite, which nest via `element`/`fields`);
@@ -221,11 +228,16 @@ def _base_sampler_for_spec(spec: TypeSpec, rng: random.Random) -> Callable[[], A
         text_sampler = sampler_for_spec(TypeSpec(kind="text", max_size=12), rng)
         return lambda: {text_sampler(): rng.randint(0, 1000)}
     if kind == "binary":
-        return lambda: bytes(rng.getrandbits(8) for _ in range(rng.randint(0, 32)))
+        min_bytes = spec.min_size or 0
+        max_bytes = spec.max_size if spec.max_size is not None else BINARY_MAX_SIZE
+        return lambda: bytes(
+            rng.getrandbits(8) for _ in range(rng.randint(min_bytes, max_bytes))
+        )
     if kind == "vector":
         dim = spec.dimension or 0
+        c_lo, c_hi = VECTOR_COMPONENT_WINDOW
         return lambda: (
-            "[" + ",".join(f"{rng.uniform(-1, 1):.6f}" for _ in range(dim)) + "]"
+            "[" + ",".join(f"{rng.uniform(c_lo, c_hi):.6f}" for _ in range(dim)) + "]"
         )
     if kind == "enum":
         values = spec.enum_values
@@ -266,16 +278,7 @@ def _base_sampler_for_spec(spec: TypeSpec, rng: random.Random) -> Callable[[], A
 
 
 def _float_sampler(spec: TypeSpec, rng: random.Random) -> Callable[[], float]:
-    # Unbounded floats stay in a realistic +-1e6 window. A CHECK bound
-    # replaces the matching side of that window; a one-sided bound
-    # beyond the window's far edge gets a window of its own width.
-    lo = float(spec.min_value) if spec.min_value is not None else None
-    hi = float(spec.max_value) if spec.max_value is not None else None
-    if spec.float_width == 32:
-        lo = None if lo is None else float32_ceil(lo)
-        hi = None if hi is None else float32_floor(hi)
-    low = lo if lo is not None else (min(-1e6, hi - 2e6) if hi is not None else -1e6)
-    high = hi if hi is not None else (max(1e6, low + 2e6) if lo is not None else 1e6)
+    low, high = float_bounds(spec)
     width32 = spec.float_width == 32
 
     def draw_float() -> float:

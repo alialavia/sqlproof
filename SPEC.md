@@ -526,25 +526,30 @@ Tables are inserted in topological order. Self-referencing tables are handled by
 | `bigint`, `int8`                | `st.integers(-2**63, 2**63 - 1)`                             |
 | `serial`, `bigserial`, identity | Skipped (DB-generated)                                       |
 | `numeric(p, s)`                 | `st.decimals(min_value, max_value, places=s)`                |
-| `real`, `float4`                | `st.floats(width=32, allow_nan=False, allow_infinity=False)` |
-| `double precision`, `float8`    | `st.floats(allow_nan=False, allow_infinity=False)`           |
+| `real`, `float4`                | `st.floats(width=32, ...)` within ±1e6 (`FLOAT_WINDOW`)      |
+| `double precision`, `float8`    | `st.floats(...)` within ±1e6 (`FLOAT_WINDOW`)                |
 | `boolean`                       | `st.booleans()`                                              |
 | `text`                          | `st.text(max_size=255)`                                      |
 | `varchar(n)`                    | `st.text(max_size=n)`                                        |
 | `char(n)`                       | `st.text(min_size=n, max_size=n)`                            |
 | `uuid`                          | `st.uuids()`                                                 |
-| `timestamp`, `timestamptz`      | `st.datetimes()` (UTC for timestamptz)                       |
-| `date`                          | `st.dates()`                                                 |
+| `timestamp`, `timestamptz`      | `st.datetimes()` 2000–2031 (`DATETIME_WINDOW`)               |
+| `date`                          | `st.dates()` 2000–2054 (`DATE_WINDOW`)                       |
 | `time`, `timetz`                | `st.times()`                                                 |
-| `interval`                      | `st.timedeltas()`                                            |
+| `interval`                      | `st.timedeltas()` 0 to ~115 days (`INTERVAL_WINDOW`)         |
 | `json`, `jsonb`                 | `st.recursive(...)` over JSON value space                    |
-| `bytea`                         | `st.binary()`                                                |
+| `bytea`                         | `st.binary(max_size=32)`                                     |
 | `inet`, `cidr`                  | `st.ip_addresses()`                                          |
 | `int4range`, etc.               | Range strategy with bounds-aware composition                 |
 | `T[]`                           | `st.lists(strategy_for(T))`                                  |
 | Enum                            | `st.sampled_from(enum_values)`                               |
 | Domain                          | Strategy of base type, filtered by domain CHECK              |
 | Composite                       | `st.builds(...)` over field strategies                       |
+
+The windows for dates, timestamps, floats, intervals, `bytea` and
+`vector` components live in `generators/typespec.py` and are shared with
+the bulk generator, so a property test and a bulk load draw from the same
+values. Pass `columns={...}` to explore outside them.
 
 ### Constraint-Aware Generation
 

@@ -515,7 +515,16 @@ confirming no `auto_explain` log parsing is needed for detection.
 
 ## Open questions
 
-1. **(Top priority) Type-registry bounds for the unbounded kinds, and
+1. **Resolved (scale follow-up 12).** `typespec.py` now holds one window
+   per unbounded kind, read by both interpreters, and
+   `tests/unit/test_shared_windows.py` checks that both draw inside each
+   window and reach its ends. The cross-path `n_distinct`/`correlation`
+   comparison proposed below was not added: like the `null_frac` one
+   before it, it compares an accident of how Hypothesis is driven.
+   `tests/integration/test_bulk_statistics_live.py` checks the bulk
+   path's statistics against analytic expectations instead. Original
+   question, for the record:
+   **(Top priority) Type-registry bounds for the unbounded kinds, and
    the `pg_stats` backstop gap it exposes.** Confirmed Decision 7's
    structural guarantee doesn't reach `date`, `datetime`, `float`,
    `interval`, `binary` or `vector` -- see the correction there for the

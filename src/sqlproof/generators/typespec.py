@@ -2,37 +2,33 @@
 
 This module holds what Postgres itself *constrains* about a type:
 `int4` really is ±2³¹, `numeric(6, 2)` really does cap at 9999.99,
-`varchar(n)` really does stop at n. Facts, not preferences. It contains
-no Hypothesis strategies and no RNG. `columns.py` interprets a TypeSpec
-into a Hypothesis strategy; `bulk.py` interprets the same TypeSpec into
-a seeded sampler.
+`varchar(n)` really does stop at n. It contains no Hypothesis
+strategies and no RNG. `columns.py` interprets a TypeSpec into a
+Hypothesis strategy; `bulk.py` interprets the same TypeSpec into a
+seeded sampler.
 
-What this module deliberately does NOT hold is *policy*. Several types
-— `date`, `datetime`, `float`, `interval`, `binary` — have no
-meaningful bound to record: Postgres accepts dates from 4713 BC to
-5874897 AD, and neither generator wants that. Each interpreter picks a
-range suited to its own job, and the two differ on purpose:
+Six kinds -- `date`, `datetime`, `float`, `interval`, `binary` and
+`vector` -- have no meaningful bound in Postgres itself (dates run from
+4713 BC to 5874897 AD). For those, this module also holds the one
+*window* both generators draw from: the `*_WINDOW` constants, read
+through `float_bounds` and the window helpers below. Before they were
+shared, each interpreter hard-coded its own, and they diverged by orders
+of magnitude (dates 2000-2054 in one, 0001-9999 in the other), so a
+Hypothesis-drawn dataset and a bulk-loaded one described different
+data. A scenario's `strategy()` and `load()` must agree, and so must a
+property test and the scale sweep built on the same schema, so the
+windows are now facts here rather than policy in each interpreter.
 
-    columns.py  explores extremes, because its job is finding the input
-                that breaks your code — `st.dates()` spans years 1-9999.
-    bulk.py     stays realistic, because its job is producing data whose
-                planner statistics mean something — dates land in a
-                few-decade window.
-
-Narrowing the search path would blunt it; widening the volume path
-would make `n_distinct` and `correlation` describe nothing real. So the
-divergence is intended, and neither range is "more correct".
-
-Callers who need a specific range say so per column rather than
-relying on either default — `sqlproof(..., columns={...})` on the
-Hypothesis path, `load_dataset(..., columns={...})` on the bulk path.
+The windows are the bulk generator's: realistic, so planner statistics
+over bulk data mean something. The cost is that Hypothesis no longer
+explores year 1 or year 9999 by default. Callers who want extremes ask
+for them per column -- `sqlproof(..., columns={...})` on the Hypothesis
+path, `load_dataset(..., columns={...})` on the bulk path.
 
 Adding a new type means adding one entry here plus a branch in each
 interpreter; `tests/unit/test_interpreter_exhaustiveness.py` fails if
-either branch is missing. Note what that test does and does not buy:
-it proves both interpreters *handle* every kind, never that they agree
-on what a kind means. For kinds with facts recorded here, agreement is
-structural. For the policy kinds above, it is not — by design.
+either branch is missing, and `tests/unit/test_shared_windows.py` fails
+if the two interpreters draw outside a shared window.
 """
 
 from __future__ import annotations
@@ -40,6 +36,7 @@ from __future__ import annotations
 import struct
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any, Literal
 
@@ -51,6 +48,21 @@ SpecKind = Literal[
     "datetime", "date", "time", "interval", "json", "binary",
     "vector", "enum", "range", "composite",
 ]
+
+
+DATE_WINDOW = (date(2000, 1, 1), date(2000, 1, 1) + timedelta(days=20_000))
+"""Dates both generators draw from: 2000-01-01 to 2054-10-04."""
+DATETIME_WINDOW = (datetime(2000, 1, 1), datetime(2000, 1, 1) + timedelta(seconds=10**9))
+"""Timestamps both generators draw from, to the second: 2000-01-01 to
+2031-09-09. Naive; a tz-aware spec uses the same instants in UTC."""
+INTERVAL_WINDOW = (timedelta(0), timedelta(seconds=10**7))
+"""Intervals both generators draw from: zero to about 115 days."""
+FLOAT_WINDOW = (-1e6, 1e6)
+"""Floats both generators draw from when no CHECK bounds the column."""
+VECTOR_COMPONENT_WINDOW = (-1.0, 1.0)
+"""Each component of a generated pgvector value."""
+BINARY_MAX_SIZE = 32
+"""The longest generated `bytea` value, in bytes."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,7 +186,7 @@ TYPE_SPEC_BUILDERS: dict[str, Callable[[PgType], TypeSpec]] = {
     "interval": lambda _t: TypeSpec(kind="interval"),
     "json": lambda _t: TypeSpec(kind="json"),
     "jsonb": lambda _t: TypeSpec(kind="json"),
-    "bytea": lambda _t: TypeSpec(kind="binary"),
+    "bytea": lambda _t: TypeSpec(kind="binary", min_size=0, max_size=BINARY_MAX_SIZE),
     "vector": _vector,
 }
 
@@ -228,6 +240,29 @@ def float32_floor(value: float) -> float:
     """Largest float32-representable value <= `value`."""
     rounded = _to_float32(value)
     return rounded if rounded <= value else _float32_step(rounded, up=False)
+
+
+def float_bounds(spec: TypeSpec) -> tuple[float, float]:
+    """The closed range a float spec draws from, in both generators.
+
+    Unbounded floats stay in `FLOAT_WINDOW`. A CHECK bound replaces the
+    matching side of the window; a one-sided bound beyond the window's
+    far edge gets a window of its own width. A `real` column's range is
+    rounded inward to float32, which Hypothesis requires and Postgres
+    stores."""
+    lo = float(spec.min_value) if spec.min_value is not None else None
+    hi = float(spec.max_value) if spec.max_value is not None else None
+    if spec.float_width == 32:
+        lo = None if lo is None else float32_ceil(lo)
+        hi = None if hi is None else float32_floor(hi)
+    window_lo, window_hi = FLOAT_WINDOW
+    width = window_hi - window_lo
+    low = lo if lo is not None else (min(window_lo, hi - width) if hi is not None else window_lo)
+    high = hi if hi is not None else (max(window_hi, low + width) if lo is not None else window_hi)
+    if spec.float_width == 32:
+        # A window edge derived from a bound may not be a float32 value.
+        low, high = float32_ceil(low), float32_floor(high)
+    return low, high
 
 
 KNOWN_TYPE_NAMES: frozenset[str] = frozenset(TYPE_SPEC_BUILDERS)
