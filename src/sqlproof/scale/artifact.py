@@ -60,9 +60,11 @@ def save_run(
     points on `plan_hash` (`fit.segment_by_plan`) and calling
     `fit.fit_exponent(segment, baseline)` reproduces each entry of
     `regimes`. `seed`, `max_factor`, `min_points`, `probe_timeout_s` and
-    `distribution` record how the sweep ran, so it can be run again: the same seed and
-    profile reproduce the data, the resolved arguments, the plans and
-    the fitted exponent. `work_blocks` counts only the modelled tables'
+    `distribution` record how the sweep ran. With the same profile they
+    reproduce the data, the resolved arguments, the plans and the fitted
+    exponent -- except for `columns=` overrides, which are code and are
+    not recorded, so a sweep that used them is reproducible only with the
+    same overrides. `work_blocks` counts only the modelled tables'
     buffers, not the system catalogs, so per-backend catalog cache state
     and other sessions' catalog changes do not move it.
 

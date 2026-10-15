@@ -176,7 +176,7 @@ def test_dsn_for_preserves_port_and_ssl() -> None:
         database_url="postgresql://u:p@h:5433/base?sslmode=disable",
         pytest_args=[],
     )
-    dsn = runner._dsn_for("clone1")
+    dsn = runner._cloner._dsn_for("clone1")
     from sqlproof._dsn import conninfo_to_dict
 
     assert conninfo_to_dict(dsn) == {
@@ -195,7 +195,7 @@ def test_dbname_on_dsn_without_dbname_raises() -> None:
         pytest_args=[],
     )
     with pytest.raises(SqlProofMutationError):
-        runner._dbname("host=localhost")
+        runner._cloner._dbname("host=localhost")
 
 
 @pytest.mark.parametrize(
@@ -664,7 +664,7 @@ def test_release_clones_past_a_background_worker_visiting_the_template() -> None
     )
     connection = _TemplateConnection([[_POOLER, _SCHEDULER], [_SCHEDULER]])
 
-    runner._clone_past_template_sessions(
+    runner._cloner._clone_past_template_sessions(
         connection, "tmpl", 'CREATE DATABASE "c" TEMPLATE "tmpl"', _in_use()
     )
 
@@ -683,7 +683,7 @@ def test_release_names_a_background_worker_that_outlasts_the_wait() -> None:
     )
 
     with pytest.raises(SqlProofMutationError, match="TimescaleDB Background Worker Scheduler"):
-        runner._clone_past_template_sessions(
+        runner._cloner._clone_past_template_sessions(
             connection, "tmpl", 'CREATE DATABASE "c" TEMPLATE "tmpl"', _in_use()
         )
     assert connection.statements[-1].endswith("ALLOW_CONNECTIONS true")

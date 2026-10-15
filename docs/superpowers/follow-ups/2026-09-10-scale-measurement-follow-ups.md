@@ -133,7 +133,7 @@ First check whether the `postgres` role in the Supabase image, which is not a su
 
 ## 9. Run sweeps in a TEMPLATE clone
 
-**Label:** `enhancement`.
+**Label:** `enhancement`. **Status:** done, opt-in: `scale_analysis(..., in_clone=True)` sweeps a template copy and drops it; the clone code moved from the mutation runner to `sqlproof._clone.TemplateCloner`, which both use. A live test seeds rows, sweeps in a clone, and finds them untouched and the clone gone.
 
 **Problem.** The sweep truncates and reloads the proof's own tables. The guard added in #110 prevents accidents, but it still requires an empty schema or an explicit opt-in to data loss (`truncate_existing=True`).
 
@@ -156,7 +156,7 @@ cancelled point, and a calibration timeout raises `SqlProofScaleError`.
 
 ## 11. Loose ends from the final review
 
-**Label:** `documentation`.
+**Label:** `documentation`. **Status:** done. The wrong explanation went with item 2's rewrite; `test_the_seed_decides_the_data` fails if the seed is ignored; `save_run`'s docstring now says `columns=` overrides are not recorded.
 
 - **Wrong explanation.** The comments in `tests/integration/test_scale_complexity_live.py`, and the spec's Known limitations, explain when the primary-key xfail can pass by chance, and that explanation is wrong. Some exactly flat series are refused through float rounding, and some non-flat ones are accepted. Correct it together with item 2.
 - **Determinism test can't catch an ignored seed.** The sweep determinism test in the same file compares fields that, for these reference functions, don't depend on the seed. Either add a seed-sensitivity check (e.g. `random_key` resolves differently under two seeds), or narrow the test's docstring and the spec's Determinism bullet to "a repeat run has the same shape".

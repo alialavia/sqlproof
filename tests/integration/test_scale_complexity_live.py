@@ -192,6 +192,25 @@ def test_the_same_seed_and_profile_measure_the_same_points(
         assert abs(first.exponent - second.exponent) <= 0.01
 
 
+def test_the_seed_decides_the_data(conn):
+    """The same-seed test above would pass if the seed were ignored, since
+    keys do not depend on it (follow-up 11). An argument read from the
+    generated values does: two seeds must disagree on it."""
+
+    def first_value(connection):
+        query = "SELECT v FROM scale_test.items ORDER BY id LIMIT 1"
+        return connection.execute(query).fetchone()[0]
+
+    def run(seed):
+        return run_sweep(
+            conn, _schema(), "scale_test.pk_lookup_fn",
+            sizes={"items": 200}, args=[first_value], max_factor=16, seed=seed,
+        )
+
+    assert [p.args for p in run(7).points] == [p.args for p in run(7).points]
+    assert [p.args for p in run(7).points] != [p.args for p in run(8).points]
+
+
 def test_a_cpu_only_quadratic_is_refused(conn):
     """Follow-up 3. cpu_quadratic_fn's non-equi self-join runs as a Nested
     Loop over a Materialize that replays the inner side from memory, so

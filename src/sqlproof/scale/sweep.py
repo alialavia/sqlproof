@@ -354,7 +354,8 @@ def _refuse_non_empty_tables(conn: database.Connection, schema: SchemaInfo) -> N
             "The sweep refused to start: it EMPTIES AND REPOPULATES every "
             f"modelled table, and these are not known to be empty: {', '.join(occupied)}. "
             "Nothing was truncated. Point the sweep at a dedicated test "
-            "database, or pass truncate_existing=True to let it delete these "
+            "database, pass in_clone=True to scale_analysis to sweep a throwaway "
+            "copy instead, or pass truncate_existing=True to let it delete these "
             "rows."
         )
         raise SqlProofUsageError(msg)

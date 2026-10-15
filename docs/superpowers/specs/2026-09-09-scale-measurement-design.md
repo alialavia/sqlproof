@@ -376,9 +376,13 @@ parent left empty) -- then counts every modelled table's rows and
 refuses, naming each non-empty table, unless `truncate_existing=True`.
 When the sweep ends, successfully or not, it truncates again, leaving
 the tables empty rather than full of synthetic rows. Point it at a
-dedicated test database. A design that never touches the user's tables
--- running in a TEMPLATE clone, as mutation testing does -- remains
-possible and is not precluded.
+dedicated test database, or pass `in_clone=True` (scale follow-up 9):
+`scale_analysis` then sweeps a `CREATE DATABASE ... TEMPLATE` copy,
+dropped at the end, so the user's tables are never touched and
+`truncate_existing` is implied for the copy. The clone code is shared
+with mutation testing (`sqlproof._clone.TemplateCloner`), including the
+pooler-session handling (`release_template_sessions`). Opt-in, since a
+clone needs CREATEDB and an idle template.
 
 ## `ScaleResult`
 
