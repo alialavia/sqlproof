@@ -186,7 +186,7 @@ They have to land together because the new checks would fail today, while the bo
 
 ## 13. Intermittent `test_mutation_run_kills_and_survives`
 
-**Label:** `bug`.
+**Label:** `bug`. **Status:** done. Reproduced with six parallel loops on one server: 22 of 30 runs failed, every time on the closing "no clones left behind" check, never on a mutant's status. Mutant ids are content hashes, the same in every run of the test, so that check (`sqlproof_mutant_<mutant id>_%`) matched the in-flight clones of any other run on the same server -- such as a second test run started alongside. The test now fixes its run id and looks only for clones ending in it: 30 of 30 pass under the same load.
 
 **Problem.** `tests/integration/test_mutation_live.py::test_mutation_run_kills_and_survives` failed twice during the Phase 2 work (once in Task 3, once in Task 8), and passed each time when run alone and on a full re-run. It is a sibling of #108 (`test_plan_is_valid_or_explicitly_unresolvable`), which also recurred during Phase 2.
 
@@ -206,6 +206,6 @@ They have to land together because the new checks would fail today, while the bo
 
 ## 15. Check whether #11 is stale
 
-**Label:** none (housekeeping).
+**Label:** none (housekeeping). **Status:** done. Explicit mutations, accepted survivors, clone isolation and equivalent-mutant detection had all shipped; #11 is narrowed to what is left, an automatically generated catalog of common SQL mutations.
 
 #11, "Mutation testing harness for SQL function bodies", is still open, although mutation testing shipped in 0.9–0.10. Close it if it's covered, or narrow it to what is left.

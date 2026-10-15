@@ -29,6 +29,7 @@ from sqlproof import _database as database
 from sqlproof import _dsn as conninfo
 from sqlproof._dsn import quote_identifier
 from sqlproof.exceptions import SqlProofMutationError
+from sqlproof.mutation import runner as runner_module
 from sqlproof.mutation.model import MutationSet, Replace
 from sqlproof.mutation.result import MutationResult
 from sqlproof.mutation.runner import LocalMutationRunner, run_mutation_tests
@@ -74,8 +75,16 @@ INNER_TEST = """
     "SQLPROOF_TEST_DATABASE_URL" not in os.environ,
     reason="set SQLPROOF_TEST_DATABASE_URL to run Postgres integration tests",
 )
-def test_mutation_run_kills_and_survives(tmp_path: Path) -> None:
+def test_mutation_run_kills_and_survives(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     base_dsn = os.environ["SQLPROOF_TEST_DATABASE_URL"]
+    # The run's id, known here so the leftover check below sees only this
+    # run's clones: mutant ids are content hashes, the same in every run of
+    # this test, so another run in flight on the same server (CI shards,
+    # a developer's parallel loop) has clones matching the mutant ids too.
+    run_id = uuid4().hex[:16]
+    monkeypatch.setattr(runner_module, "new_run_id", lambda: run_id)
     template_name = f"sqlproof_mut_tmpl_{uuid4().hex[:12]}"
 
     with database.connect(base_dsn, autocommit=True) as admin:
@@ -126,10 +135,11 @@ def test_mutation_run_kills_and_survives(tmp_path: Path) -> None:
         with pytest.raises(SqlProofMutationError, match="COALESCE"):
             result.assert_no_survivors()
 
-        # No clone databases left behind by THIS run (scoped to its mutant
-        # ids — a shared server may hold orphans from previously
-        # interrupted runs, which are not this test's concern).
-        clone_patterns = [f"sqlproof\\_mutant\\_{o.mutant_id}\\_%" for o in result.outcomes]
+        # No clone databases left behind by THIS run (scoped to its run id
+        # -- a shared server may hold orphans from interrupted runs, or
+        # clones of a concurrent run, which are not this test's concern).
+        # Clone names end in the run id (the stem may be cut to fit).
+        clone_patterns = [f"sqlproof\\_%\\_{run_id}"]
         with database.connect(base_dsn, autocommit=True) as admin:
             cursor = admin.execute(
                 "SELECT datname FROM pg_database WHERE datname LIKE ANY(%s)",
