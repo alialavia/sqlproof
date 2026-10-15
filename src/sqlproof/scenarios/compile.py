@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import bisect
 import hashlib
+import json
 import random
 import re
 import uuid
@@ -33,6 +34,7 @@ from sqlproof.core import _base_type_name  # pyright: ignore[reportPrivateUsage]
 from sqlproof.exceptions import SqlProofGenerationError, SqlProofScenarioError
 from sqlproof.generators.rows import (
     GENERATE,
+    PinnedKey,
     _foreign_key_for_column,  # pyright: ignore[reportPrivateUsage]
     _is_single_column_unique,  # pyright: ignore[reportPrivateUsage]
     _unique_value,  # pyright: ignore[reportPrivateUsage]
@@ -185,7 +187,14 @@ def compile_scenario(scenario: Scenario, schema: SchemaInfo) -> CompiledScenario
                 continue
             index = layout.indexes(group_index)[0]
             named[group.name] = (table.qualified_name, index)
-            refs[group.name] = _key_value(table, index, group.name, where)
+            pinned_key = (
+                group.pinned.get(table.primary_key[0]) if len(table.primary_key) == 1 else None
+            )
+            if isinstance(pinned_key, RowRef) and pinned_key.name in refs:
+                # Its key is the referenced row's key (parents come first).
+                refs[group.name] = refs[pinned_key.name]
+            else:
+                refs[group.name] = _key_value(table, index, group.name, where)
 
     # Per-parent tables: sized from their parent's layout.
     parent_keys: dict[tuple[str, str], list[Any]] = {}
@@ -207,6 +216,8 @@ def compile_scenario(scenario: Scenario, schema: SchemaInfo) -> CompiledScenario
             table.qualified_name, table, (Group("fill", len(keys)),), [0], len(keys)
         )
         parent_keys[(table.qualified_name, column.name)] = keys
+
+    _check_children_of_pinned_keys(layouts, where)
 
     sizes = {
         qualified: layout.size for qualified, layout in layouts.items() if qualified != AUTH_USERS
@@ -291,7 +302,79 @@ def _group_layout(qualified: str, table: Table | None, spec: TableSpec, where: s
         for group in spec.groups:
             for column_name in group.pinned:
                 _check_pinnable(table, column_name, where)
+        _check_key_pins(table, spec.groups, where)
     return _Layout(qualified, table, spec.groups, starts, total)
+
+
+def _check_children_of_pinned_keys(layouts: Mapping[str, _Layout], where: str) -> None:
+    """Rows that reference a table whose key is pinned must reference it by
+    name: the generator picks parents by index arithmetic over generated
+    keys, which a pinned key does not follow."""
+    pinned = {
+        qualified
+        for qualified, layout in layouts.items()
+        if layout.table is not None
+        and len(layout.table.primary_key) == 1
+        and any(layout.table.primary_key[0] in g.pinned for g in layout.groups)
+    }
+    if not pinned:
+        return
+    for qualified, layout in layouts.items():
+        table = layout.table
+        if table is None:
+            continue
+        for fk in table.foreign_keys:
+            if len(fk.columns) != 1:
+                continue
+            target = f"{fk.referenced_schema or table.schema}.{fk.referenced_table}"
+            if target not in pinned or (target == qualified and fk.columns[0] in table.primary_key):
+                continue
+            column = fk.columns[0]
+            if not all(column in g.pinned for g in layout.groups) or not layout.groups:
+                msg = (
+                    f"{where}: {target}'s primary key is pinned, so rows of {qualified} "
+                    f"must pin {column} to a named row of {target} ({{ref: <row>}})."
+                )
+                raise SqlProofScenarioError(msg)
+
+
+def _check_key_pins(table: Table, groups: Sequence[Group], where: str) -> None:
+    """A pinned primary key must be pinned on every row, whole and distinct.
+
+    The generator assigns keys from the row index, so a key pinned on some
+    rows and generated on others, pinned in part, or pinned on a cohort of
+    several rows, would collide at load time. Refuse here instead."""
+    key = table.primary_key
+    if not key or not any(column in group.pinned for group in groups for column in key):
+        return
+    qualified = f"{table.qualified_name}({', '.join(key)})"
+    seen: set[tuple[str, ...]] = set()
+    for group in groups:
+        missing = [column for column in key if column not in group.pinned]
+        if missing or group.count != 1:
+            msg = (
+                f"{where}: the primary key {qualified} is pinned, so every row of "
+                f"{table.qualified_name} must pin all of it, one row per group "
+                "(row(...) or cohort(1, ...)); the generator would otherwise assign "
+                "colliding keys."
+            )
+            raise SqlProofScenarioError(msg)
+        values = tuple(
+            f"ref:{value.name}" if isinstance(value, RowRef) else f"lit:{value!r}"
+            for value in (group.pinned[column] for column in key)
+        )
+        if values in seen:
+            msg = f"{where}: two rows of {table.qualified_name} pin the same key {qualified}."
+            raise SqlProofScenarioError(msg)
+        seen.add(values)
+    if len(key) == 1:
+        for group in groups:
+            if not isinstance(group.pinned[key[0]], RowRef):
+                msg = (
+                    f"{where}: {table.qualified_name}.{key[0]} is a primary key and a "
+                    "foreign key; pin it to a reference ({ref: <row>}), not a literal."
+                )
+                raise SqlProofScenarioError(msg)
 
 
 def _check_pinnable(table: Table, column_name: str, where: str) -> Column:
@@ -303,7 +386,11 @@ def _check_pinnable(table: Table, column_name: str, where: str) -> Column:
         )
         raise SqlProofScenarioError(msg)
     column = table.column(column_name)
-    if column_name in table.primary_key:
+    # Key columns are pinnable only where the key is made of references: a
+    # join table's composite key, or a single-column key that is also a
+    # foreign key (`profiles.id -> auth.users`). `_check_key_pins` then
+    # requires every row of the table to pin the whole key, distinctly.
+    if table.primary_key == (column_name,) and _foreign_key_for_column(table, column_name) is None:
         msg = (
             f"{where}: {table.qualified_name}.{column_name} is part of the primary "
             "key, which the generator assigns; name the row with s.row(...) and "
@@ -442,7 +529,8 @@ def _column_override_for(
 ) -> Callable[[BulkColumnContext], Any] | None:
     table = layout.table
     assert table is not None
-    if column.name in table.primary_key and len(table.primary_key) == 1:
+    single_key = column.name in table.primary_key and len(table.primary_key) == 1
+    if single_key and not any(column.name in group.pinned for group in layout.groups):
         return None
     if column.is_generated:
         return None
@@ -500,7 +588,7 @@ def _column_override_for(
             return volatile(index)
         return GENERATE
 
-    return override
+    return PinnedKey(override) if single_key else override
 
 
 def _targets_auth_users(fk: ForeignKey) -> bool:
@@ -613,6 +701,8 @@ def _check_unique_collisions(
     for group, value in zip(layout.groups, pinned, strict=True):
         if value is _UNSET or callable(value):
             continue
+        if isinstance(value, list | dict):
+            value = json.dumps(value, sort_keys=True, default=str)
         seen[value] = seen.get(value, 0) + group.count
         if seen[value] > 1:
             msg = (

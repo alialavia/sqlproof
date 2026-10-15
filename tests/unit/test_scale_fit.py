@@ -6,8 +6,12 @@ fixed per-call cost gave 1.994. Without it the answer is simply wrong.
 """
 from __future__ import annotations
 
+import pytest
+
 from sqlproof.scale.fit import (
+    MAX_SLOPE_STDERR,
     FitResult,
+    cpu_growth_reason,
     find_spill,
     fit_exponent,
     project_rows_before_timeout,
@@ -55,12 +59,62 @@ def test_baseline_subtraction_changes_the_answer():
     assert raw.exponent < corrected.exponent - 0.1
 
 
-def test_noisy_data_reports_low_r_squared_and_no_exponent():
+def test_noisy_data_is_refused_on_the_exponents_standard_error():
     pts = _points({1: 100, 2: 5000, 4: 120, 8: 9000, 16: 300})
     fit = fit_exponent(pts, baseline=0)
     assert fit.exponent is None
     assert fit.reason is not None
-    assert "r_squared" in fit.reason or "fit" in fit.reason.lower()
+    assert "standard error" in fit.reason
+    assert fit.slope_stderr is not None and fit.slope_stderr > MAX_SLOPE_STDERR
+
+
+def test_flat_but_noisy_work_is_exponent_near_zero():
+    """Follow-up 2: a primary-key lookup wobbles by a block or two with no
+    trend. Its R^2 is near zero by construction (it measures only the
+    wobble), but the slope is confidently flat, so it is accepted."""
+    pts = _points({1: 10, 2: 12, 4: 13, 8: 9, 16: 11})
+    fit = fit_exponent(pts, baseline=4)
+    assert fit.exponent is not None and abs(fit.exponent) < 0.1
+    assert fit.r_squared is not None and fit.r_squared < 0.5
+    assert fit.slope_stderr is not None and fit.slope_stderr <= MAX_SLOPE_STDERR
+
+
+def test_flat_work_above_the_baseline_is_exactly_zero():
+    """Equal work at every factor is exponent 0, whatever the baseline;
+    floating point must not turn it into a refusal."""
+    fit = fit_exponent(_points({1: 11, 2: 11, 4: 11, 8: 11, 16: 11}), baseline=4)
+    assert (fit.exponent, fit.r_squared, fit.slope_stderr) == (0.0, 1.0, 0.0)
+
+
+def _timed(work_and_ms: dict[int, tuple[int, float]]):
+    return [
+        ProbePoint(
+            factor=f, total_rows=f * 1000, work_blocks=w, peak_memory_kb=0,
+            temp_blocks=0, plan_hash="aaaa", exec_ms=ms,
+        )
+        for f, (w, ms) in sorted(work_and_ms.items())
+    ]
+
+
+def test_time_growing_faster_than_work_is_a_cpu_growth_reason():
+    """Follow-up 3, from the final review's numbers: work ~n^1.04,
+    wall-clock ~n^1.84."""
+    pts = _timed({1: (100, 1.6), 2: (200, 5.0), 4: (400, 17.0), 8: (800, 60.0), 16: (1600, 254.0)})
+    reason = cpu_growth_reason(pts, 1.0)
+    assert reason is not None and "CPU cost" in reason
+
+
+@pytest.mark.parametrize(
+    ("ms", "why"),
+    [
+        ((1.0, 2.0, 4.0, 8.0, 16.0), "time grows like the work"),
+        ((0.1, 0.4, 1.6, 6.4, 15.0), "too fast to measure growth"),
+        ((30.0, 400.0, 31.0, 900.0, 40.0), "the clock is too noisy"),
+    ],
+)
+def test_cpu_growth_reason_stays_quiet(ms: tuple[float, ...], why: str):
+    pts = _timed({f: (f * 100, t) for f, t in zip((1, 2, 4, 8, 16), ms, strict=True)})
+    assert cpu_growth_reason(pts, 1.0) is None, why
 
 
 def test_too_few_points_is_refused_rather_than_fitted():

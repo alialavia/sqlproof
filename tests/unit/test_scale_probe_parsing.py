@@ -582,3 +582,24 @@ def test_peak_memory_reaches_a_hash_under_a_subplan():
     assert hash_node["Node Type"] == "Hash"
     _w, mem, _t, _h, _ms = parse_plan(explain)
     assert mem == hash_node["Peak Memory Usage"] == 28
+
+
+def test_nested_plans_keep_distinct_shapes_and_the_peak_memory():
+    """Scale follow-up 8: auto_explain notices carry one JSON plan each."""
+    import json
+
+    from sqlproof.scale.probe import _NestedPlans  # pyright: ignore[reportPrivateUsage]
+
+    def notice(plan: dict) -> str:
+        return "NOTICE:  duration: 0.010 ms  plan:\n" + json.dumps({"Plan": plan})
+
+    sort = {"Node Type": "Sort", "Sort Space Used": 25, "Plans": [{"Node Type": "Seq Scan"}]}
+    nested = _NestedPlans()
+    assert nested.receive(notice(sort))
+    assert nested.receive(notice(sort))  # the same statement run again
+    assert nested.receive(notice({"Node Type": "Result"}))
+    assert nested.shapes == {"Sort(Seq Scan())", "Result()"}
+    assert nested.peak_memory_kb == 25
+    # A function's own RAISE NOTICE is not a plan: left for the previous receiver.
+    assert not nested.receive("NOTICE:  hello {not json}")
+    assert not nested.receive("NOTICE:  plan: {broken")

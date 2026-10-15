@@ -14,10 +14,8 @@ does. Statements executed inside a function are invisible to EXPLAIN of
 the wrapping call, so `plan_hash` (derived from that outer tree) never
 changes even when the inner query's plan genuinely does. This module
 proves the inner flip is real (`test_the_planner_flips_inside_the_
-function`), then pins the probe's inability to see it as a strict
-xfail (`test_a_flip_inside_a_function_is_segmented`): the day nested
-plans become visible to the probe, that test XPASSes and fails loudly,
-so the gap cannot close -- or stay open -- silently.
+function`), shows the default probe cannot see it, and shows that
+`nested_plans=True` (auto_explain, scale follow-up 8) does.
 """
 from __future__ import annotations
 
@@ -131,30 +129,58 @@ def test_the_planner_flips_inside_the_function(conn):
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason=(
-        "probe_function measures EXPLAIN of the OUTER `SELECT find_one()` "
-        "call; find_one is LANGUAGE sql and not inlined, so that tree is "
-        "always a bare Result node regardless of scale. Plans of "
-        "statements inside a function are invisible to EXPLAIN, so an "
-        "inner plan flip (proved real by "
-        "test_the_planner_flips_inside_the_function) cannot be segmented "
-        "yet. strict=True is the point: the day someone makes nested "
-        "plans visible to the probe, this XPASSes and fails, so the gap "
-        "cannot close -- or stay open -- silently."
-    ),
-)
-def test_a_flip_inside_a_function_is_segmented(conn):
-    schema = _schema()
+def test_a_flip_inside_a_function_is_invisible_by_default(conn):
+    """Without nested_plans the probe hashes only the outer `SELECT
+    find_one()` plan, a bare Result node at every scale."""
     result = run_sweep(
-        conn, schema, "flip_test.find_one",
+        conn, _schema(), "flip_test.find_one",
         sizes={"lookups": BASE_ROWS}, max_factor=MAX_FACTOR, min_points=6,
         columns=NEEDLE_COLUMNS,
     )
-    assert result.plan_flips, (
-        "no plan flip recorded: the probe hashes only the outer SELECT "
-        "find_one() plan, so it cannot see the inner query's plan change"
+    assert not result.plan_flips
+
+
+def test_a_flip_inside_a_function_is_segmented_with_nested_plans(conn):
+    """Scale follow-up 8: auto_explain reports the inner query's plan, so
+    its flip splits the fit."""
+    _require_auto_explain(conn)
+    result = run_sweep(
+        conn, _schema(), "flip_test.find_one",
+        sizes={"lookups": BASE_ROWS}, max_factor=MAX_FACTOR, min_points=6,
+        columns=NEEDLE_COLUMNS, nested_plans=True,
     )
+    assert result.nested_plans
+    assert result.plan_flips, "the inner Index Only Scan -> Bitmap Heap Scan flip was not seen"
     assert len(result.regimes) >= 2
+
+
+def test_a_sort_inside_a_function_reports_its_memory(conn):
+    _require_auto_explain(conn)
+    conn.execute(
+        "CREATE FUNCTION flip_test.sorted_needles() RETURNS bigint LANGUAGE plpgsql "
+        "STABLE AS $$ DECLARE n bigint; BEGIN "
+        "SELECT count(*) INTO n FROM (SELECT needle FROM flip_test.lookups "
+        "ORDER BY md5(needle::text) OFFSET 0) s; RETURN n; END $$"
+    )
+    plain = run_sweep(
+        conn, _schema(), "flip_test.sorted_needles",
+        sizes={"lookups": BASE_ROWS}, max_factor=16,
+    )
+    nested = run_sweep(
+        conn, _schema(), "flip_test.sorted_needles",
+        sizes={"lookups": BASE_ROWS}, max_factor=16, nested_plans=True,
+    )
+    assert all(p.peak_memory_kb == 0 for p in plain.points)
+    assert all(p.peak_memory_kb > 0 for p in nested.points)
+
+
+def _require_auto_explain(conn) -> None:
+    """auto_explain needs a superuser, or a server that preloads it and lets
+    this role set it (the Supabase images do). Skip, saying so, elsewhere."""
+    from sqlproof.exceptions import SqlProofUsageError
+    from sqlproof.scale.probe import probe_function
+
+    try:
+        probe_function(conn, "pg_catalog.now", [], factor=0, total_rows=0, nested_plans=True)
+    except SqlProofUsageError as exc:
+        pytest.skip(str(exc))

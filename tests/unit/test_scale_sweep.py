@@ -70,9 +70,13 @@ def _install_db_stubs(
         if truncate_fn is not None:
             truncate_fn()
 
-    def _load_dataset(conn: Any, schema: Any, sizes: Any, *, seed: Any, columns: Any) -> None:
+    def _load_dataset(
+        conn: Any, schema: Any, sizes: Any, *, seed: Any, columns: Any, distribution: Any
+    ) -> None:
         if log is not None:
             log.append(("load", dict(sizes)))
+            if distribution != "uniform":
+                log.append(("distribution", distribution))
 
     def _analyze(conn: Any, schema: Any) -> None:
         if log is not None:
@@ -80,7 +84,7 @@ def _install_db_stubs(
 
     def _probe(
         conn: Any, function: Any, args: Any, *, factor: int, total_rows: int,
-        relations: Any = None,
+        relations: Any = None, timeout_s: Any = None, nested_plans: bool = False,
     ) -> Any:
         if log is not None:
             log.append(("probe", factor, total_rows))
@@ -566,7 +570,7 @@ def test_the_result_records_how_each_argument_is_chosen(
         args=[heaviest("t.id"), 5], max_factor=64,
     )
     assert result.argument_policy == (
-        {"kind": "heaviest", "column": "t.id"},
+        {"kind": "heaviest", "column": "t.id", "by": "references"},
         {"kind": "literal"},
     )
 
@@ -582,3 +586,54 @@ def test_every_probe_counts_only_the_modelled_tables(monkeypatch: pytest.MonkeyP
 
     assert seen
     assert all(relations == [("public", "a"), ("public", "b")] for relations in seen)
+
+
+def test_a_cancelled_probe_ends_the_sweep_without_a_point(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Follow-up 10: Postgres cancels a probe at probe_timeout_s; the sweep
+    ends truncated and keeps only what it measured."""
+    from sqlproof.scale.probe import ProbeTimedOut
+
+    def fake_probe(conn, function, args, *, factor, total_rows, relations=None):
+        if factor == 4:
+            raise ProbeTimedOut(function, 0.5)
+        return _point(factor, total_rows, 100 + factor)
+
+    _install_db_stubs(monkeypatch, fake_probe)
+    result = run_sweep(
+        object(), _schema("t"), "fn", sizes={"t": 10}, max_factor=64, probe_timeout_s=0.5,
+    )
+    assert result.truncated is True
+    assert [p.factor for p in result.points] == [1, 2]
+
+
+def test_a_calibration_timeout_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    from sqlproof.exceptions import SqlProofScaleError
+    from sqlproof.scale.probe import ProbeTimedOut
+
+    def fake_probe(conn, function, args, *, factor, total_rows, relations=None):
+        raise ProbeTimedOut(function, 0.5)
+
+    _install_db_stubs(monkeypatch, fake_probe)
+    with pytest.raises(SqlProofScaleError, match="calibration dataset"):
+        run_sweep(object(), _schema("t"), "fn", sizes={"t": 10}, probe_timeout_s=0.5)
+
+
+def test_the_distribution_reaches_the_loader_and_the_result(monkeypatch):
+    """Follow-up 7: zipf data is what makes `heaviest` find a heavy parent."""
+    log: list[Any] = []
+    _install_db_stubs(monkeypatch, _quadratic_probe, log)
+    result = run_sweep(
+        object(), _schema("t"), "fn", sizes={"t": 10}, max_factor=64, distribution="zipf"
+    )
+    assert ("distribution", "zipf") in log
+    assert result.distribution == "zipf"
+
+
+def test_an_unknown_distribution_is_refused_before_anything_runs(monkeypatch):
+    log: list[Any] = []
+    _install_db_stubs(monkeypatch, _quadratic_probe, log)
+    with pytest.raises(SqlProofUsageError, match="distribution must be one of uniform, zipf"):
+        run_sweep(object(), _schema("t"), "fn", sizes={"t": 10}, distribution="normal")
+    assert log == []

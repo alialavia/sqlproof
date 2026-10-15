@@ -16,13 +16,15 @@ AM) -- see its docstring.
 from __future__ import annotations
 
 import time
-from collections.abc import Mapping, Sequence
-from typing import Any
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field, replace
+from typing import TYPE_CHECKING, Any
 
 from sqlproof import _database as database
 from sqlproof.exceptions import (
     CircularDependencyError,
     SqlProofGenerationError,
+    SqlProofScaleError,
     SqlProofUsageError,
 )
 from sqlproof.generators.rows import ColumnOverrides
@@ -37,9 +39,77 @@ from sqlproof.scale.load import (
     row_counts,
     truncate,
 )
-from sqlproof.scale.probe import ProbePoint, probe_function
+from sqlproof.scale.probe import ProbePoint, ProbeTimedOut, probe_function
 from sqlproof.scale.result import ScaleResult
 from sqlproof.schema.model import SchemaInfo
+
+if TYPE_CHECKING:
+    from sqlproof.scenarios.model import Scenario
+
+
+@dataclass(frozen=True, slots=True)
+class LoadStep:
+    """What to load at one scale factor (0 is the calibration round)."""
+
+    sizes: Mapping[str, int]
+    columns: ColumnOverrides | None = None
+    refs: Mapping[str, Any] = field(default_factory=dict[str, Any])
+    """Named-row keys, for `ref(...)` arguments."""
+    before_load: Callable[[database.Connection], None] | None = None
+
+
+Profile = Callable[[int], LoadStep]
+
+DISTRIBUTIONS = ("uniform", "zipf")
+"""How the sweep spreads children over parents (`bulk.parent_index_for`)."""
+
+
+def sizes_profile(sizes: Mapping[str, int], columns: ColumnOverrides | None) -> Profile:
+    """`sizes` times the factor; at most one row per table to calibrate."""
+
+    def step(factor: int) -> LoadStep:
+        if factor == 0:
+            return LoadStep({name: min(count, 1) for name, count in sizes.items()}, columns)
+        return LoadStep({name: count * factor for name, count in sizes.items()}, columns)
+
+    return step
+
+
+class ScenarioProfile:
+    """A scenario at every factor: `Scenario.scaled(factor)`, and
+    `Scenario.minimal()` to calibrate. Seeds the scenario's `auth.users`
+    rows before each load, and `cleanup` removes them at the end."""
+
+    def __init__(self, scenario: Scenario, schema: SchemaInfo, *, scale_cohorts: bool) -> None:
+        self.scenario = scenario
+        self.schema = schema
+        self.scale_cohorts = scale_cohorts
+        self._auth_ids: set[str] = set()
+
+    def __call__(self, factor: int) -> LoadStep:
+        from sqlproof.scenarios.load import (
+            _insert_auth_users,  # pyright: ignore[reportPrivateUsage]
+        )
+
+        variant = (
+            self.scenario.minimal()
+            if factor == 0
+            else self.scenario.scaled(factor, scale_cohorts=self.scale_cohorts)
+        )
+        compiled = variant.compile(self.schema)
+        users = compiled.auth_users
+
+        def before_load(conn: database.Connection) -> None:
+            # Only the rows this sweep created are its to remove at the end.
+            self._auth_ids.update(_insert_auth_users(conn, users))
+
+        return LoadStep(compiled.sizes, compiled.columns, compiled.refs, before_load)
+
+    def cleanup(self, conn: database.Connection) -> None:
+        if self._auth_ids:
+            conn.execute(
+                "DELETE FROM auth.users WHERE id = ANY(%s::uuid[])", [sorted(self._auth_ids)]
+            ).close()
 
 
 def run_sweep(
@@ -47,14 +117,18 @@ def run_sweep(
     schema: SchemaInfo,
     function: str,
     *,
-    sizes: Mapping[str, int],
+    sizes: Mapping[str, int] | None = None,
+    scenario: Scenario | None = None,
+    scale_cohorts: bool = False,
     args: Sequence[Any] = (),
     max_factor: int = 32,
     min_points: int = 5,
     probe_timeout_s: float = 30.0,
-    seed: int = 0,
+    seed: int | None = None,
     columns: ColumnOverrides | None = None,
     truncate_existing: bool = False,
+    distribution: str = "uniform",
+    nested_plans: bool = False,
 ) -> ScaleResult:
     """Measure how `function`'s buffer work grows as the `sizes` profile
     is scaled 1x, 2x, 4x, ..., and fit a complexity exponent to it.
@@ -97,27 +171,92 @@ def run_sweep(
     catalog changes, and moved a single probe by tens of blocks. The
     calibration baseline is taken on the same connection as the ladder.
     `columns` pins generated columns, as `load_dataset`'s does.
+    `distribution` spreads children over their parents: `"uniform"`
+    (default) or `"zipf"`, where a few parents own most children -- the
+    skew real tenants have, and the one `heaviest` then finds.
+    `nested_plans` makes the plans of the statements inside the function
+    count, through auto_explain (see `probe_function`): a plan change in
+    a PL/pgSQL function then splits the fit, and its sorts report memory.
+
+    Instead of `sizes`, pass a `scenario` (`sqlproof.scenarios`): its
+    compiled sizes are the 1x profile. At factor `k` its fills and
+    per-parent counts grow `k` times, while cohorts (unless
+    `scale_cohorts`) and named rows stay fixed -- "does it still work for
+    these two customers as the rest grows". Arguments may be references
+    (`ref("acme")`), resolved to the named row's key at each factor. The
+    scenario's seed is the sweep's; its `auth.users` rows are inserted
+    before each load and removed at the end. `columns` cannot be combined
+    with a scenario: pin columns in the scenario.
 
     The ladder stops at the first of: `min_points` points whose final
-    plan regime fits (R^2 >= `fit.MIN_R_SQUARED`); `max_factor` reached;
+    plan regime fits (exponent standard error at most
+    `fit.MAX_SLOPE_STDERR`); `max_factor` reached;
     or a probe taking longer than `probe_timeout_s`, which marks the
-    result truncated. That timeout is checked AFTER a probe returns: a
-    runaway probe is not cancelled, so a function that never returns
-    hangs the sweep.
+    result truncated. Postgres cancels such a probe at the timeout
+    (`statement_timeout`); the cancelled point is not kept, since it
+    measured nothing. A timeout during calibration -- on at most one row
+    per table -- raises `SqlProofScaleError` instead: there is nothing to
+    measure a curve from. A probe that returns just under the timeout but
+    took longer overall (planning, transfer) is kept and still ends the
+    ladder.
     """
-    _validate(schema, function, sizes=sizes, min_points=min_points)
+    profile: Profile
+    scenario_profile: ScenarioProfile | None = None
+    scenario_info: dict[str, object] | None = None
+    if (sizes is None) == (scenario is None):
+        msg = "Pass exactly one of sizes or scenario."
+        raise SqlProofUsageError(msg)
+    if distribution not in DISTRIBUTIONS:
+        msg = f"distribution must be one of {', '.join(DISTRIBUTIONS)}; got {distribution!r}."
+        raise SqlProofUsageError(msg)
+    if scenario is not None:
+        if columns is not None:
+            msg = "columns cannot be combined with a scenario: pin the columns in the scenario."
+            raise SqlProofUsageError(msg)
+        if seed is not None and seed != scenario.seed:
+            msg = (
+                f"seed={seed} conflicts with scenario {scenario.name!r}'s seed "
+                f"{scenario.seed}; the scenario's seed is the sweep's."
+            )
+            raise SqlProofUsageError(msg)
+        seed = scenario.seed
+        try:
+            scenario_profile = ScenarioProfile(scenario, schema, scale_cohorts=scale_cohorts)
+            first = scenario_profile(1)
+        except Exception as exc:
+            msg = f"The sweep refused before truncating anything: {exc}"
+            raise SqlProofUsageError(msg) from exc
+        profile = scenario_profile
+        base_sizes: Mapping[str, int] = first.sizes
+        scenario_info = {
+            "name": scenario.name,
+            "fingerprint": scenario.fingerprint,
+            "scale_cohorts": scale_cohorts,
+        }
+    else:
+        assert sizes is not None
+        seed = 0 if seed is None else seed
+        profile = sizes_profile(sizes, columns)
+        base_sizes = sizes
+    _validate(schema, function, sizes=base_sizes, min_points=min_points)
     if not truncate_existing:
         _refuse_non_empty_tables(conn, schema)
+
+    def clean_up() -> None:
+        truncate(conn, schema)
+        if scenario_profile is not None:
+            scenario_profile.cleanup(conn)
+
     try:
         result = _measure(
             conn, schema, function,
-            sizes=sizes, args=args, max_factor=max_factor,
-            min_points=min_points, probe_timeout_s=probe_timeout_s,
-            seed=seed, columns=columns,
+            profile=profile, args=args, max_factor=max_factor,
+            min_points=min_points, probe_timeout_s=probe_timeout_s, seed=seed,
+            distribution=distribution, nested_plans=nested_plans,
         )
     except BaseException as original:
         try:
-            truncate(conn, schema)
+            clean_up()
         except Exception as cleanup_error:
             original.add_note(
                 "The sweep also failed to empty the modelled tables after this "
@@ -125,7 +264,9 @@ def run_sweep(
                 "may still hold synthetic rows."
             )
         raise
-    truncate(conn, schema)
+    clean_up()
+    if scenario_info is not None:
+        result = replace(result, scenario=scenario_info)
     return result
 
 
@@ -138,12 +279,14 @@ def _validate(
 ) -> None:
     """Everything checkable without the database, checked before the
     sweep touches it."""
-    modelled = {table.name for table in schema.tables}
+    modelled = {table.name for table in schema.tables} | {
+        table.qualified_name for table in schema.tables
+    }
     unknown = sorted(name for name in sizes if name not in modelled)
     if unknown:
         msg = (
             f"sizes names tables the schema does not model: {', '.join(unknown)}. "
-            f"Modelled tables: {', '.join(sorted(modelled)) or '(none)'}. A "
+            f"Modelled tables: {', '.join(sorted(t.name for t in schema.tables)) or '(none)'}. A "
             "misspelt key would load no rows yet still count toward every "
             "point's total_rows."
         )
@@ -175,6 +318,25 @@ def _validate(
         raise SqlProofUsageError(msg)
 
 
+def _with_refs(args: Sequence[Any], refs: Mapping[str, Any]) -> list[Any]:
+    """Replace each `ref("name")` argument with that named row's key."""
+    from sqlproof.scenarios.model import RowRef
+
+    out: list[Any] = []
+    for arg in args:
+        if isinstance(arg, RowRef):
+            if arg.name not in refs:
+                msg = (
+                    f"Argument {arg!r} names no row of the scenario; "
+                    f"named rows: {', '.join(sorted(refs)) or 'none'}."
+                )
+                raise SqlProofUsageError(msg)
+            out.append(refs[arg.name])
+        else:
+            out.append(arg)
+    return out
+
+
 def _refuse_non_empty_tables(conn: database.Connection, schema: SchemaInfo) -> None:
     counts = row_counts(conn, schema)
     occupied: list[str] = []
@@ -203,17 +365,17 @@ def _measure(
     schema: SchemaInfo,
     function: str,
     *,
-    sizes: Mapping[str, int],
+    profile: Profile,
     args: Sequence[Any],
     max_factor: int,
     min_points: int,
     probe_timeout_s: float,
     seed: int,
-    columns: ColumnOverrides | None,
+    distribution: str = "uniform",
+    nested_plans: bool = False,
 ) -> ScaleResult:
     """Calibrate, climb the ladder and fit -- the part of the sweep that
     writes to the database, run only after `run_sweep`'s checks pass."""
-    base_total = sum(sizes.values())
     points: list[ProbePoint] = []
     truncated = False
 
@@ -245,22 +407,39 @@ def _measure(
     # appended to `points`; the factor/total_rows sentinels below are
     # never part of any fit.
     #
-    # One row per table at most: `min(count, 1)`, so a table sized 0
-    # stays empty here exactly as it does at every ladder point.
-    calibration_sizes = {name: min(count, 1) for name, count in sizes.items()}
+    # One row per table at most (`profile(0)`), so a table sized 0 stays
+    # empty here exactly as it does at every ladder point.
 
     # Count only the modelled tables' buffers: see probe_function.
     relations = [(table.schema, table.name) for table in schema.tables]
 
-    def _calibration_round() -> ProbePoint:
+    def _load(step: LoadStep) -> None:
         truncate(conn, schema)
-        load_dataset(conn, schema, calibration_sizes, seed=seed, columns=columns)
-        analyze(conn, schema)
-        calibration_args = resolve_args(conn, args)
-        return probe_function(
-            conn, function, calibration_args, factor=0, total_rows=0,
-            relations=relations,
+        if step.before_load is not None:
+            step.before_load(conn)
+        load_dataset(
+            conn, schema, step.sizes, seed=seed, columns=step.columns,
+            distribution=distribution,
         )
+        analyze(conn, schema)
+
+    def _calibration_round() -> ProbePoint:
+        step = profile(0)
+        _load(step)
+        calibration_args = resolve_args(conn, _with_refs(args, step.refs))
+        try:
+            return probe_function(
+                conn, function, calibration_args, factor=0, total_rows=0,
+                relations=relations, timeout_s=probe_timeout_s,
+                nested_plans=nested_plans,
+            )
+        except ProbeTimedOut as exc:
+            msg = (
+                f"{exc}, on the calibration dataset of at most one row per table. "
+                "There is no curve to measure; raise probe_timeout_s or check that "
+                "the function returns."
+            )
+            raise SqlProofScaleError(msg) from exc
 
     # Since probes count only the modelled tables, the compile and replan
     # work described above (catalog reads) no longer reaches work_blocks.
@@ -271,18 +450,21 @@ def _measure(
 
     factor = 1
     while factor <= max_factor:
-        scaled = {name: count * factor for name, count in sizes.items()}
-        truncate(conn, schema)
-        load_dataset(conn, schema, scaled, seed=seed, columns=columns)
-        analyze(conn, schema)
+        step = profile(factor)
+        _load(step)
 
-        resolved = resolve_args(conn, args)
+        resolved = resolve_args(conn, _with_refs(args, step.refs))
         started = time.perf_counter()
-        point = probe_function(
-            conn, function, resolved,
-            factor=factor, total_rows=base_total * factor,
-            relations=relations,
-        )
+        try:
+            point = probe_function(
+                conn, function, resolved,
+                factor=factor, total_rows=sum(step.sizes.values()),
+                relations=relations, timeout_s=probe_timeout_s,
+                nested_plans=nested_plans,
+            )
+        except ProbeTimedOut:
+            truncated = True
+            break
         elapsed = time.perf_counter() - started
         points.append(point)
 
@@ -306,11 +488,13 @@ def _measure(
         plan_flips=flips,
         truncated=truncated,
         function=function,
-        sizes=dict(sizes),
+        sizes=dict(profile(1).sizes),
         baseline=baseline,
         seed=seed,
         max_factor=max_factor,
         min_points=min_points,
         probe_timeout_s=probe_timeout_s,
         argument_policy=argument_policy(args),
+        distribution=distribution,
+        nested_plans=nested_plans,
     )

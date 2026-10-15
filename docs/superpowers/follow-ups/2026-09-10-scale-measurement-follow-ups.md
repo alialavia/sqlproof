@@ -37,7 +37,7 @@ Items 2 and 3 are the ones that decide whether `scale_analysis` can be advertise
 
 ## 2. The fit refuses flat but noisy functions
 
-**Label:** `bug`.
+**Label:** `bug`. **Status:** done. Acceptance is on the exponent's standard error (≤ 0.15), and an all-equal series is exponent 0 at any baseline; the primary-key test passes (20 of 20 runs on each image) and its xfail is gone.
 
 **Problem.** `fit_exponent` accepts a fit only when R² ≥ `MIN_R_SQUARED` (0.98). For a flat series with a little noise, R² is near zero by construction. So a well-behaved O(1) function is refused, and `assert result.exponent < 1.5` fails CI for good code.
 
@@ -54,7 +54,7 @@ A second defect makes it worse. `fit_exponent` sets `r2 = 1.0 if ss_tot == 0 els
 
 ## 3. Growth in CPU work alone is invisible to the exponent
 
-**Label:** `enhancement`. **Needs a spec decision.**
+**Label:** `enhancement`. **Status:** done, as proposed: a refuse-only guard (`fit.cpu_growth_reason`) when time grows more than 0.5 faster than work, the last point takes at least 20 ms, and the time fit is tight. The spec decision: time may veto the exponent, never replace it.
 
 **Problem.** The exponent is fitted on buffer blocks touched. Work that burns CPU without touching new pages doesn't show up in it: a nested loop over a `Materialize`, a large in-memory sort, hash-heavy work.
 
@@ -83,7 +83,7 @@ A second defect makes it worse. `fit_exponent` sets `r2 = 1.0 if ss_tot == 0 els
 
 ## 5. `sqlproof scale report`: a CLI over saved runs
 
-**Label:** `enhancement`.
+**Label:** `enhancement`. **Status:** done. `sqlproof scale report [--runs-dir] [--format html|text] [--output] [--open]` (`sqlproof.scale.report`): per-function history with each run's exponent, standard error, measured range, spill, plan flips and distribution; a rise of more than 0.3 over the previous run is flagged. Runs are re-read into `ScaleResult`, so refusals match what a test sees. The `sqlproof scale <function>` gate command is not built: the assertion API is the gate.
 
 **Problem.** The umbrella spec's Phase 2 includes a `sqlproof scale` CLI; #110 ships the Python API only. The Phase 2 spec reframed the CLI as `sqlproof scale report` over saved artifacts, mirroring `sqlproof mutation report`.
 
@@ -103,7 +103,7 @@ A second defect makes it worse. `fit_exponent` sets `r2 = 1.0 if ss_tot == 0 els
 
 ## 7. Make `heaviest` a real worst case
 
-**Label:** `enhancement`.
+**Label:** `enhancement`. **Status:** done. `distribution` is a sweep option recorded in the artifact, and `heaviest` counts referencing rows over every single-column foreign key into the column (`{"kind": "heaviest", "by": "references"}`); a live test checks it against a direct count under zipf.
 
 **Problem.** `run_sweep` always loads the bulk generator's default uniform distribution, and `heaviest` returns the largest key value.
 - Under uniform data, the largest key is an arbitrary parent.
@@ -119,7 +119,7 @@ So the worst case is not what gets measured. The docstrings and the artifact's p
 
 ## 8. See plans inside functions
 
-**Label:** `enhancement`. **Needs a privilege check.**
+**Label:** `enhancement`. **Status:** done, opt-in: `nested_plans=True` on `probe_function`, `run_sweep` and `scale_analysis`, recorded in the artifact. Privilege check: on the Supabase image `auto_explain` is in `shared_preload_libraries` and the non-superuser `postgres` role can set its options; on plain Postgres a superuser can `LOAD` it, and anyone else gets a `SqlProofUsageError` saying so. The plan-flip xfail is replaced by tests that pass with the option (and one showing the default still cannot see the flip).
 
 **Problem.** EXPLAIN of `SELECT fn()` shows only the outer statement. For a function Postgres doesn't inline — which means any function that reads a table — the plan hash is the same at every point. So plan-change splitting, peak memory and naming the dominant relation never see inside it.
 
@@ -143,7 +143,10 @@ First check whether the `postgres` role in the Supabase image, which is not a su
 
 ## 10. Cancel runaway probes
 
-**Label:** `enhancement`.
+**Label:** `enhancement`. **Status:** done: `probe_function(timeout_s=)`
+sets `SET LOCAL statement_timeout` after its savepoint and raises
+`ProbeTimedOut` on SQLSTATE 57014; the sweep ends truncated without the
+cancelled point, and a calibration timeout raises `SqlProofScaleError`.
 
 **Problem.** `probe_timeout_s` is checked after a probe returns, so a runaway probe runs to completion before the sweep stops.
 
@@ -162,6 +165,14 @@ First check whether the `postgres` role in the Supabase image, which is not a su
 ## 12. Real type bounds for six kinds, with the matching statistics checks
 
 **Label:** `enhancement`. **Source:** open question 1 of the umbrella spec, which marks it top priority for the generation foundation.
+
+**Status:** done. Both generators read one window per kind from
+`typespec.py`; the bulk path's output is unchanged (the golden test still
+passes), the Hypothesis path narrowed to the bulk windows. Values are
+checked across paths in `tests/unit/test_shared_windows.py`; `n_distinct`
+and `correlation` are checked for the bulk path against analytic
+expectations in `tests/integration/test_bulk_statistics_live.py`, not
+across paths, for the reason given there.
 
 **Problem.** `TypeSpec` carries bounds for `integer`, `decimal` and `text` only. For `date`, `datetime`, `float`, `interval`, `binary` and `vector`, the Hypothesis and bulk generators each hold their own ranges, and those have measurably diverged: dates run 2000–2054 in one and 0066–9988 in the other. The cross-path `pg_stats` check covers only `null_frac`.
 

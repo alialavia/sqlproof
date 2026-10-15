@@ -59,8 +59,8 @@ def save_run(
     calibrated fixed per-call cost the fit subtracted. Segmenting the
     points on `plan_hash` (`fit.segment_by_plan`) and calling
     `fit.fit_exponent(segment, baseline)` reproduces each entry of
-    `regimes`. `seed`, `max_factor`, `min_points` and `probe_timeout_s`
-    record how the sweep ran, so it can be run again: the same seed and
+    `regimes`. `seed`, `max_factor`, `min_points`, `probe_timeout_s` and
+    `distribution` record how the sweep ran, so it can be run again: the same seed and
     profile reproduce the data, the resolved arguments, the plans and
     the fitted exponent. `work_blocks` counts only the modelled tables'
     buffers, not the system catalogs, so per-backend catalog cache state
@@ -68,7 +68,8 @@ def save_run(
 
     `argument_policy` holds one entry per argument position, saying how
     that argument was chosen (Ruling AO): `{"kind": "heaviest", "column":
-    "t.id"}` (the largest key value), `{"kind": "median_key", "column":
+    "t.id", "by": "references"}` (the most-referenced key), `{"kind":
+    "median_key", "column":
     ...}`, `{"kind": "random_key", "column": ..., "seed": 0}`, `{"kind":
     "callable"}` for a caller's own resolver, or `{"kind": "literal"}`
     (the value itself is in each point's `args`). No entry claims a
@@ -105,6 +106,9 @@ def save_run(
         # One entry per argument position (see the docstring) -- deliberately
         # not a run-wide "worst case" label: no resolver guarantees one.
         "argument_policy": [dict(entry) for entry in result.argument_policy],
+        "scenario": None if result.scenario is None else dict(result.scenario),
+        "distribution": result.distribution,
+        "nested_plans": result.nested_plans,
         "spill_point_rows": result.spill_point_rows,
         "factor_at_spill": result.factor_at_spill,
         "points": [

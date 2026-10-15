@@ -217,12 +217,12 @@ def _valid() -> dict[str, Any]:
             r"\.set must be a mapping",
         ),
         (
-            lambda d: d["tables"].update(customers=[{"cohort": 1, "set": {"tier": [1]}}]),
-            r"\.set\.tier must be a scalar or \{ref",
+            lambda d: d["tables"].update(customers=[{"cohort": 1, "set": {"tier": [b"1"]}}]),
+            r"\.set\.tier\[0\] has unsupported type bytes",
         ),
         (
-            lambda d: d["tables"].update(customers=[{"cohort": 1, "set": {"tier": {"x": 1}}}]),
-            "write the value as a string",
+            lambda d: d["tables"].update(customers=[{"cohort": 1, "set": {"tier": {"x": {1, 2}}}}]),
+            r"\.set\.tier\.x has unsupported type set",
         ),
         (
             lambda d: d["tables"].update(customers=[{"row": "a"}, {"row": "a"}]),
@@ -319,11 +319,15 @@ def test_json_schema_accepts_exports_and_rejects_what_the_parser_rejects() -> No
     validator.check_schema(json_schema())
     validator.validate(tiered.to_dict())
     validator.validate({**_valid(), "x-anything": [1, 2]})
+    # Arrays and json values pin as lists and objects.
+    validator.validate(
+        {**_valid(), "tables": {"customers": [{"cohort": 1, "set": {"tags": ["a"], "m": {}}}]}}
+    )
     for bad in (
         {**_valid(), "colour": "red"},
         {**_valid(), "version": 2},
         {**_valid(), "tables": {"customers": [{"fill": 1, "cohort": 1}]}},
-        {**_valid(), "tables": {"customers": [{"cohort": 1, "set": {"tier": [1]}}]}},
+        {**_valid(), "tables": {"customers": [{"cohort": 0, "set": {"tier": 1}}]}},
         {**_valid(), "tables": {"customers": [{"per_parent": {"parent": "x"}}]}},
     ):
         with pytest.raises(jsonschema.ValidationError):

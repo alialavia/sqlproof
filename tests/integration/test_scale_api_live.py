@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import os
-from itertools import pairwise
 from uuid import uuid4
 
 import pytest
@@ -94,15 +93,17 @@ def test_resolved_arguments_are_recorded_per_point(proof, tmp_path):
     # (with the default 32 the sweep stops at 16 on fit quality).
     assert max(p.factor for p in result.points) == 8
     assert all(len(p.args) == 1 for p in result.points)
-    # The heaviest key grows with the data, so it must strictly increase
-    # with factor (points arrive in ascending factor order).
-    resolved_values = [p.args[0] for p in result.points]
-    assert all(a < b for a, b in pairwise(resolved_values))
+    # Each point's argument is re-resolved against that point's data: the
+    # most-referenced org, which exists at that factor (ids 1..20*factor).
+    for point in result.points:
+        assert 1 <= point.args[0] <= 20 * point.factor
     # Ruling AO: the artifact says how the argument was chosen -- the
-    # largest key value, by `heaviest` -- and claims no worst case.
+    # most-referenced key, by `heaviest` -- and claims no worst case.
     (artifact,) = tmp_path.glob("*.json")
     data = json.loads(artifact.read_text())
-    assert data["argument_policy"] == [{"kind": "heaviest", "column": "api_test.orgs.id"}]
+    assert data["argument_policy"] == [
+        {"kind": "heaviest", "column": "api_test.orgs.id", "by": "references"}
+    ]
 
 
 # --- Ruling AM: the sweep empties and repopulates every modelled table ---
@@ -262,3 +263,24 @@ def test_a_function_that_raises_mid_sweep_propagates_and_leaves_tables_empty(pro
             artifact_dir=None,
         )
     assert _row_counts() == {"orgs": 0, "events": 0}
+
+
+def test_a_runaway_probe_is_cancelled_at_the_timeout(proof):
+    """Follow-up 10: Postgres cancels the call at the timeout, rather than
+    the sweep noticing after it returns."""
+    import time
+
+    from sqlproof.scale.probe import ProbeTimedOut, probe_function
+
+    dsn = os.environ[DSN_ENV]
+    with database.connect(dsn, autocommit=True) as connection:
+        connection.execute(
+            "CREATE FUNCTION api_test.slow() RETURNS void LANGUAGE sql VOLATILE AS "
+            "$$ SELECT pg_sleep(3) $$"
+        )
+        started = time.monotonic()
+        with pytest.raises(ProbeTimedOut, match=r"api_test\.slow did not return within 0\.5s"):
+            probe_function(connection, "api_test.slow", (), factor=1, total_rows=0, timeout_s=0.5)
+        assert time.monotonic() - started < 1.5
+        # The savepoint rollback restored the session's timeout.
+        assert connection.execute("SHOW statement_timeout").fetchone()[0] == "0"

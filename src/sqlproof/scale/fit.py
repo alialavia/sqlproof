@@ -15,7 +15,15 @@ from itertools import pairwise
 from sqlproof.scale.probe import ProbePoint
 
 MIN_POINTS = 5
-MIN_R_SQUARED = 0.98
+MAX_SLOPE_STDERR = 0.15
+"""A fit is accepted when the exponent's standard error is at most this.
+
+At the minimum five points that puts the 95% interval within about
+±0.5 of the reported exponent, narrower with more points. Real growth
+measures far tighter (about 0.01 for the linear and quadratic reference
+functions); only small, flat work comes near the limit. R² is not the test: for a flat series it
+measures only the noise around a zero slope, so it refused well-behaved
+O(1) functions (follow-up 2)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,6 +34,8 @@ class FitResult:
     from_factor: int
     to_factor: int
     plan_hash: str
+    slope_stderr: float | None = None
+    """Standard error of the exponent; what decides whether it is claimed."""
 
 
 def fit_exponent(points: Sequence[ProbePoint], baseline: int) -> FitResult:
@@ -68,9 +78,12 @@ def fit_exponent(points: Sequence[ProbePoint], baseline: int) -> FitResult:
     # first point, or growth capped by an inflated baseline) without
     # being flat, and must stay refused below, not be reported as
     # constant.
+    # Identical work at every factor above the baseline is exponent 0
+    # too; handled here rather than trusting floating point to make the
+    # residuals exactly zero.
     first_work = points[0].work_blocks
-    if all(p.work_blocks == first_work for p in points) and first_work <= baseline:
-        return FitResult(0.0, 1.0, None, lo, hi, shape)
+    if all(p.work_blocks == first_work for p in points):
+        return FitResult(0.0, 1.0, None, lo, hi, shape, 0.0)
 
     xs: list[float] = []
     ys: list[float] = []
@@ -100,16 +113,64 @@ def fit_exponent(points: Sequence[ProbePoint], baseline: int) -> FitResult:
         (y - (slope * x + intercept)) ** 2 for x, y in zip(xs, ys, strict=True)
     )
     ss_tot = sum((y - mean_y) ** 2 for y in ys)
-    r2 = 1.0 if ss_tot == 0 else 1 - ss_res / ss_tot
+    # Reported, not tested: see MAX_SLOPE_STDERR.
+    r2 = 1.0 if ss_tot <= 1e-12 else max(0.0, 1 - ss_res / ss_tot)
+    stderr = math.sqrt(ss_res / (n - 2) / sxx)
 
-    if r2 < MIN_R_SQUARED:
+    if stderr > MAX_SLOPE_STDERR:
         return FitResult(
             None, round(r2, 4),
-            f"r_squared {r2:.3f} below {MIN_R_SQUARED}; the points do not "
-            "lie on a power curve, so no exponent is claimed",
-            lo, hi, shape,
+            f"exponent {slope:.2f} has a standard error of {stderr:.3f}, above "
+            f"{MAX_SLOPE_STDERR}; the points do not lie on a power curve, so "
+            "no exponent is claimed",
+            lo, hi, shape, round(stderr, 4),
         )
-    return FitResult(round(slope, 4), round(r2, 4), None, lo, hi, shape)
+    return FitResult(round(slope, 4), round(r2, 4), None, lo, hi, shape, round(stderr, 4))
+
+
+CPU_GUARD_MIN_MS = 20.0
+"""Below this execution time at the last point, the time curve is mostly
+fixed overhead and says nothing about growth."""
+CPU_GUARD_MARGIN = 0.5
+"""How far the time exponent may exceed the work exponent before the work
+exponent is refused as blind to the growth (follow-up 3)."""
+_CPU_GUARD_MAX_STDERR = 0.3
+
+
+def cpu_growth_reason(points: Sequence[ProbePoint], work_exponent: float) -> str | None:
+    """Why `work_exponent` misses growth the clock sees, or None.
+
+    The exponent counts buffer blocks, so work that burns CPU without
+    touching new pages -- a nested loop over a Materialize, an in-memory
+    sort -- does not show in it. Wall-clock time does. When time grows
+    clearly faster than work, the work exponent understates the cost and
+    is refused rather than reported. Time never becomes the exponent: it
+    depends on the machine, so it can only veto."""
+    if len(points) < MIN_POINTS or points[-1].exec_ms < CPU_GUARD_MIN_MS:
+        return None
+    if any(p.exec_ms <= 0 or p.factor <= 0 for p in points):
+        return None
+    xs = [math.log(p.factor) for p in points]
+    ys = [math.log(p.exec_ms) for p in points]
+    n = len(xs)
+    mean_x = sum(xs) / n
+    mean_y = sum(ys) / n
+    sxx = sum((x - mean_x) ** 2 for x in xs)
+    if sxx == 0:
+        return None
+    slope = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys, strict=True)) / sxx
+    intercept = mean_y - slope * mean_x
+    ss_res = sum((y - (slope * x + intercept)) ** 2 for x, y in zip(xs, ys, strict=True))
+    if math.sqrt(ss_res / (n - 2) / sxx) > _CPU_GUARD_MAX_STDERR:
+        return None  # the clock is too noisy to contradict the work
+    if slope - work_exponent <= CPU_GUARD_MARGIN:
+        return None
+    return (
+        f"execution time grows as about n^{slope:.2f} while buffer work grows as "
+        f"n^{work_exponent:.2f}: CPU cost (in-memory joins, sorts or loops that "
+        "touch no new pages) is growing faster than the I/O the exponent measures, "
+        "so the exponent would understate it"
+    )
 
 
 @dataclass(frozen=True, slots=True)

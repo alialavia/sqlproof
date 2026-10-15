@@ -52,7 +52,7 @@ def test_no_orphan_line_items(db):
 - With Hypothesis directly: `dataset = data.draw(proof.dataset_strategy(sizes={...}))`, then `with proof.client_for_dataset(dataset) as db: ...`.
 - External tables (e.g. `auth.users` under `supabase_proof`): name one in `sizes` (`{"projects": 1, "auth.users": 2}`) to use exactly that many pool rows for FKs and get them back as `dataset["auth.users"]` (rows hold only `id`).
 - One schema-aware fixture row: `proof.row_strategy("orders", customer_id=42).example()`.
-- Failures are saved under `.sqlproof/failures/`; inspect with `sqlproof report <file>` and `sqlproof replay <file>`.
+- Failures are saved under `.sqlproof/failures/`; inspect with `sqlproof report <file>` and `sqlproof replay <file>`; `sqlproof replay <file> --as-scenario --schema-file <schema.sql>` turns the failing rows into a scenario to load with `scenarios up`. Each file records its seed; pass it back as `seed=` to repeat the search.
 
 Pytest plugin: set `SUPABASE_DB_URL` (or `SQLPROOF_DATABASE_URL`, or `--sqlproof-database-url`). No conftest.py needed; it ships fixtures `proof` / `db` and, for anything touching `auth.uid()` or RLS, `supabase_proof` / `supabase_db` (seeds a deterministic `auth.users` pool and samples `auth.users` FKs from it). Each test runs in a savepoint that rolls back.
 

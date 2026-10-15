@@ -1,6 +1,6 @@
 # Scenarios: declarative, reproducible database states
 
-**Status:** phases 1 and 2 implemented (experimental); phases 3 and 4 draft.
+**Status:** phases 1-4 implemented (experimental).
 **Date:** 2026-10-13
 **Builds on:** bulk generation (`2026-09-03-function-scale-analysis-design.md`,
 Phase 1, shipped in 0.11.0) and per-column overrides (#107).
@@ -363,6 +363,83 @@ how they would use this at all.
 
 Phase 1 alone already answers the original request: "2 Tier 1 users, 3
 Tier 2 users, the rest generated, the same every time".
+
+### Phase 3 as implemented
+
+- `Scenario.strategy(proof)` wraps `dataset_strategy` with the compiled
+  sizes and overrides, so pinned values are fixed in every draw and
+  Hypothesis shrinks only the rest. A scenario that seeds `auth.users`
+  is refused: a dataset cannot carry rows for a table outside the schema.
+- `scale_analysis(..., scenario=...)` (and `run_sweep`) take a scenario
+  instead of `sizes`. Internally both become a per-factor load profile.
+  `Scenario.scaled(k)` is the profile at factor `k` and
+  `Scenario.minimal()` the calibration round.
+- **Scaling rule, refined from the sketch above.** Multiplying every
+  per-parent count by `k` while fill parents also multiply grows the
+  children as `k^2`, which a first live test measured as an exponent of
+  about 1.7 for a linear function. So per-parent counts grow only for
+  parents that stay fixed (a named row, or cohorts unless
+  `scale_cohorts`), and totals stay linear in `k`.
+- `RowRef` arguments resolve to the named row's key at every factor and
+  are recorded as `{"kind": "ref"}` in the artifact's `argument_policy`.
+  The artifact gains a `scenario` entry (name, fingerprint,
+  `scale_cohorts`).
+- The scenario's seed is the sweep's (a conflicting `seed=` is refused),
+  `columns=` cannot be combined with a scenario, and the scenario's
+  `auth.users` rows are removed when the sweep ends.
+
+### Phase 4 as implemented
+
+- **Reproducibility.** `sqlproof(..., seed=)` now seeds Hypothesis
+  (it was accepted and ignored). Only an explicit seed is forced:
+  Hypothesis's `@seed` also turns off the example database and overrides
+  `derandomize` and `--hypothesis-seed`, so a run without one is left to
+  Hypothesis, and the counterexample records the seed Hypothesis drew
+  (or the forced one, or none when derandomized). The same seed repeats
+  the same search. `sqlproof replay FILE` prints it. (An earlier cut
+  always forced a random seed; review caught that it silently undid
+  `derandomize` profiles.)
+- **`sqlproof replay FILE --as-scenario`** (`--schema-file` or `--dsn`,
+  `--name`, `--format`, `--output`) builds the scenario in
+  `sqlproof.scenarios.counterexample`. Each row becomes a pinned row:
+  named `<table>_<n>` when its table has a single-column key, a
+  one-row cohort otherwise. Every column the dataset holds is pinned
+  except that key and generated columns. A single-column foreign key to
+  a row in the dataset becomes a reference, and one to `auth.users`
+  becomes a reference to a seeded auth user, so relationships survive
+  the new keys. Keys are reassigned in row order; the counterexample
+  file keeps the original numbers. The scenario is compiled before it
+  is written, and a schema whose fingerprint differs from the recorded
+  one is a warning, not a refusal.
+- **Decision: refs, not pinned keys.** Pinning the original key values
+  would need key pinning, which the compiler refuses because generated
+  rows would collide with them. References keep the scenario valid at
+  any seed and readable.
+- What it needed elsewhere:
+  - Serialized values may be lists (array columns) and objects (json
+    columns). A json column pinned to a string used to load as a JSON
+    string, not the document the earlier docs implied.
+  - A primary key is pinnable where it is made of references: a
+    composite key (a join table), or a single-column key that is also
+    a foreign key (`profiles.id -> auth.users`, a 1:1 settings table).
+    Then every row of the table must pin all of it, one row per group,
+    distinct, and a single-column one only with references; tables
+    that reference such a table must pin their reference too, since the
+    generator finds parents by arithmetic over generated keys. Both
+    generators honour these pins; a pinned single-column key reaches
+    them wrapped in `PinnedKey`, so a plain `columns=` override on a key
+    is still ignored. The exporter relies on this to keep 1:1 rows with
+    their parents. (Review caught that the first cut dropped such keys,
+    and allowed partial composite pins that collided at load.)
+  - Counterexample files write `bytea` values as `\x...` (they failed
+    to serialize).
+  - The Hypothesis path drew a top-level `None` for json columns,
+    which loads as SQL NULL and broke `NOT NULL json` columns. JSON
+    null now appears only inside a document.
+- Not covered: array columns are not generated yet (they parse as
+  their element type; see the v0.1 scope in SPEC.md), so a
+  counterexample never holds one. The exporter passes lists through
+  for when they are.
 
 ### Phase 1 as implemented
 

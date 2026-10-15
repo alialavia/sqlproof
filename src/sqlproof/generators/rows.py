@@ -169,7 +169,10 @@ def table_rows_strategy(
         for index in range(count):
             row: dict[str, Any] = {}
             for column in table.columns:
-                if column.name in table.primary_key and len(table.primary_key) == 1:
+                single_key = column.name in table.primary_key and len(table.primary_key) == 1
+                if single_key and not isinstance(
+                    _column_override(columns, table, column.name), PinnedKey
+                ):
                     row[column.name] = _unique_value(column.name, column.type.name, index)
                     continue
                 if column.is_generated:
@@ -187,6 +190,9 @@ def table_rows_strategy(
                     value = _draw_override(draw, override, context)
                     if value is not GENERATE:
                         row[column.name] = value
+                        continue
+                    if single_key:
+                        row[column.name] = _unique_value(column.name, column.type.name, index)
                         continue
                 if column.default is not None:
                     continue
@@ -289,6 +295,24 @@ def _composite_unique_keys(table: Table) -> tuple[tuple[str, ...], ...]:
         if all(op == "=" for _col, op in exclusion.columns_with_operators):
             keys.append(tuple(col for col, _op in exclusion.columns_with_operators))
     return tuple(keys)
+
+
+class PinnedKey:
+    """A single-column primary key's value per row, from a scenario that pins
+    a key which is also a foreign key (`profiles.id -> auth.users`).
+
+    Both generators honour an override on such a key only in this wrapper:
+    a plain `columns=` override on a primary key stays ignored, because
+    child tables find their parents' keys by arithmetic on generated keys.
+    The scenario compiler makes sure nothing does that for a pinned key."""
+
+    __slots__ = ("resolve",)
+
+    def __init__(self, resolve: Callable[[Any], Any]) -> None:
+        self.resolve = resolve
+
+    def __call__(self, context: Any) -> Any:
+        return self.resolve(context)
 
 
 def _column_override(

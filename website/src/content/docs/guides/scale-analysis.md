@@ -64,14 +64,20 @@ noisy CI runner.
    mistaken for growth.
 3. **Climb a geometric ladder** (×1, ×2, ×4, …): truncate, bulk load with
    `COPY`, `ANALYZE`, resolve the arguments against the new data, probe.
-4. **Stop** when at least `min_points` points fit with R² ≥ 0.98, at
-   `max_factor`, or when a probe exceeds `probe_timeout_s`.
+4. **Stop** when at least `min_points` points fit well enough to claim
+   an exponent (its standard error at most 0.15), at
+   `max_factor`, or when a probe exceeds `probe_timeout_s`. Postgres
+   cancels such a probe at the timeout, and the result is marked
+   truncated.
 5. **Split the fit** wherever the plan's shape changes, and report each
    regime.
 
 Options passed through to the sweep: `max_factor` (default 32),
 `min_points` (default 5), `probe_timeout_s` (default 30), `seed`
-(default 0) and `columns` (per-column overrides, as for bulk generation).
+(default 0), `columns` (per-column overrides, as for bulk generation) and
+`distribution`. With `distribution="zipf"`, a few parents own most of
+the children, as real tenants do; uniform data (the default) spreads
+them evenly. Pair it with `heaviest` to measure the heavy tenant.
 
 ## Choosing arguments
 
@@ -80,18 +86,22 @@ resolvers are re-run against each freshly loaded dataset:
 
 | Resolver | Picks |
 | --- | --- |
-| `heaviest("t.col")` | The largest key value. Not the most-referenced row, and no worst-case guarantee. |
+| `heaviest("t.col")` | The most-referenced key: the most rows pointing at it, over every foreign key into the column. The largest key when nothing references it. Heaviest by row count, not a worst-case guarantee. |
 | `median_key("t.col")` | The middle key in key order: a typical value. |
 | `random_key("t.col", seed=0)` | An arbitrary key, deterministic for a seed. |
 
 Plain values are passed through unchanged.
 
+To measure one particular row as everything else grows, sweep a
+[scenario](/guides/scenarios/#in-scale-sweeps) and pass `RowRef("name")`:
+the named row's key, the same at every factor.
+
 ## Reading the result
 
 | Member | Meaning |
 | --- | --- |
-| `exponent` | Exponent of the final plan regime. Raises `SqlProofScaleError`, with the reason, when the fit is inconclusive. |
-| `r_squared` | Fit quality of the final regime. |
+| `exponent` | Exponent of the final plan regime. Raises `SqlProofScaleError`, with the reason, when the fit is inconclusive or execution time grows clearly faster than the work (see below). |
+| `r_squared` | Fit quality of the final regime, for reading. Acceptance uses the exponent's standard error (`regimes[-1].slope_stderr`): R² of a flat series measures only its noise. |
 | `regimes`, `plan_flips` | Each plan regime's fit, and where the plan changed. |
 | `spills_below(rows)` | Whether a sort or hash spilled to disk at or below `rows`. Raises beyond the measured range rather than guess. |
 | `rows_before_timeout(ms)` | Projected row band where the function crosses a timeout. Machine-dependent, unlike `exponent`. |
@@ -102,20 +112,38 @@ Each run also writes a JSON artifact to `.sqlproof/scale-runs/` (pass
 [mutation runs](/guides/mutation-testing/), so you can keep a history per
 function.
 
+To read the history, render a report over those runs:
+
+```bash
+sqlproof scale report                 # writes scale-report.html
+sqlproof scale report --format text   # one line per function, for CI logs
+```
+
+Per function, it shows the exponent over time, with each run's standard
+error, the rows measured, any spill, plan flips and the data
+distribution. A run whose exponent is more than 0.3 above the
+function's previous one is flagged `REGRESSED`. A refused exponent shows
+as refused, with the reason, by the same rules `exponent` applies in a
+test.
+
 ## What it cannot see
 
 - **Growth in CPU work alone.** Buffers count pages touched, not CPU. A
   join on `a.v < b.v` over a materialized inner side is quadratic in CPU
-  but fits about 1.
-- **Plans inside a function.** `EXPLAIN` of `SELECT fn()` shows only the
-  outer statement. For PL/pgSQL and non-inlined SQL functions, work is
-  still measured, but plan changes and peak memory inside them are not.
-- **Flat but noisy functions.** A primary-key lookup whose work wobbles
-  by a block or two fails the R² check, so `exponent` raises instead of
-  reporting about 0.
+  but its work fits about 1. When execution time grows more than 0.5
+  faster than the work (and the last call took at least 20 ms),
+  `exponent` refuses instead of reporting the smaller number. Below
+  that, CPU growth passes unseen.
+- **Plans inside a function, by default.** `EXPLAIN` of `SELECT fn()`
+  shows only the outer statement. For PL/pgSQL and non-inlined SQL
+  functions, work is still measured, but plan changes and peak memory
+  inside them are not, unless you pass `nested_plans=True`. Then
+  `auto_explain` reports the plan of every statement the function runs,
+  so an inner plan change splits the fit and inner sorts report memory.
+  It needs a superuser, or a server that preloads `auto_explain` and lets
+  your role set it (the Supabase images do), and it slows functions that
+  run many statements, so it is off by default.
 - **O(n log n) versus O(n).** An in-memory sort touches no buffers.
-- **Runaway probes.** `probe_timeout_s` is checked after a probe returns;
-  a probe that never returns hangs the sweep.
 - **What `work_blocks` counts.** Only buffers of the modelled tables, their
   indexes and TOAST storage. System catalog reads are excluded, so neither
   per-connection cache state nor other sessions' activity on a shared server

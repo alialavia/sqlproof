@@ -9,9 +9,13 @@ from hypothesis.strategies import SearchStrategy
 from sqlproof._range import Range
 from sqlproof.exceptions import SqlProofSchemaError
 from sqlproof.generators.typespec import (
+    BINARY_MAX_SIZE,
+    DATE_WINDOW,
+    DATETIME_WINDOW,
+    INTERVAL_WINDOW,
+    VECTOR_COMPONENT_WINDOW,
     TypeSpec,
-    float32_ceil,
-    float32_floor,
+    float_bounds,
     spec_for_type,
     spec_is_empty,
 )
@@ -67,13 +71,9 @@ def _strategy_for_spec(spec: TypeSpec) -> SearchStrategy[Any]:
         )
     if spec.kind == "float":
         width: Literal[32, 64] = 32 if spec.float_width == 32 else 64
-        lo = None if spec.min_value is None else float(spec.min_value)
-        hi = None if spec.max_value is None else float(spec.max_value)
-        if width == 32:
-            # Hypothesis requires width-32 bounds to be exactly
-            # representable; round inward so every draw stays inside.
-            lo = None if lo is None else float32_ceil(lo)
-            hi = None if hi is None else float32_floor(hi)
+        # Shared with bulk.py. For width 32 the bounds come back rounded
+        # inward to float32, which Hypothesis requires.
+        lo, hi = float_bounds(spec)
         return st.floats(
             min_value=lo,
             max_value=hi,
@@ -88,45 +88,58 @@ def _strategy_for_spec(spec: TypeSpec) -> SearchStrategy[Any]:
     if spec.kind == "uuid":
         return st.uuids().map(str)
     if spec.kind == "datetime":
+        start, end = DATETIME_WINDOW
         if spec.tz_aware:
             from datetime import UTC
 
-            return st.datetimes(timezones=st.just(UTC))
-        return st.datetimes()
+            # Hypothesis bounds tz-aware draws with naive datetimes in
+            # the drawn timezone; UTC makes them the same instants.
+            return st.datetimes(min_value=start, max_value=end, timezones=st.just(UTC))
+        return st.datetimes(min_value=start, max_value=end)
     if spec.kind == "date":
-        return st.dates()
+        first, last = DATE_WINDOW
+        return st.dates(min_value=first, max_value=last)
     if spec.kind == "time":
         return st.times()
     if spec.kind == "interval":
-        return st.timedeltas()
+        shortest, longest = INTERVAL_WINDOW
+        return st.timedeltas(min_value=shortest, max_value=longest)
     if spec.kind == "json":
         # TypeSpec has no representation for the recursive JSON shape
         # (unlike range/composite, which nest via `element`/`fields`);
         # this is a known, accepted leak in the registry design, so
         # the recursion is hard-coded here rather than read from spec.
         json_scalar = (
-            st.none()
-            | st.booleans()
-            | st.floats(allow_nan=False, allow_infinity=False)
-            | _postgres_text()
+            st.booleans() | st.floats(allow_nan=False, allow_infinity=False) | _postgres_text()
         )
-        return st.recursive(
-            json_scalar,
-            lambda children: (
-                st.lists(children, max_size=5)
-                | st.dictionaries(_postgres_text(max_size=20), children, max_size=5)
-            ),
-            max_leaves=10,
-        )
+
+        def containers(children: st.SearchStrategy[Any]) -> st.SearchStrategy[Any]:
+            return st.lists(children, max_size=5) | st.dictionaries(
+                _postgres_text(max_size=20), children, max_size=5
+            )
+
+        # JSON null only inside a document: a top-level None is SQL NULL
+        # (the column's nullability decides that), so drawing it here put
+        # NULL into NOT NULL json columns.
+        nested = st.recursive(st.none() | json_scalar, containers, max_leaves=10)
+        return json_scalar | containers(nested)
     if spec.kind == "binary":
-        return st.binary()
+        return st.binary(
+            min_size=spec.min_size or 0,
+            max_size=spec.max_size if spec.max_size is not None else BINARY_MAX_SIZE,
+        )
     if spec.kind == "vector":
         assert spec.dimension is not None
         # Bounded integers rather than st.floats: bounded-float draws
         # spend ~9 bytes of Hypothesis entropy each, exhausting the 8KB
         # conjecture buffer at common embedding dimensions (1536, 2000).
         # Integers spend ~3. Shrink target is identical.
-        component = st.integers(min_value=-1_000_000, max_value=1_000_000)
+        # Components in millionths of VECTOR_COMPONENT_WINDOW, the same
+        # six decimals bulk.py writes.
+        c_lo, c_hi = VECTOR_COMPONENT_WINDOW
+        component = st.integers(
+            min_value=round(c_lo * 1_000_000), max_value=round(c_hi * 1_000_000)
+        )
         return st.lists(component, min_size=spec.dimension, max_size=spec.dimension).map(
             lambda xs: "[" + ",".join(f"{x / 1_000_000:.6f}" for x in xs) + "]"
         )

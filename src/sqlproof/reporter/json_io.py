@@ -21,6 +21,8 @@ def write_counterexample(path: Path, payload: dict[str, Any]) -> None:
 def _json_default(value: Any) -> Any:
     if isinstance(value, Decimal | datetime | date | time | UUID):
         return str(value)
+    if isinstance(value, bytes):
+        return "\\x" + value.hex()  # bytea's text form
     if isinstance(value, timedelta):
         return value.total_seconds()
     if isinstance(value, Range):

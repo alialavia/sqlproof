@@ -144,9 +144,11 @@ nothing extra. A TypeScript project can run the CLI without adding
 Python to the project: `uvx --from "sqlproof[yaml]" sqlproof scenarios up
 tiered_customers --dsn "$DATABASE_URL"`.
 
-Values are scalars Postgres can read, or `{ref: <row name>}`. Pin a
-`json` or array column as a string. Keys starting with `x-` at the top
-level are left for other tools and do not change the scenario.
+Values are scalars Postgres can read, `{ref: <row name>}`, a list (an
+array column) or an object (a `json` or `jsonb` column). An object that
+is exactly `{ref: <name>}` is always a reference. Keys starting with
+`x-` at the top level are left for other tools and do not change the
+scenario.
 
 The JSON Schema at
 [`/schemas/scenario-v1.json`](https://sqlproof.com/schemas/scenario-v1.json)
@@ -225,10 +227,93 @@ Pin those columns if the case depends on them.
 
 Functions that call `now()` at query time still see the real clock.
 
+## In property tests
+
+`scenario.strategy(proof)` is a Hypothesis strategy of datasets that
+contain the scenario: every draw has its row counts and every value it
+pins, and only the unpinned values vary. A failing property shrinks
+those, never what the scenario fixed.
+
+```python
+from hypothesis import given
+
+
+@given(dataset=tiered_customers.strategy(proof))
+def test_tier_one_never_pays_more(dataset):
+    with proof.client_for_dataset(dataset) as db:
+        ...
+```
+
+Draws use the same value windows as `load()` (see
+[Custom generators](/guides/custom-generators/)), but Hypothesis chooses
+the unpinned values, so there is no byte-identity promise here.
+
+## In scale sweeps
+
+Pass a scenario instead of `sizes` to
+[`scale_analysis`](/guides/scale-analysis/), and call the function with a
+named row:
+
+```python
+from sqlproof.scale import scale_analysis
+from sqlproof.scenarios import RowRef
+
+result = scale_analysis(
+    proof, "invoice_total", scenario=tiered_customers, args=[RowRef("acme")],
+)
+assert result.exponent < 1.3
+```
+
+At factor `k` the scenario grows about `k` times:
+
+- fills grow `k` times;
+- cohorts stay fixed (`scale_cohorts=True` grows them too);
+- named rows never grow: they are identities;
+- per-parent children grow so the total stays linear. A fixed parent
+  (a named row, or a cohort) gets `k` times the children; parents that
+  themselves multiply keep their per-parent count.
+
+So "acme's invoices as the rest of the data grows" is one sweep. The
+scenario's seed is the sweep's, its `auth.users` rows are inserted before
+each load and removed at the end, and the run artifact records the
+scenario's name and fingerprint.
+
+## From a failing property
+
+A failing property writes its counterexample to
+`.sqlproof/failures/<test>.json`, with the seed Hypothesis drew. Turn the
+counterexample into a scenario and load it into a database to look at
+the rows that broke the property:
+
+```bash
+sqlproof replay .sqlproof/failures/test_totals.json --as-scenario \
+  --dsn "$DATABASE_URL" --output scenarios/totals_failure.scenario.yaml
+sqlproof scenarios up counterexample_test_totals --dsn "$DEV_DATABASE_URL"
+```
+
+`--schema-file schema.sql` works in place of `--dsn`; the schema
+supplies the keys and references. Each row becomes a pinned row, named
+`<table>_<n>` when its table has a single-column key, and every foreign
+key to a row in the counterexample becomes a reference to it. The
+scenario assigns new keys in the same order, so relationships survive
+but key values do not: a property that depends on the numbers
+themselves keeps the counterexample file for that. A key that is also a
+foreign key (`profiles.id` referencing `auth.users`) is pinned as a
+reference, so it keeps its parent. Pass `--name` to choose the scenario's
+name.
+
+To repeat the search instead, pass the recorded seed back:
+`@sqlproof(proof, sizes=..., seed=<seed>)`; `sqlproof replay FILE`
+prints it. A run with no `seed=` is left to Hypothesis, so a
+`derandomize` profile or `--hypothesis-seed` still applies (and then the
+file records no seed, or the forced one).
+
 ## Errors before the database
 
 The scenario is checked against the schema before any row is written:
-unknown tables and columns, pinned primary keys or generated columns,
+unknown tables and columns, a pinned generated column, a pinned primary
+key that is not made of references (and one that is, unless every row
+of the table pins all of it, distinctly),
 values that break a `NOT NULL`, enum or `CHECK` constraint, a unique
 value pinned on two rows, references to undeclared rows or to the wrong
 table, and child rows whose required parent table would be empty.
@@ -243,8 +328,8 @@ table, and child rows whose required parent table would be empty.
   `name` cannot be pinned on a named row. Pin it with
   `cohort(1, name=...)`, or write the scenario in YAML, where `row:` and
   `set: {name: ...}` do not collide.
-- Scenarios as Hypothesis strategies, and as the base of a
-  [scale analysis](/guides/scale-analysis/), are planned.
+- `strategy()` refuses a scenario that seeds `auth.users`: a Hypothesis
+  dataset cannot carry rows for a table outside the schema.
 
 ## Using `load_dataset` directly
 

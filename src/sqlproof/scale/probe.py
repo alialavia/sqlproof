@@ -14,11 +14,14 @@ touches no buffer, so CPU-only growth is invisible here.
 from __future__ import annotations
 
 import hashlib
+import json
 from collections.abc import Sequence
+from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Any, cast
 
 from sqlproof import _database as database
+from sqlproof.exceptions import SqlProofUsageError
 from sqlproof.scale._identifiers import validate_function_name
 
 
@@ -133,6 +136,81 @@ def _shape(node: dict[str, Any]) -> str:
     return f"{node.get('Node Type', '?')}({children})"
 
 
+# auto_explain, set for the probe's call only: every statement the
+# function runs, at any depth, is reported as a JSON plan in a notice.
+# `log_timing = off` keeps per-node clocks out of it; `log_analyze` is
+# still needed for sort and hash memory.
+_NESTED_PLAN_SETTINGS = (
+    "auto_explain.log_min_duration = 0",
+    "auto_explain.log_nested_statements = on",
+    "auto_explain.log_analyze = on",
+    "auto_explain.log_timing = off",
+    "auto_explain.log_buffers = off",
+    "auto_explain.log_format = json",
+    "auto_explain.log_level = notice",
+)
+
+
+class _NestedPlans:
+    """Collects the shapes and peak memory of the plans auto_explain
+    reports. Distinct shapes only: a function that runs one query a
+    thousand times reports a thousand plans of one shape."""
+
+    def __init__(self) -> None:
+        self.shapes: set[str] = set()
+        self.peak_memory_kb = 0
+
+    def receive(self, message: str) -> bool:
+        start = message.find("{")
+        if "plan:" not in message[:start] or start < 0:
+            return False
+        try:
+            plan = json.loads(message[start:])["Plan"]
+        except (ValueError, KeyError, TypeError):
+            return False
+        self.shapes.add(_shape(plan))
+        self.peak_memory_kb = max(self.peak_memory_kb, _peak_memory(plan))
+        return True
+
+
+def _enable_nested_plans(cur: Any) -> None:
+    """Turn auto_explain on for this transaction, loading it if the server
+    has not preloaded it, or raise saying why it cannot be."""
+    cur.execute("SAVEPOINT sqlproof_auto_explain")
+    try:
+        cur.execute(
+            "SELECT current_setting('auto_explain.log_min_duration', true) IS NOT NULL"
+            " AS loaded"
+        )
+        if not _first(cur.fetchone()):
+            cur.execute("LOAD 'auto_explain'")
+        for setting in _NESTED_PLAN_SETTINGS:
+            cur.execute(f"SET LOCAL {setting}")
+    except Exception as exc:
+        cur.execute("ROLLBACK TO SAVEPOINT sqlproof_auto_explain")
+        msg = (
+            "nested_plans needs the auto_explain module, which this connection "
+            f"cannot use ({str(exc).strip()}). It works as a superuser, or on a server that "
+            "preloads it and lets this role set its options (the Supabase "
+            "images do)."
+        )
+        raise SqlProofUsageError(msg) from exc
+    cur.execute("RELEASE SAVEPOINT sqlproof_auto_explain")
+
+
+# SQLSTATE 57014: the statement was cancelled (here, by statement_timeout).
+_QUERY_CANCELED = "57014"
+
+
+class ProbeTimedOut(Exception):
+    """Postgres cancelled the probe at its timeout."""
+
+    def __init__(self, function: str, timeout_s: float) -> None:
+        super().__init__(f"{function} did not return within {timeout_s:g}s and was cancelled")
+        self.function = function
+        self.timeout_s = timeout_s
+
+
 def probe_function(
     conn: database.Connection,
     function: str,
@@ -141,8 +219,19 @@ def probe_function(
     factor: int,
     total_rows: int,
     relations: Sequence[tuple[str, str]] | None = None,
+    timeout_s: float | None = None,
+    nested_plans: bool = False,
 ) -> ProbePoint:
     """Measure one call of `function` under EXPLAIN.
+
+    With `nested_plans`, the plans of the statements the function runs
+    count too (scale follow-up 8): auto_explain reports each one during
+    the call, and their shapes join the outer plan's in `plan_hash`, and
+    their sort and hash memory in `peak_memory_kb`. So a plan change
+    inside a PL/pgSQL or non-inlined SQL function splits the fit like one
+    outside it. It instruments every inner statement, which slows calls
+    that run many, so it is off by default; it raises
+    `SqlProofUsageError` when the connection cannot use auto_explain.
 
     With `relations` -- ``(schema, table)`` pairs, as `run_sweep` passes
     the tables it scales -- `work_blocks` counts only buffer accesses to
@@ -169,6 +258,11 @@ def probe_function(
     -- that transaction is left untouched; only the savepoint rolls
     back, so callers can compose several probes inside one transaction.
 
+    `timeout_s` makes Postgres cancel the call when it runs longer, and
+    raises `ProbeTimedOut`. It is set with `SET LOCAL statement_timeout`
+    after the savepoint, so rolling back to the savepoint restores the
+    previous timeout.
+
     `function` is interpolated into the statement, so it is checked
     first -- every dot-separated part a bare identifier -- and a bad name
     raises `SqlProofUsageError` before any SQL runs (see
@@ -181,6 +275,7 @@ def probe_function(
     )
     opened_transaction = not conn.in_transaction
     relation_blocks: int | None = None
+    nested = _NestedPlans() if nested_plans else None
     with conn.cursor() as cur:
         if opened_transaction:
             cur.execute("BEGIN")
@@ -191,8 +286,22 @@ def probe_function(
             # never happens inside a transaction: the difference across the
             # call, both reads in this one transaction, is exactly its work.
             before = _blocks_fetched(cur, oids) if oids is not None else 0
-            cur.execute(statement, tuple(args) or None)
-            row: Any = cur.fetchone()
+            if timeout_s is not None:
+                cur.execute(f"SET LOCAL statement_timeout = {max(1, round(timeout_s * 1000))}")
+            if nested is not None:
+                _enable_nested_plans(cur)
+            try:
+                with conn.notices(nested.receive) if nested is not None else nullcontext():
+                    cur.execute(statement, tuple(args) or None)
+                    row: Any = cur.fetchone()
+                    if nested is not None:
+                        cur.execute("SET LOCAL auto_explain.log_min_duration = -1")
+            except Exception as exc:
+                if timeout_s is not None and database.sqlstate(exc) == _QUERY_CANCELED:
+                    raise ProbeTimedOut(function, timeout_s) from exc
+                raise
+            if timeout_s is not None:
+                cur.execute("SET LOCAL statement_timeout = 0")
             if oids is not None:
                 relation_blocks = _blocks_fetched(cur, oids) - before
         finally:
@@ -210,6 +319,12 @@ def probe_function(
         next(iter(cast(Any, row).values())) if isinstance(row, dict) else row[0],
     )
     work, memory, temp, digest, ms = parse_plan(explain_json)
+    if nested is not None and nested.shapes:
+        # The outer plan is among the reported ones (auto_explain sees the
+        # top-level statement too), so the sorted set covers both.
+        combined = "|".join(sorted({_shape(explain_json[0]["Plan"]), *nested.shapes}))
+        digest = hashlib.sha256(combined.encode()).hexdigest()[:16]
+        memory = max(memory, nested.peak_memory_kb)
     return ProbePoint(
         factor=factor,
         total_rows=total_rows,

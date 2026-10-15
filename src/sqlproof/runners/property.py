@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, ParamSpec, TypeVar
 
 from hypothesis import HealthCheck, given, settings
+from hypothesis import seed as hypothesis_seed
 
 from sqlproof.exceptions import SqlProofPropertyFailure
 from sqlproof.generators.graph import ColumnOverrides, SizeSpec, dataset_strategy
@@ -62,8 +63,14 @@ def sqlproof(
         to counterexamples.
 
     Parameters not declared in the signature are not passed.
+
+    `seed` fixes Hypothesis's random choices (and, as Hypothesis's `@seed`
+    does, turns off its example database for the run). Without one,
+    Hypothesis chooses as usual -- `derandomize` and `--hypothesis-seed`
+    apply -- and the counterexample records the seed it drew, so passing
+    it back repeats the search.
     """
-    del seed, timeout_ms, commit
+    del timeout_ms, commit
 
     def decorate(function: Callable[..., None]) -> Callable[..., None]:
         def wrapped() -> None:
@@ -74,6 +81,7 @@ def sqlproof(
                 columns=columns,
                 runs=runs,
                 failure_dir=Path(failure_dir),
+                seed=seed,
             )
 
         wrapped.__name__ = function.__name__
@@ -91,6 +99,7 @@ def run_property(
     columns: ColumnOverrides | None = None,
     runs: int,
     failure_dir: Path,
+    seed: int | None = None,
 ) -> None:
     if hasattr(proof, "dataset_strategy"):
         strategy = proof.dataset_strategy(sizes=sizes, columns=columns)
@@ -124,7 +133,7 @@ def run_property(
                 "$schema": "https://sqlproof.dev/schemas/counterexample-v1.json",
                 "version": 1,
                 "property_name": function.__name__,
-                "seed": None,
+                "seed": _seed_in_use(execute, seed),
                 "runs": run_count,
                 "shrink_steps": 0,
                 "schema_fingerprint": proof.schema_fingerprint,
@@ -140,4 +149,24 @@ def run_property(
             write_counterexample(failure_dir / f"{function.__name__}.json", payload)
             raise SqlProofPropertyFailure(str(exc), counterexample=payload) from exc
 
+    if seed is not None:
+        # Only an explicit seed is forced: `@seed` also turns off the example
+        # database and overrides `derandomize` and `--hypothesis-seed`.
+        execute = hypothesis_seed(seed)(execute)
     execute()
+
+
+def _seed_in_use(wrapped: Any, explicit: int | None) -> int | None:
+    """The seed this run used, for the counterexample: the one passed in,
+    else the one Hypothesis drew (or was forced to with `--hypothesis-seed`).
+    None when the run was derandomized, which reproduces without a seed."""
+    if explicit is not None:
+        return explicit
+    from hypothesis import core
+
+    # Hypothesis records the seed it drew on the wrapped test.
+    generated = getattr(wrapped, "_hypothesis_internal_use_generated_seed", None)
+    if generated is not None:
+        return int(generated)
+    forced = getattr(core, "global_force_seed", None)
+    return None if forced is None else int(forced)
