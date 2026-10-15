@@ -47,19 +47,28 @@ def test_an_explicit_seed_is_recorded(tmp_path: Path) -> None:
     assert _fail(tmp_path, 1234)["seed"] == 1234
 
 
+@contextlib.contextmanager
+def _profile(name: str, **options: Any) -> Iterator[None]:
+    """Run under a Hypothesis profile (CI runners load the derandomized
+    `ci` profile by default), restoring the previous one after."""
+    settings.register_profile(name, database=None, **options)
+    previous = settings.get_current_profile_name()
+    settings.load_profile(name)
+    try:
+        yield
+    finally:
+        settings.load_profile(previous)
+
+
 def test_without_a_seed_the_drawn_one_is_recorded(tmp_path: Path) -> None:
-    seed = _fail(tmp_path, None)["seed"]
+    with _profile("sqlproof-test-random", derandomize=False):
+        seed = _fail(tmp_path, None)["seed"]
     assert isinstance(seed, int)
 
 
 def test_a_derandomized_profile_stays_derandomized(tmp_path: Path) -> None:
-    settings.register_profile("sqlproof-test-derandomize", derandomize=True, database=None)
-    previous = settings.get_current_profile_name()
-    settings.load_profile("sqlproof-test-derandomize")
-    try:
+    with _profile("sqlproof-test-derandomize", derandomize=True):
         first = _fail(tmp_path / "a", None)
         second = _fail(tmp_path / "b", None)
-    finally:
-        settings.load_profile(previous)
     assert first["seed"] is None and second["seed"] is None
     assert first["dataset"] == second["dataset"]
