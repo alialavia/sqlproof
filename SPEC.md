@@ -541,7 +541,7 @@ Tables are inserted in topological order. Self-referencing tables are handled by
 | `bytea`                         | `st.binary(max_size=32)`                                     |
 | `inet`, `cidr`                  | `st.ip_addresses()`                                          |
 | `int4range`, etc.               | Range strategy with bounds-aware composition                 |
-| `T[]`, `T[][]`                  | `st.lists(strategy_for(T), max_size=5)`, one dimension (`ARRAY_MAX_SIZE`); a `json` element is wrapped per element; UNIQUE draws `[unique_value]` |
+| `T[]`, `T[][]`                  | `st.lists(strategy_for(T), max_size=5)`, one dimension (`ARRAY_MAX_SIZE`); a `json` element is wrapped per element; an element domain's CHECK narrows each element; `cardinality(v)` / `array_length(v, 1)` CHECKs set the size; UNIQUE draws a distinct array valid for the element type |
 | Enum                            | `st.sampled_from(enum_values)`                               |
 | Domain                          | Strategy of base type, filtered by domain CHECK              |
 | Composite                       | `st.builds(...)` over field strategies                       |

@@ -24,7 +24,11 @@ from hypothesis.strategies import SearchStrategy
 
 from sqlproof.exceptions import UnhonoredCheckWarning
 from sqlproof.generators.columns import strategy_for_spec
-from sqlproof.generators.narrowing import column_atoms, narrow_spec_for_checks
+from sqlproof.generators.narrowing import (
+    column_atoms,
+    element_domain_checks,
+    narrow_spec_for_checks,
+)
 from sqlproof.generators.typespec import spec_for_type
 from sqlproof.schema.checks import analyze_check
 from sqlproof.schema.model import CheckConstraint, Column, Table
@@ -49,7 +53,7 @@ def refine_for_checks(
     to `column`; otherwise a strategy built from the narrowed TypeSpec
     (still admitting NULL for a nullable column).
     """
-    if not column_atoms(column, checks):
+    if not column_atoms(column, checks) and not element_domain_checks(column.type):
         return strategy
     base = spec_for_type(column.type)
     narrowed = narrow_spec_for_checks(base, column, checks)
@@ -100,9 +104,11 @@ def warn_unhonored_checks(
 
 
 def unique_rows(rows: list[dict[str, Any]], columns: tuple[str, ...]) -> bool:
+    from sqlproof.generators.rows import _hashable  # pyright: ignore[reportPrivateUsage]
+
     seen: set[tuple[Any, ...]] = set()
     for row in rows:
-        key = tuple(row[column] for column in columns)
+        key = tuple(_hashable(row[column]) for column in columns)
         if key in seen:
             return False
         seen.add(key)

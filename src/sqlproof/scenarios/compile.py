@@ -28,8 +28,9 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
+from sqlproof._database import Json
 from sqlproof.core import _base_type_name  # pyright: ignore[reportPrivateUsage]
 from sqlproof.exceptions import SqlProofGenerationError, SqlProofScenarioError
 from sqlproof.generators.rows import (
@@ -664,9 +665,17 @@ def _violates(check: ParsedCheck, column: str, value: Any) -> bool:
         return not _member(value, check.payload)
     if check.kind == "not_in":
         return _member(value, check.payload)
-    if check.kind == "length":
+    if check.kind in ("length", "cardinality"):
         op, length = check.payload
-        size = len(str(value))
+        if check.kind == "cardinality":
+            # An empty array may pass (`array_length(v, 1)` is NULL for it),
+            # so only a non-empty pinned list is checked; Postgres decides
+            # the rest.
+            if not isinstance(value, list) or not value:
+                return False
+            size = len(cast(list[Any], value))  # type: ignore[redundant-cast]
+        else:
+            size = len(str(value))
         return not {
             ">=": size >= length,
             ">": size > length,
@@ -713,7 +722,7 @@ def _check_unique_collisions(
     if column.default is not None or _foreign_key_for_column(table, column.name) is not None:
         return
     generated = {
-        _unique_value(column.name, column.type.name, index)
+        _comparable(_unique_value(column.name, column.type, index))
         for group_index, (group, value) in enumerate(zip(layout.groups, pinned, strict=True))
         if value is _UNSET
         for index in layout.indexes(group_index)
@@ -726,6 +735,19 @@ def _check_unique_collisions(
             f"{', '.join(clashes)} to other rows; pin a different value."
         )
         raise SqlProofScenarioError(msg)
+
+
+def _comparable(value: Any) -> Any:
+    """A generated UNIQUE value in the form pinned ones are compared in: an
+    array column's list as its JSON text, as `_check_unique_collisions`
+    writes a pinned list."""
+    if isinstance(value, list):
+        return json.dumps(value, sort_keys=True, default=_plain_json)
+    return value
+
+
+def _plain_json(value: Any) -> Any:
+    return value.obj if isinstance(value, Json) else str(value)
 
 
 def _looks_volatile(default: str) -> bool:

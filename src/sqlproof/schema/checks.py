@@ -24,8 +24,10 @@ Recognized conjunct shapes (``col`` is a bare column reference,
   literals) -> ``range``; ``=`` -> ``in_set``; ``<>`` -> ``not_in``
 * ``length(col)`` / ``char_length(col)`` / ``character_length(col)``
   compared with an integer literal (incl. ``=``) -> ``length``
-* ``col BETWEEN a AND b`` (and ``BETWEEN SYMMETRIC``), on a column or
-  a length call -> two bound atoms
+* ``cardinality(col)`` / ``array_length(col, 1)`` compared with an
+  integer literal (incl. ``=``) -> ``cardinality`` (an array's size)
+* ``col BETWEEN a AND b`` (and ``BETWEEN SYMMETRIC``), on a column, a
+  length call or a cardinality call -> two bound atoms
 * ``col IN (...)`` and ``col = ANY (ARRAY[...])`` -> ``in_set``;
   ``col NOT IN (...)`` and ``col <> ALL (ARRAY[...])`` -> ``not_in``
 * ``<recognized on col> OR col IS NULL`` -> the recognized atoms (the
@@ -359,7 +361,7 @@ def _comparison(op: str, left: Any, right: Any) -> list[ParsedCheck] | None:
         op = _FLIPPED[op]
     if isinstance(value, _NoLiteral) or value is None:
         return None
-    if _length_column(subject) is not None:
+    if _sized_column(subject) is not None:
         number = _numeric(value)
         if number is None or op not in _COMPARISON_OPS | {"="}:
             return None
@@ -379,11 +381,12 @@ def _comparison(op: str, left: Any, right: Any) -> list[ParsedCheck] | None:
 
 
 def _bound_atom(subject: Any, op: str, value: Decimal) -> ParsedCheck | None:
-    length_column = _length_column(subject)
-    if length_column is not None:
+    sized = _sized_column(subject)
+    if sized is not None:
         if value != value.to_integral_value():
             return None
-        return ParsedCheck(kind="length", column=length_column, payload=(op, int(value)))
+        size_kind, sized_column = sized
+        return ParsedCheck(kind=size_kind, column=sized_column, payload=(op, int(value)))
     column = _column_name(subject)
     if column is None:
         return None
@@ -410,18 +413,34 @@ def _column_name(node: Any) -> str | None:
     return str(last.sval) if _is(last, ast.String) else None
 
 
-def _length_column(node: Any) -> str | None:
+def _sized_column(node: Any) -> tuple[Literal["length", "cardinality"], str] | None:
+    """``length(col)`` and friends -> ("length", col); ``cardinality(col)``
+    or ``array_length(col, 1)`` -> ("cardinality", col).
+
+    ``array_length(col, 1)`` is NULL rather than 0 for an empty array, so a
+    CHECK on it also admits ``{}``; reading it as ``cardinality`` only ever
+    generates arrays that pass it."""
     if not _is(node, ast.FuncCall):
         return None
     names = [n.sval for n in node.funcname or () if _is(n, ast.String)]
-    if not names or names[-1].lower() not in _LENGTH_FUNCTIONS:
+    if not names or (len(names) > 1 and names[0].lower() != "pg_catalog"):
         return None
-    if len(names) > 1 and names[0].lower() != "pg_catalog":
-        return None
+    function = names[-1].lower()
     args: tuple[Any, ...] = tuple(node.args or ())
-    if len(args) != 1:
-        return None
-    return _column_name(args[0])
+    if function in _LENGTH_FUNCTIONS and len(args) == 1:
+        column = _column_name(args[0])
+        return None if column is None else ("length", column)
+    if function == "cardinality" and len(args) == 1:
+        column = _column_name(args[0])
+        return None if column is None else ("cardinality", column)
+    if function == "array_length" and len(args) == 2 and _is_one(_literal(args[1])):
+        column = _column_name(args[0])
+        return None if column is None else ("cardinality", column)
+    return None
+
+
+def _is_one(value: Any) -> bool:
+    return type(value) is int and value == 1
 
 
 def _literal(node: Any) -> Any:

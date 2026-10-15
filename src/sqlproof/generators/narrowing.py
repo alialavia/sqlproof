@@ -27,7 +27,7 @@ from typing import Any
 
 from sqlproof.generators.typespec import SpecKind, TypeSpec
 from sqlproof.schema.checks import analyze_check
-from sqlproof.schema.model import CheckConstraint, Column, ParsedCheck
+from sqlproof.schema.model import CheckConstraint, Column, ParsedCheck, PgType
 
 _FIXED_WIDTH_CHAR_TYPES = frozenset({"char", "character", "bpchar"})
 
@@ -45,7 +45,45 @@ def narrow_spec_for_checks(
     """
     for atom in column_atoms(column, checks):
         spec = _narrow_atom(spec, column, atom)
-    return spec
+    return narrow_array_elements(spec, column.type)
+
+
+ELEMENT_PLACEHOLDER = "value"
+"""The name an element domain's CHECK uses for the element (`VALUE > 0`),
+as the CHECK parser reads it."""
+
+
+def array_element_type(pg_type: PgType) -> PgType | None:
+    """The element type of an array column's type, through any domain over
+    the array (`CREATE DOMAIN tags AS text[]`); None for a non-array."""
+    while pg_type.kind == "domain" and pg_type.base is not None:
+        pg_type = pg_type.base
+    return pg_type.base if pg_type.kind == "array" else None
+
+
+def element_domain_checks(pg_type: PgType) -> tuple[CheckConstraint, ...]:
+    """The CHECKs every element of an array of `pg_type` must pass: those of
+    the element's domain and of the domains under it, still naming VALUE."""
+    element = array_element_type(pg_type)
+    checks: list[CheckConstraint] = []
+    while element is not None and element.kind == "domain":
+        checks.extend(CheckConstraint(expression) for expression in element.check_expressions)
+        element = element.base
+    return tuple(checks)
+
+
+def narrow_array_elements(spec: TypeSpec, pg_type: PgType) -> TypeSpec:
+    """Fold an array element domain's CHECKs (`pos[]`, `pos` being
+    `int CHECK (VALUE > 0)`) into the element spec, the same way a scalar
+    domain's CHECKs narrow a column."""
+    element = array_element_type(pg_type)
+    checks = element_domain_checks(pg_type)
+    if spec.kind != "array" or spec.element is None or element is None or not checks:
+        return spec
+    placeholder = Column(
+        name=ELEMENT_PLACEHOLDER, type=element, nullable=False, default=None, is_generated=False
+    )
+    return replace(spec, element=narrow_spec_for_checks(spec.element, placeholder, checks))
 
 
 def column_atoms(column: Column, checks: Sequence[CheckConstraint]) -> list[ParsedCheck]:
@@ -63,6 +101,9 @@ def _narrow_atom(spec: TypeSpec, column: Column, atom: ParsedCheck) -> TypeSpec:
         return _narrow_in_set(spec, column, atom.payload)
     if atom.kind == "not_in":
         return _narrow_not_in(spec, atom.payload)
+    if atom.kind == "cardinality":
+        op, n = atom.payload
+        return _narrow_length(spec, op, n) if spec.kind == "array" else spec
     if atom.kind == "length":
         op, n = atom.payload
         if spec.kind == "text":

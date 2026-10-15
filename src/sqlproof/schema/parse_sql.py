@@ -48,7 +48,7 @@ def parse_schema_sql(sql: str, *, schema: str = "public") -> SchemaInfo:
             type_names[enum_name] = enum
             type_names[f"{enum_schema}.{enum_name}"] = enum
         elif type(statement).__name__ == "CreateDomainStmt":
-            domain = _parse_domain_statement(statement, schema)
+            domain = _parse_domain_statement(statement, schema, type_names)
             type_names[domain.name] = domain
         elif type(statement).__name__ == "CompositeTypeStmt":
             composite = _parse_composite_type(statement, type_names)
@@ -83,18 +83,21 @@ def parse_schema_sql(sql: str, *, schema: str = "public") -> SchemaInfo:
     )
 
 
-def _parse_domain_statement(statement: Any, default_schema: str) -> PgType:
+def _parse_domain_statement(
+    statement: Any, default_schema: str, type_names: dict[str, PgType]
+) -> PgType:
     """Parse a CREATE DOMAIN node.
 
     The base type comes from ``type_name``; CHECK clauses live in
     ``constraints`` as ordinary ``CONSTR_CHECK`` nodes that reference
     a placeholder column named ``VALUE`` (Postgres's convention for
-    referring to the domain value inside a CHECK).
+    referring to the domain value inside a CHECK). The base may be an
+    enum or domain declared earlier, as introspection resolves it.
     """
     _domain_schema, domain_name = _qualified_parts(
         statement.domainname, default_schema=default_schema
     )
-    base = _parse_type_node(statement.type_name, type_names={})
+    base = _parse_type_node(statement.type_name, type_names)
     check_expressions: list[str] = []
     for constraint in statement.constraints or ():
         if constraint.contype == ConstrType.CONSTR_CHECK:

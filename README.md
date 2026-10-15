@@ -291,8 +291,10 @@ Each counterexample records the seed Hypothesis drew; pass it back as
 `timestamp`, `timestamptz`, `date`, `time`, `json`, `jsonb`, `bytea`,
 `vector(n)` (pgvector), custom `ENUM` types, custom domains (with CHECK
 inheritance), built-in range types, composite types, and arrays of any of
-these (`text[]`, `int[]`, `mood[]`, `jsonb[]`; up to five elements, one
-dimension).
+these (`text[]`, `int[]`, `mood[]`, `jsonb[]`, arrays of domains and domains
+over arrays; up to five elements, one dimension). An element domain's CHECK
+holds for every element, and `cardinality(v)` / `array_length(v, 1)` bounds
+set the number of elements.
 
 Schema features parsed and respected: foreign keys, CHECK / UNIQUE / EXCLUSION
 constraints, partial unique indexes, `GENERATED ALWAYS AS` columns, and enums.

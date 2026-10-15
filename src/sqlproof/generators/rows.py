@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import time, timedelta
 from decimal import Decimal
 from enum import Enum
-from typing import Any
+from functools import lru_cache
+from typing import Any, cast
 from uuid import UUID
 
 from hypothesis import assume
@@ -15,7 +17,19 @@ from hypothesis.strategies import SearchStrategy
 from sqlproof.exceptions import SqlProofGenerationError
 from sqlproof.generators.columns import strategy_for_column
 from sqlproof.generators.constraints import refine_for_checks, warn_unhonored_checks
-from sqlproof.schema.model import CheckConstraint, Column, ForeignKey, Table
+from sqlproof.generators.narrowing import (
+    array_element_type,
+    element_domain_checks,
+    narrow_array_elements,
+)
+from sqlproof.generators.typespec import (
+    DATE_WINDOW,
+    DATETIME_WINDOW,
+    TypeSpec,
+    spec_for_type,
+    spec_is_empty,
+)
+from sqlproof.schema.model import CheckConstraint, Column, ForeignKey, PgType, Table
 
 DatasetRows = dict[str, list[dict[str, Any]]]
 ColumnOverrides = Mapping[str, Any]
@@ -107,6 +121,7 @@ def table_rows_strategy(
             continue
         domain_checks = _domain_checks_as_column_checks(column)
         unhonored_scope.extend(domain_checks)
+        unhonored_scope.extend(_element_checks_as_column_checks(column))
         refined_by_column[column.name] = refine_for_checks(
             column,
             strategy_for_column(column),
@@ -132,7 +147,13 @@ def table_rows_strategy(
             )
             refined_by_column[column.name] = strategy
             warn_unhonored_checks(
-                table, list(table.check_constraints) + list(domain_checks), [column.name]
+                table,
+                [
+                    *table.check_constraints,
+                    *domain_checks,
+                    *_element_checks_as_column_checks(column),
+                ],
+                [column.name],
             )
         return strategy
 
@@ -173,7 +194,7 @@ def table_rows_strategy(
                 if single_key and not isinstance(
                     _column_override(columns, table, column.name), PinnedKey
                 ):
-                    row[column.name] = _unique_value(column.name, column.type.name, index)
+                    row[column.name] = _unique_value(column.name, column.type, index)
                     continue
                 if column.is_generated:
                     continue
@@ -192,7 +213,7 @@ def table_rows_strategy(
                         row[column.name] = value
                         continue
                     if single_key:
-                        row[column.name] = _unique_value(column.name, column.type.name, index)
+                        row[column.name] = _unique_value(column.name, column.type, index)
                         continue
                 if column.default is not None:
                     continue
@@ -213,7 +234,7 @@ def table_rows_strategy(
                     )
                     raise SqlProofGenerationError(msg)
                 if _is_single_column_unique(table, column.name):
-                    row[column.name] = _unique_value(column.name, column.type.name, index)
+                    row[column.name] = _unique_value(column.name, column.type, index)
                     continue
                 row[column.name] = draw(refined_strategy(column))
 
@@ -226,7 +247,7 @@ def table_rows_strategy(
             for key in composite_unique_keys:
                 if any(col not in row or row[col] is None for col in key):
                     continue
-                tuple_value = tuple(row[col] for col in key)
+                tuple_value = tuple(_hashable(row[col]) for col in key)
                 # If we've seen this tuple before, ask Hypothesis to
                 # invalidate this example and try different draws.
                 # Discarded examples are silently retried; the test
@@ -253,7 +274,7 @@ def table_rows_strategy(
                     continue
                 if any(col not in row or row[col] is None for col in cols):
                     continue
-                tuple_value = tuple(row[col] for col in cols)
+                tuple_value = tuple(_hashable(row[col]) for col in cols)
                 assume(tuple_value not in seen_per_partial[cols])
                 seen_per_partial[cols].add(tuple_value)
 
@@ -424,8 +445,43 @@ def _domain_checks_as_column_checks(column: Column) -> tuple[CheckConstraint, ..
     )
 
 
-def _unique_value(column_name: str, type_name: str, index: int) -> Any:
-    normalized = type_name.lower()
+def _element_checks_as_column_checks(column: Column) -> tuple[CheckConstraint, ...]:
+    """An array column's element-domain CHECKs, VALUE replaced by the column
+    name. narrowing.py honours the ones it can read on each element; these
+    are only for the warning about the ones it cannot."""
+    return tuple(
+        CheckConstraint(expression=_VALUE_PLACEHOLDER_RE.sub(column.name, check.expression))
+        for check in element_domain_checks(column.type)
+    )
+
+
+def _hashable(value: Any) -> Any:
+    """`value` as a key for the seen-sets of composite and partial unique
+    constraints: an array column's list becomes a tuple, a JSON document a
+    tagged, order-insensitive form (recursively)."""
+    if isinstance(value, list | tuple):
+        return tuple(_hashable(item) for item in cast(Sequence[Any], value))
+    if isinstance(value, dict):
+        mapping = cast(dict[Any, Any], value)  # type: ignore[redundant-cast]
+        return frozenset((key, _hashable(item)) for key, item in mapping.items())
+    from sqlproof._database import Json  # lazily, as in columns.py
+
+    if isinstance(value, Json):
+        return (Json, _hashable(value.obj))
+    return value
+
+
+def _unique_value(column_name: str, pg_type: str | PgType, index: int) -> Any:
+    """The `index`-th value of a single-column key or UNIQUE column.
+
+    Takes the column's type, or just its name. With the type, an array
+    column (or a domain over one) gets a value its element type accepts."""
+    if isinstance(pg_type, PgType):
+        element = array_element_type(pg_type)
+        if element is not None:
+            return _unique_array(column_name, pg_type, element, index)
+        pg_type = pg_type.name
+    normalized = pg_type.lower()
     if normalized.endswith("[]"):
         # An array column: a one-element array holding the element's value.
         return [_unique_value(column_name, normalized[:-2], index)]
@@ -439,3 +495,81 @@ def _unique_value(column_name: str, type_name: str, index: int) -> Any:
     if normalized == "uuid":
         return str(UUID(int=value))
     return f"{column_name}_{value}"
+
+
+_DATE_SPAN = 1_000_000
+"""Distinct days a unique date array cycles through before it repeats the
+day to make the array longer (2000-01-01 plus a million days stays in
+range for Postgres and Python)."""
+
+
+@lru_cache(maxsize=256)
+def _narrowed_element_spec(pg_type: PgType) -> TypeSpec | None:
+    """An array type's element spec with its domain's CHECKs folded in;
+    cached, since both generators ask once per row."""
+    return narrow_array_elements(spec_for_type(pg_type), pg_type).element
+
+
+def _unique_array(column_name: str, pg_type: PgType, element: PgType, index: int) -> list[Any]:
+    """The `index`-th distinct array of `element` values, for a UNIQUE array
+    column: element domains resolve to their base type, and an integer
+    element keeps inside its domain's bounds (`pos[]`)."""
+    spec = _narrowed_element_spec(pg_type)
+    while element.kind == "domain" and element.base is not None:
+        element = element.base
+    if element.kind == "enum" and element.enum_values:
+        return _counting_array(len(element.enum_values), element.enum_values.__getitem__, index)
+    if spec is not None and spec.kind == "integer" and not spec_is_empty(spec):
+        assert spec.min_value is not None and spec.max_value is not None
+        low, high = int(spec.min_value), int(spec.max_value)
+        return _counting_array(high - low + 1, _integer_from_one(low, high), index)
+    name = element.name.lower()
+    if name in {"bool", "boolean"}:
+        return _counting_array(2, (False, True).__getitem__, index)
+    if name in {"json", "jsonb"}:
+        from sqlproof._database import Json  # lazily, as in columns.py
+
+        return [Json(f"{column_name}_{index + 1}")]
+    if name == "date":
+        day = DATE_WINDOW[0] + timedelta(days=index % _DATE_SPAN)
+        return [day] * (index // _DATE_SPAN + 1)
+    if name.startswith("timestamp"):
+        return [DATETIME_WINDOW[0] + timedelta(seconds=index)]
+    if name in {"time", "timetz", "time without time zone", "time with time zone"}:
+        seconds = index % 86_400
+        moment = time(seconds // 3600, seconds // 60 % 60, seconds % 60)
+        return [moment] * (index // 86_400 + 1)
+    if name == "interval":
+        return [timedelta(seconds=index + 1)]
+    if name in {"real", "float4", "double precision", "float8"}:
+        return [float(index + 1)]
+    if name == "bytea":
+        return [str(index + 1).encode()]
+    return [_unique_value(column_name, name, index)]
+
+
+def _counting_array(count: int, nth: Callable[[int], Any], index: int) -> list[Any]:
+    """The `index`-th array over a closed set of `count` values (`nth(p)`
+    is the p-th: an enum's labels, booleans, a domain's integers), counting
+    in bijective base `count`: [a], [b], [a, a], [a, b], ... -- never
+    empty, never repeated, and only logarithmically long."""
+    digits: list[Any] = []
+    remaining = index + 1
+    while remaining > 0:
+        remaining -= 1
+        digits.append(nth(remaining % count))
+        remaining //= count
+    return digits
+
+
+
+def _integer_from_one(low: int, high: int) -> Callable[[int], int]:
+    """The `position`-th of the integers `low..high` ordered 1, 2, ... up
+    to `high`, then 0, -1, ... down to `low` (starting at the nearer bound
+    when 1 is outside them), so an unbounded integer array counts [1], [2],
+    [3], ... as before."""
+    start = min(max(1, low), high)
+    upward = high - start + 1
+    return lambda position: (
+        start + position if position < upward else start - 1 - (position - upward)
+    )

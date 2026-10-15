@@ -40,12 +40,13 @@ class ParsedCheck:
 
     Payloads by kind: ``range`` -> ``(op, Decimal)`` with op in
     ``>= > <= <``; ``length`` -> ``(op, int)`` (op may also be ``=``);
+    ``cardinality`` -> ``(op, int)``, an array's element count, likewise;
     ``in_set`` / ``not_in`` -> tuple of literal values; ``compound`` ->
     tuple of ParsedCheck atoms that all hold (``column`` is ``""`` when
     they span several columns). ``regex`` is reserved.
     """
 
-    kind: Literal["range", "in_set", "not_in", "regex", "length", "compound"]
+    kind: Literal["range", "in_set", "not_in", "regex", "length", "cardinality", "compound"]
     column: str
     payload: Any
 
