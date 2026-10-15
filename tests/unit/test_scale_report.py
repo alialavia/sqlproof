@@ -110,3 +110,40 @@ def test_cli_writes_html_and_prints_text(tmp_path: Path, capsys) -> None:
     assert "1 function(s)" in capsys.readouterr().out
     assert main(["scale", "report", "--runs-dir", str(runs), "--format", "text"]) == 0
     assert "public.totals: 1.00" in capsys.readouterr().out
+
+
+def test_the_latest_runs_advisor_hits_show_in_text_and_html(tmp_path: Path) -> None:
+    """Scale follow-up 6: the report shows the ranked index suggestions."""
+    from sqlproof.scale.advisors import AdvisorHit
+
+    hit = AdvisorHit(
+        rank=1, relation="public.invoices",
+        index_statement="CREATE INDEX ON public.invoices USING btree (customer_id)",
+        statement="SELECT count(*) FROM public.invoices WHERE customer_id < ($1::bigint)",
+        startup_cost_before=0.0, startup_cost_after=0.0,
+        total_cost_before=1887.26, total_cost_after=271.72,
+    )
+    _save(tmp_path, replace(_result("public.count_for", 1.0), advisors=True,
+                            advisor_hits=[hit]), 2)
+    report = load_report(tmp_path)
+    assert report.functions[0].latest.advisor_hits == (hit,)
+    text = render_text(report)
+    assert (
+        "  advisor #1: CREATE INDEX ON public.invoices USING btree (customer_id)"
+        "  (est. cost 1,887.26 -> 271.72)"
+    ) in text
+    page = render_html(report)
+    assert "Index suggestions (latest run)" in page
+    assert "customer_id &lt; ($1::bigint)" in page
+
+
+def test_a_run_saved_before_advisors_existed_still_reads(tmp_path: Path) -> None:
+    path = _save(tmp_path, _result("public.old", 1.0), 1)
+    payload = json.loads(path.read_text())
+    for key in ("advisors", "advisor_hits", "advisor_notes"):
+        del payload[key]
+    path.write_text(json.dumps(payload))
+    report = load_report(tmp_path)
+    assert report.skipped == []
+    assert report.functions[0].latest.advisor_hits == ()
+    assert "Index suggestions" not in render_html(report)

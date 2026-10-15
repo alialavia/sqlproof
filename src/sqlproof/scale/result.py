@@ -11,6 +11,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from sqlproof.exceptions import SqlProofScaleError
+from sqlproof.scale.advisors import AdvisorHit
 from sqlproof.scale.fit import (
     FitResult,
     PlanFlip,
@@ -50,6 +51,13 @@ class ScaleResult:
     distribution: str = "uniform"
     # Whether plans inside the function counted (auto_explain).
     nested_plans: bool = False
+    # Whether the index advisor was asked (`advisors=True`), its ranked
+    # suggestions -- highest estimated cost saving first -- and why there
+    # are none or fewer than expected (extension not installed, outer call
+    # only, statements it could not plan). See `advisors.py`.
+    advisors: bool = False
+    advisor_hits: Sequence[AdvisorHit] = ()
+    advisor_notes: Sequence[str] = ()
 
     @property
     def exponent(self) -> float:

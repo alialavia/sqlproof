@@ -29,6 +29,7 @@ from sqlproof.exceptions import (
 )
 from sqlproof.generators.rows import ColumnOverrides
 from sqlproof.scale._identifiers import validate_function_name
+from sqlproof.scale.advisors import AdvisorHit, run_index_advisor
 from sqlproof.scale.args import argument_policy, resolve_args
 from sqlproof.scale.fit import MIN_POINTS, fit_exponent, segment_by_plan
 from sqlproof.scale.load import (
@@ -129,6 +130,7 @@ def run_sweep(
     truncate_existing: bool = False,
     distribution: str = "uniform",
     nested_plans: bool = False,
+    advisors: bool = False,
 ) -> ScaleResult:
     """Measure how `function`'s buffer work grows as the `sizes` profile
     is scaled 1x, 2x, 4x, ..., and fit a complexity exponent to it.
@@ -177,6 +179,15 @@ def run_sweep(
     `nested_plans` makes the plans of the statements inside the function
     count, through auto_explain (see `probe_function`): a plan change in
     a PL/pgSQL function then splits the fit, and its sorts report memory.
+
+    `advisors` asks Supabase's `index_advisor` extension, once, after the
+    ladder and on the largest factor's data, which indexes would cut the
+    planner's cost of the statements the function runs; the ranked
+    suggestions land in `ScaleResult.advisor_hits` (see `advisors.py`).
+    It uses the extension only if it is already installed -- it never
+    creates one -- and never fails the sweep: a missing extension or a
+    statement it cannot plan becomes an entry of `advisor_notes`. Without
+    `nested_plans` it sees only the outer `SELECT fn(...)` call.
 
     Instead of `sizes`, pass a `scenario` (`sqlproof.scenarios`): its
     compiled sizes are the 1x profile. At factor `k` its fills and
@@ -253,6 +264,7 @@ def run_sweep(
             profile=profile, args=args, max_factor=max_factor,
             min_points=min_points, probe_timeout_s=probe_timeout_s, seed=seed,
             distribution=distribution, nested_plans=nested_plans,
+            advisors=advisors,
         )
     except BaseException as original:
         try:
@@ -374,6 +386,7 @@ def _measure(
     seed: int,
     distribution: str = "uniform",
     nested_plans: bool = False,
+    advisors: bool = False,
 ) -> ScaleResult:
     """Calibrate, climb the ladder and fit -- the part of the sweep that
     writes to the database, run only after `run_sweep`'s checks pass."""
@@ -449,6 +462,14 @@ def _measure(
     _calibration_round()  # discarded
     baseline = _calibration_round().work_blocks
 
+    # The index advisor's statements, collected by the ladder probes from
+    # auto_explain's reports (only asked for when they are needed, so a
+    # probe without nested_plans keeps its plain signature).
+    collected: set[str] = set()
+    collect: dict[str, Any] = (
+        {"statements": collected} if advisors and nested_plans else {}
+    )
+
     factor = 1
     while factor <= max_factor:
         step = profile(factor)
@@ -461,7 +482,7 @@ def _measure(
                 conn, function, resolved,
                 factor=factor, total_rows=sum(step.sizes.values()),
                 relations=relations, timeout_s=probe_timeout_s,
-                nested_plans=nested_plans,
+                nested_plans=nested_plans, **collect,
             )
         except ProbeTimedOut:
             truncated = True
@@ -481,6 +502,17 @@ def _measure(
 
         factor *= 2
 
+    # Once, on the largest factor's data: the tables still hold it here
+    # (run_sweep empties them after _measure returns), freshly ANALYZEd.
+    advisor_hits: list[AdvisorHit] = []
+    advisor_notes: list[str] = []
+    if advisors:
+        advisor_hits, advisor_notes = run_index_advisor(
+            conn, function, len(args),
+            nested_statements=collected if nested_plans else None,
+            relations=relations, timeout_s=probe_timeout_s,
+        )
+
     segments, flips = segment_by_plan(points)
     regimes = [fit_exponent(segment, baseline) for segment in segments]
     return ScaleResult(
@@ -498,4 +530,7 @@ def _measure(
         argument_policy=argument_policy(args),
         distribution=distribution,
         nested_plans=nested_plans,
+        advisors=advisors,
+        advisor_hits=advisor_hits,
+        advisor_notes=advisor_notes,
     )

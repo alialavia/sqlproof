@@ -85,9 +85,12 @@ def _install_db_stubs(
     def _probe(
         conn: Any, function: Any, args: Any, *, factor: int, total_rows: int,
         relations: Any = None, timeout_s: Any = None, nested_plans: bool = False,
+        statements: Any = None,
     ) -> Any:
         if log is not None:
             log.append(("probe", factor, total_rows))
+        if statements is not None:
+            statements.add(f"SELECT count(*) FROM t WHERE k = {factor % 2}")
         if relations_seen is not None:
             relations_seen.append(relations)
         return probe_fn(conn, function, args, factor=factor, total_rows=total_rows)
@@ -637,3 +640,70 @@ def test_an_unknown_distribution_is_refused_before_anything_runs(monkeypatch):
     with pytest.raises(SqlProofUsageError, match="distribution must be one of uniform, zipf"):
         run_sweep(object(), _schema("t"), "fn", sizes={"t": 10}, distribution="normal")
     assert log == []
+
+
+def _advisor_spy(monkeypatch: pytest.MonkeyPatch, log: list[Any]) -> list[dict[str, Any]]:
+    from sqlproof.scale.advisors import AdvisorHit
+
+    calls: list[dict[str, Any]] = []
+
+    def fake(conn, function, arg_count, *, nested_statements, relations, timeout_s):
+        log.append(("advisor",))
+        calls.append({
+            "function": function, "arg_count": arg_count,
+            "statements": None if nested_statements is None else set(nested_statements),
+            "relations": relations, "timeout_s": timeout_s,
+        })
+        hit = AdvisorHit(1, "public.t", "CREATE INDEX ON public.t USING btree (k)",
+                         "SELECT 1", 0.0, 0.0, 10.0, 1.0)
+        return [hit], ["a note"]
+
+    monkeypatch.setattr(sweep, "run_index_advisor", fake)
+    return calls
+
+
+def test_advisors_run_once_on_the_largest_factor_before_the_tables_are_emptied(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Scale follow-up 6: after the last probe (the tables then hold the
+    largest factor's data) and before the final truncate, with every
+    statement the ladder probes reported."""
+    log: list[Any] = []
+    _install_db_stubs(monkeypatch, _quadratic_probe, log)
+    calls = _advisor_spy(monkeypatch, log)
+    result = run_sweep(
+        object(), _schema("t"), "fn", sizes={"t": 10}, args=[5], max_factor=64,
+        nested_plans=True, advisors=True, probe_timeout_s=3.0,
+    )
+    assert log[-3:] == [("probe", 16, 160), ("advisor",), ("truncate",)]
+    assert calls == [{
+        "function": "fn", "arg_count": 1,
+        "statements": {"SELECT count(*) FROM t WHERE k = 0", "SELECT count(*) FROM t WHERE k = 1"},
+        "relations": [("public", "t")], "timeout_s": 3.0,
+    }]
+    assert result.advisors is True
+    assert [h.index_statement for h in result.advisor_hits] == [
+        "CREATE INDEX ON public.t USING btree (k)"
+    ]
+    assert result.advisor_notes == ["a note"]
+
+
+def test_advisors_without_nested_plans_get_no_nested_statements(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    log: list[Any] = []
+    _install_db_stubs(monkeypatch, _quadratic_probe, log)
+    calls = _advisor_spy(monkeypatch, log)
+    run_sweep(object(), _schema("t"), "fn", sizes={"t": 10}, max_factor=64, advisors=True)
+    assert calls[0]["statements"] is None
+
+
+def test_advisors_are_off_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    log: list[Any] = []
+    _install_db_stubs(monkeypatch, _quadratic_probe, log)
+    calls = _advisor_spy(monkeypatch, log)
+    result = run_sweep(object(), _schema("t"), "fn", sizes={"t": 10}, max_factor=64)
+    assert calls == []
+    assert (result.advisors, tuple(result.advisor_hits), tuple(result.advisor_notes)) == (
+        False, (), (),
+    )
