@@ -4,7 +4,6 @@ import os
 import secrets
 import subprocess
 import sys
-import threading
 import time
 import warnings
 from collections.abc import Sequence
@@ -13,8 +12,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from sqlproof import _database as database
-from sqlproof import _dsn as conninfo
-from sqlproof._dsn import quote_identifier
+from sqlproof._clone import TemplateCloner
 from sqlproof._version import __version__
 from sqlproof.exceptions import SqlProofMutationError
 from sqlproof.mutation.apply import PreparedMutant, prepare_mutants
@@ -39,11 +37,6 @@ def _resolve_seed(seed: int | None) -> int:
     return secrets.randbelow(2**32)
 
 
-# SQLSTATE 55006: "source database ... is being accessed by other users".
-_OBJECT_IN_USE = "55006"
-
-# Postgres truncates identifiers longer than NAMEDATALEN - 1 bytes.
-_MAX_IDENTIFIER_BYTES = 63
 
 
 class LocalMutationRunner:
@@ -93,7 +86,13 @@ class LocalMutationRunner:
         self.timeout_s = timeout_s
         self.release_template_sessions = release_template_sessions
         self.run_id = run_id if run_id is not None else new_run_id()
-        self._clone_lock = threading.Lock()
+        self._cloner = TemplateCloner(
+            database_url=database_url,
+            run_id=self.run_id,
+            error=SqlProofMutationError,
+            maintenance_db=maintenance_db,
+            release_template_sessions=release_template_sessions,
+        )
 
     # -- orchestration ------------------------------------------------
 
@@ -159,110 +158,10 @@ class LocalMutationRunner:
     # -- side-effecting seams (overridden in unit tests) ---------------
 
     def _create_clone(self, clone_name: str) -> str:
-        template = self._dbname(self.database_url)
-        with self._clone_lock, database.connect(
-            self._dsn_for(self.maintenance_db), autocommit=True
-        ) as connection:
-            connection.execute(
-                f"DROP DATABASE IF EXISTS {quote_identifier(clone_name)} WITH (FORCE)"
-            )
-            create = (
-                f"CREATE DATABASE {quote_identifier(clone_name)} "
-                f"TEMPLATE {quote_identifier(template)}"
-            )
-            try:
-                connection.execute(create)
-            except database.DatabaseError as exc:
-                if database.sqlstate(exc) != _OBJECT_IN_USE:
-                    raise
-                self._clone_past_template_sessions(connection, template, create, exc)
-        return self._dsn_for(clone_name)
-
-    def _clone_past_template_sessions(
-        self,
-        connection: database.Connection,
-        template: str,
-        create: str,
-        error: BaseException,
-    ) -> None:
-        """Handle ``CREATE DATABASE ... TEMPLATE`` refused for other sessions.
-
-        A connection pooler (Supavisor, PgBouncer) keeps idle server
-        sessions open on every database a client used, including the
-        template, and Supavisor reopens one as soon as it is terminated.
-        With ``release_template_sessions`` the runner closes the template
-        to new connections (``ALLOW_CONNECTIONS false``), terminates the
-        *idle* sessions of its own role there, clones, and always reopens
-        the template. Otherwise, or when any blocking session is active or
-        belongs to another role, it raises an error naming the sessions.
-
-        Background workers are not client sessions and are never terminated.
-        Some visit every database briefly (e.g. TimescaleDB's per-database
-        scheduler on Supabase images), so they are left to ``CREATE
-        DATABASE``'s own wait for other sessions to exit; one still there
-        after it is named in the error like any other session.
-        """
-        quoted = quote_identifier(template)
-        sessions = self._template_sessions(connection, template)
-        clients = [session for session in sessions if session[4]]
-        releasable = [pid for pid, _app, state, own, _client in clients if own and state == "idle"]
-        if not (self.release_template_sessions and len(releasable) == len(clients)):
-            raise self._template_busy_error(template, sessions) from error
-        connection.execute(f"ALTER DATABASE {quoted} ALLOW_CONNECTIONS false")
-        try:
-            for pid in releasable:
-                connection.execute("SELECT pg_terminate_backend(%s, 5000)", (pid,))
-            remaining = [s for s in self._template_sessions(connection, template) if s[4]]
-            if remaining:
-                raise self._template_busy_error(template, remaining) from error
-            try:
-                connection.execute(create)
-            except database.DatabaseError as exc:
-                if database.sqlstate(exc) != _OBJECT_IN_USE:
-                    raise
-                still = self._template_sessions(connection, template)
-                raise self._template_busy_error(template, still) from exc
-        finally:
-            connection.execute(f"ALTER DATABASE {quoted} ALLOW_CONNECTIONS true")
-
-    @staticmethod
-    def _template_sessions(
-        connection: database.Connection, template: str
-    ) -> list[tuple[int, str, str, bool, bool]]:
-        # (pid, application_name, state, same role as us, client session)
-        return [
-            tuple(row)
-            for row in connection.execute(
-                "SELECT pid, coalesce(application_name, ''), coalesce(state, ''), "
-                "usename = session_user, backend_type = 'client backend' "
-                "FROM pg_stat_activity WHERE datname = %s AND pid <> pg_backend_pid()",
-                (template,),
-            ).fetchall()
-        ]
-
-    def _template_busy_error(
-        self, template: str, sessions: Sequence[tuple[int, str, str, bool, bool]]
-    ) -> SqlProofMutationError:
-        apps = sorted({app or "<unnamed>" for _pid, app, _state, _own, _client in sessions})
-        hint = (
-            "they are not all idle sessions of this role, so they were left alone"
-            if self.release_template_sessions
-            else "if a connection pooler holds them (e.g. Supavisor), pass "
-            "release_template_sessions=True to terminate idle sessions of this "
-            "role on the template, or connect to the server directly"
-        )
-        return SqlProofMutationError(
-            f"cannot clone template database {template!r}: {len(sessions)} other "
-            f"session(s) are connected (application_name: {', '.join(apps)}); {hint}."
-        )
+        return self._cloner.create(clone_name)
 
     def _drop_clone(self, clone_name: str) -> None:
-        with self._clone_lock, database.connect(
-            self._dsn_for(self.maintenance_db), autocommit=True
-        ) as connection:
-            connection.execute(
-                f"DROP DATABASE IF EXISTS {quote_identifier(clone_name)} WITH (FORCE)"
-            )
+        self._cloner.drop(clone_name)
 
     def _apply_ddl(self, clone_dsn: str, ddl: str) -> None:
         with database.connect(clone_dsn, autocommit=True) as connection:
@@ -283,28 +182,13 @@ class LocalMutationRunner:
     # -- helpers --------------------------------------------------------
 
     def _clone_name(self, stem: str) -> str:
-        # The run-id suffix keeps concurrent runs on one cluster apart; trim
-        # the stem, never the suffix, to stay within the identifier limit.
-        suffix = f"_{self.run_id}".encode()
-        room = _MAX_IDENTIFIER_BYTES - len(suffix)
-        return stem.encode()[:room].decode(errors="ignore") + suffix.decode()
+        return self._cloner.clone_name(stem)
 
     def _pytest_command(self) -> list[str]:
         command = [sys.executable, "-m", "pytest", *self.pytest_args]
         if self.hypothesis_seed is not None:
             command.append(f"--hypothesis-seed={self.hypothesis_seed}")
         return command
-
-    def _dsn_for(self, dbname: str) -> str:
-        # Keep credentials and transport options when switching databases.
-        return conninfo.make_conninfo(self.database_url, dbname=dbname)
-
-    def _dbname(self, dsn: str) -> str:
-        dbname = conninfo.conninfo_to_dict(dsn).get("dbname")
-        if not dbname:
-            msg = "database_url has no dbname; specify the template database name."
-            raise SqlProofMutationError(msg)
-        return str(dbname)
 
 
 def run_mutation_tests(

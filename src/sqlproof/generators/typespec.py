@@ -46,7 +46,7 @@ from sqlproof.schema.model import Column, PgType
 SpecKind = Literal[
     "integer", "decimal", "float", "boolean", "text", "uuid",
     "datetime", "date", "time", "interval", "json", "binary",
-    "vector", "enum", "range", "composite",
+    "vector", "enum", "range", "composite", "array",
 ]
 
 
@@ -63,6 +63,9 @@ VECTOR_COMPONENT_WINDOW = (-1.0, 1.0)
 """Each component of a generated pgvector value."""
 BINARY_MAX_SIZE = 32
 """The longest generated `bytea` value, in bytes."""
+ARRAY_MAX_SIZE = 5
+"""The most elements a generated array value holds (one dimension), unless
+a CHECK (`cardinality(v) >= 8`) asks for more."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -265,6 +268,15 @@ def float_bounds(spec: TypeSpec) -> tuple[float, float]:
     return low, high
 
 
+def array_size_bounds(spec: TypeSpec) -> tuple[int, int]:
+    """The closed range of element counts an array spec draws, in both
+    generators: 0 to `ARRAY_MAX_SIZE`, narrowed by a cardinality CHECK. A
+    lower bound past the window with no upper bound draws exactly it."""
+    low = spec.min_size or 0
+    high = spec.max_size if spec.max_size is not None else max(low, ARRAY_MAX_SIZE)
+    return low, high
+
+
 KNOWN_TYPE_NAMES: frozenset[str] = frozenset(TYPE_SPEC_BUILDERS)
 
 _FALLBACK = TypeSpec(kind="text", max_size=255)
@@ -278,6 +290,12 @@ def spec_for_type(pg_type: PgType) -> TypeSpec:
         # enforced downstream in rows.py's refinement pipeline, which
         # knows the column name to substitute for VALUE.
         return spec_for_type(pg_type.base)
+    if pg_type.kind == "array" and pg_type.base is not None:
+        # The element's own domain CHECKs (`pos[]` with `pos` a domain
+        # over int) are folded in by narrowing.py, like a scalar domain's.
+        # No max_size: `array_size_bounds` applies the window, so a CHECK
+        # can still ask for more elements than it holds.
+        return TypeSpec(kind="array", element=spec_for_type(pg_type.base), min_size=0)
     if pg_type.kind == "range" and pg_type.base is not None:
         element = spec_for_type(pg_type.base)
         if pg_type.name == "tstzrange":

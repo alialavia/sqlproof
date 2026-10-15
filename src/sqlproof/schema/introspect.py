@@ -12,13 +12,14 @@ from sqlproof.schema.model import (
     PgType,
     SchemaInfo,
     Table,
+    array_of,
 )
 from sqlproof.schema.parse_sql import RANGE_ELEMENT_TYPES
 
 
 def introspect_schema(connection: Any, *, schema: str = "public") -> SchemaInfo:
     enums = _load_enums(connection, schema=schema)
-    domains = _load_domains(connection, schema=schema)
+    domains = _load_domains(connection, schema=schema, enums=enums)
     type_by_name: dict[str, PgType] = {pg_type.name: pg_type for pg_type in enums}
     type_by_name.update({d.name: d for d in domains})
     columns_by_table: dict[tuple[str, str], list[Column]] = {}
@@ -26,7 +27,14 @@ def introspect_schema(connection: Any, *, schema: str = "public") -> SchemaInfo:
         key = (str(row["schema_name"]), str(row["table_name"]))
         type_name = str(row["type_name"])
         modifiers = tuple(int(value) for value in (row.get("modifiers") or ()))
-        pg_type = type_by_name.get(type_name) or _resolve_pg_type(type_name, modifiers)
+        element_name = row.get("element_type_name")
+        if element_name is not None:
+            element = type_by_name.get(str(element_name)) or _resolve_pg_type(
+                str(element_name), modifiers
+            )
+            pg_type = array_of(element, max(1, int(row.get("array_dims") or 1)))
+        else:
+            pg_type = type_by_name.get(type_name) or _resolve_pg_type(type_name, modifiers)
         columns_by_table.setdefault(key, []).append(
             Column(
                 name=str(row["column_name"]),
@@ -83,25 +91,45 @@ def _load_enums(connection: Any, *, schema: str) -> tuple[PgType, ...]:
     )
 
 
-def _load_domains(connection: Any, *, schema: str) -> tuple[PgType, ...]:
+def _load_domains(
+    connection: Any, *, schema: str, enums: tuple[PgType, ...] = ()
+) -> tuple[PgType, ...]:
     rows = _fetch_all(connection, _DOMAINS_SQL, schema)
-    domains: list[PgType] = []
-    for row in rows:
-        base_name = str(row["base_type_name"])
-        base = PgType(kind="scalar", name=base_name)
-        raw_checks: list[Any] = cast(
-            "list[Any]", row["check_expressions"] or []
+    rows_by_name = {str(row["domain_name"]): row for row in rows}
+    known: dict[str, PgType] = {enum.name: enum for enum in enums}
+    built: dict[str, PgType] = {}
+
+    def resolve(type_name: str, modifiers: tuple[int, ...], visiting: frozenset[str]) -> PgType:
+        if type_name in known:
+            return known[type_name]
+        if type_name in rows_by_name and type_name not in visiting:
+            return build(type_name, visiting)
+        return _resolve_pg_type(type_name, modifiers)
+
+    def build(name: str, visiting: frozenset[str] = frozenset()) -> PgType:
+        if name in built:
+            return built[name]
+        row = rows_by_name[name]
+        visiting = visiting | {name}
+        modifiers = tuple(int(value) for value in (row.get("modifiers") or ()))
+        element_name = row.get("base_element_type_name")
+        if element_name is not None:
+            # A domain over an array (`CREATE DOMAIN tags AS text[]`): the
+            # base is the array of its element, as the columns query and
+            # parse_sql build it.
+            base = array_of(resolve(str(element_name), modifiers, visiting))
+        else:
+            base = resolve(str(row["base_type_name"]), modifiers, visiting)
+        raw_checks: list[Any] = cast("list[Any]", row["check_expressions"] or [])
+        built[name] = PgType(
+            kind="domain",
+            name=name,
+            base=base,
+            check_expressions=tuple(str(expr) for expr in raw_checks),
         )
-        check_expressions: tuple[str, ...] = tuple(str(expr) for expr in raw_checks)
-        domains.append(
-            PgType(
-                kind="domain",
-                name=str(row["domain_name"]),
-                base=base,
-                check_expressions=check_expressions,
-            )
-        )
-    return tuple(domains)
+        return built[name]
+
+    return tuple(build(str(row["domain_name"])) for row in rows)
 
 
 def _constraint_columns(
@@ -250,23 +278,38 @@ ORDER BY n.nspname, t.typname
 # pg_get_constraintdef returns the canonical text including the
 # enclosing `CHECK (...)`, which the row-generator's expression
 # normalizer strips.
+#
+# A domain over an array has an array base (`_text`); its element comes
+# from `typelem`, as in the columns query, and the base's modifiers
+# (`varchar(12)`, `numeric(6, 2)`) from the domain's `typtypmod`.
 _DOMAINS_SQL = """
 SELECT
   n.nspname AS schema_name,
   t.typname AS domain_name,
   bt.typname AS base_type_name,
+  belem.typname AS base_element_type_name,
+  CASE
+    WHEN COALESCE(belem.typname, bt.typname) = 'vector' AND t.typtypmod > 0
+      THEN ARRAY[t.typtypmod]
+    WHEN COALESCE(belem.typname, bt.typname) IN ('varchar', 'bpchar') AND t.typtypmod > 0
+      THEN ARRAY[t.typtypmod - 4]
+    WHEN COALESCE(belem.typname, bt.typname) = 'numeric' AND t.typtypmod > 0
+      THEN ARRAY[((t.typtypmod - 4) >> 16) & 65535, (t.typtypmod - 4) & 65535]
+    ELSE ARRAY[]::integer[]
+  END AS modifiers,
   COALESCE(
-    array_agg(pg_get_constraintdef(c.oid, true))
+    array_agg(pg_get_constraintdef(c.oid, true) ORDER BY c.conname)
       FILTER (WHERE c.oid IS NOT NULL),
     ARRAY[]::text[]
   ) AS check_expressions
 FROM pg_catalog.pg_type t
 JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace
 JOIN pg_catalog.pg_type bt ON bt.oid = t.typbasetype
+LEFT JOIN pg_catalog.pg_type belem ON belem.oid = bt.typelem AND bt.typcategory = 'A'
 LEFT JOIN pg_catalog.pg_constraint c
   ON c.contypid = t.oid AND c.contype = 'c'
 WHERE n.nspname = %s AND t.typtype = 'd'
-GROUP BY n.nspname, t.typname, bt.typname
+GROUP BY n.nspname, t.typname, bt.typname, belem.typname, t.typtypmod
 ORDER BY n.nspname, t.typname
 """
 
@@ -276,16 +319,18 @@ SELECT
   cls.relname AS table_name,
   att.attname AS column_name,
   typ.typname AS type_name,
+  elem.typname AS element_type_name,
+  att.attndims AS array_dims,
   NOT att.attnotnull AS nullable,
   pg_get_expr(def.adbin, def.adrelid) AS default,
   att.attgenerated <> '' AS is_generated,
   CASE att.attidentity WHEN 'a' THEN 'always' WHEN 'd' THEN 'by default' ELSE NULL END AS identity,
   CASE
-    WHEN typ.typname = 'vector' AND att.atttypmod > 0
+    WHEN COALESCE(elem.typname, typ.typname) = 'vector' AND att.atttypmod > 0
       THEN ARRAY[att.atttypmod]
-    WHEN typ.typname IN ('varchar', 'bpchar') AND att.atttypmod > 0
+    WHEN COALESCE(elem.typname, typ.typname) IN ('varchar', 'bpchar') AND att.atttypmod > 0
       THEN ARRAY[att.atttypmod - 4]
-    WHEN typ.typname = 'numeric' AND att.atttypmod > 0
+    WHEN COALESCE(elem.typname, typ.typname) = 'numeric' AND att.atttypmod > 0
       THEN ARRAY[((att.atttypmod - 4) >> 16) & 65535, (att.atttypmod - 4) & 65535]
     ELSE ARRAY[]::integer[]
   END AS modifiers
@@ -293,6 +338,8 @@ FROM pg_catalog.pg_attribute att
 JOIN pg_catalog.pg_class cls ON cls.oid = att.attrelid
 JOIN pg_catalog.pg_namespace ns ON ns.oid = cls.relnamespace
 JOIN pg_catalog.pg_type typ ON typ.oid = att.atttypid
+-- An array column's element type: arrays are typcategory 'A'.
+LEFT JOIN pg_catalog.pg_type elem ON elem.oid = typ.typelem AND typ.typcategory = 'A'
 LEFT JOIN pg_catalog.pg_attrdef def ON def.adrelid = att.attrelid AND def.adnum = att.attnum
 WHERE ns.nspname = %s
   AND cls.relkind IN ('r', 'p')

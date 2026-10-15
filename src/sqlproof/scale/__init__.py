@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from sqlproof import _database as database
-from sqlproof.exceptions import SqlProofUsageError
+from sqlproof.exceptions import SqlProofScaleError, SqlProofUsageError
 from sqlproof.mutation.persist import capture_git_info
 from sqlproof.scale.args import heaviest, median_key, random_key
 from sqlproof.scale.artifact import save_run
@@ -50,6 +50,8 @@ def scale_analysis(
     args: Sequence[Any] = (),
     artifact_dir: Path | str | None = ".sqlproof/scale-runs",
     truncate_existing: bool = False,
+    in_clone: bool = False,
+    release_template_sessions: bool = False,
     **kwargs: Any,
 ) -> ScaleResult:
     """Measure how `function` scales, using `proof`'s schema and database.
@@ -79,6 +81,14 @@ def scale_analysis(
     rows stay fixed, and `ref("name")` arguments resolve to named rows at
     every factor. See `run_sweep`.
 
+    With `in_clone=True` the sweep runs in a throwaway copy of the
+    database (`CREATE DATABASE ... TEMPLATE`, dropped afterwards), so the
+    proof's own tables are never touched, whatever they hold, and
+    `truncate_existing` is not needed. It needs the CREATEDB privilege
+    and no other sessions on the database while it is copied; behind a
+    pooler such as Supavisor, `release_template_sessions=True` closes
+    this role's idle sessions there first, as mutation testing does.
+
     Opens its own autocommit connection: the sweep issues TRUNCATE,
     COPY and ANALYZE, which want a lifecycle of their own rather than
     sharing the property runner's transaction.
@@ -107,12 +117,34 @@ def scale_analysis(
     git_dirty = False
     if artifact_dir is not None:
         git_sha, git_dirty = capture_git_info()
-    with database.connect(dsn, autocommit=True) as conn:
-        result = run_sweep(
-            conn, proof.schema_info, function,
-            sizes=sizes, scenario=scenario, args=args,
-            truncate_existing=truncate_existing, **kwargs,
+    if in_clone:
+        from sqlproof._clone import TemplateCloner
+        from sqlproof.mutation.persist import new_run_id
+
+        cloner = TemplateCloner(
+            database_url=dsn,
+            run_id=new_run_id(),
+            error=SqlProofScaleError,
+            release_template_sessions=release_template_sessions,
         )
+        clone = cloner.clone_name("sqlproof_scale")
+        clone_dsn = cloner.create(clone)
+        try:
+            with database.connect(clone_dsn, autocommit=True) as conn:
+                result = run_sweep(
+                    conn, proof.schema_info, function,
+                    sizes=sizes, scenario=scenario, args=args,
+                    truncate_existing=True, **kwargs,
+                )
+        finally:
+            cloner.drop(clone)
+    else:
+        with database.connect(dsn, autocommit=True) as conn:
+            result = run_sweep(
+                conn, proof.schema_info, function,
+                sizes=sizes, scenario=scenario, args=args,
+                truncate_existing=truncate_existing, **kwargs,
+            )
     duration_s = time.monotonic() - monotonic_start
     if artifact_dir is not None:
         try:

@@ -15,6 +15,7 @@ from sqlproof.generators.typespec import (
     INTERVAL_WINDOW,
     VECTOR_COMPONENT_WINDOW,
     TypeSpec,
+    array_size_bounds,
     float_bounds,
     spec_for_type,
     spec_is_empty,
@@ -52,6 +53,18 @@ def strategy_for_spec(spec: TypeSpec) -> SearchStrategy[Any]:
         excluded = spec.excluded_values
         strategy = strategy.filter(lambda value: value not in excluded)
     return strategy
+
+
+def _array_element_strategy(element: TypeSpec) -> SearchStrategy[Any]:
+    """An array element, through `strategy_for_spec` so values an element
+    domain's CHECK excludes stay out. JSON elements are wrapped, so each one
+    is written as a JSON document inside the array rather than as a nested
+    array."""
+    if element.kind == "json":
+        from sqlproof._database import Json
+
+        return strategy_for_spec(element).map(Json)
+    return strategy_for_spec(element)
 
 
 def _strategy_for_spec(spec: TypeSpec) -> SearchStrategy[Any]:
@@ -145,6 +158,10 @@ def _strategy_for_spec(spec: TypeSpec) -> SearchStrategy[Any]:
         )
     if spec.kind == "enum":
         return st.sampled_from(spec.enum_values)
+    if spec.kind == "array":
+        assert spec.element is not None
+        low, high = array_size_bounds(spec)
+        return st.lists(_array_element_strategy(spec.element), min_size=low, max_size=high)
     if spec.kind == "range":
         # Draws two element values, filters out the equal-pair case
         # (which would produce an empty Range with `[)` bounds —

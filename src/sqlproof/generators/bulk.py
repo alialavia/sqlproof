@@ -37,6 +37,7 @@ from sqlproof.generators.rows import (
     PinnedKey,
     _column_override,  # pyright: ignore[reportPrivateUsage]
     _domain_checks_as_column_checks,  # pyright: ignore[reportPrivateUsage]
+    _element_checks_as_column_checks,  # pyright: ignore[reportPrivateUsage]
     _foreign_key_for_column,  # pyright: ignore[reportPrivateUsage]
     _is_single_column_unique,  # pyright: ignore[reportPrivateUsage]
     _unique_value,  # pyright: ignore[reportPrivateUsage]
@@ -48,6 +49,7 @@ from sqlproof.generators.typespec import (
     INTERVAL_WINDOW,
     VECTOR_COMPONENT_WINDOW,
     TypeSpec,
+    array_size_bounds,
     float32_ceil,
     float_bounds,
     spec_for_column,
@@ -243,6 +245,19 @@ def _base_sampler_for_spec(spec: TypeSpec, rng: random.Random) -> Callable[[], A
     if kind == "enum":
         values = spec.enum_values
         return lambda: rng.choice(values)
+    if kind == "array":
+        assert spec.element is not None
+        low, high = array_size_bounds(spec)
+        if spec_is_empty(spec.element) and low == 0:
+            # An element domain's CHECK admits no value; only `{}` is valid.
+            return lambda: []
+        element = sampler_for_spec(spec.element, rng)
+        if spec.element.kind == "json":
+            from sqlproof._database import Json
+
+            plain = element
+            element = lambda: Json(plain())  # noqa: E731 - see columns.py
+        return lambda: [element() for _ in range(rng.randint(low, high))]
     if kind == "range":
         assert spec.element is not None
         element_spec = spec.element
@@ -445,10 +460,10 @@ def _assign_composite_key(
         else:
             position = remaining
             remaining = 0
-        values[name] = _unique_value(name, column.type.name, position)
+        values[name] = _unique_value(name, column.type, position)
     for name in unbounded_names:
         column = table.column(name)
-        values[name] = _unique_value(name, column.type.name, remaining)
+        values[name] = _unique_value(name, column.type, remaining)
         remaining = 0
     return values
 
@@ -688,7 +703,7 @@ def bulk_table_rows(
                     if value is not GENERATE:
                         row[name] = value
                         continue
-                row[name] = _unique_value(name, column.type.name, index)
+                row[name] = _unique_value(name, column.type, index)
                 continue
             # Branch order below mirrors `rows.py`'s per-row loop exactly:
             # PK, then is_generated, then the override, then default. The
@@ -726,10 +741,10 @@ def bulk_table_rows(
                     index, available, rng, distribution, zipf_alpha
                 )
                 referenced = fk.referenced_columns[0]
-                row[name] = _unique_value(referenced, column.type.name, parent_index)
+                row[name] = _unique_value(referenced, column.type, parent_index)
                 continue
             if name in unique_names:
-                row[name] = _unique_value(name, column.type.name, index)
+                row[name] = _unique_value(name, column.type, index)
                 continue
             row[name] = sampler(column)()
         yield row
@@ -753,6 +768,7 @@ def _narrowed_sampler(
     spec, _nullable = spec_for_column(column)
     domain_checks = _domain_checks_as_column_checks(column)
     unhonored_scope.extend(domain_checks)
+    unhonored_scope.extend(_element_checks_as_column_checks(column))
     spec = narrow_spec_for_checks(
         spec,
         column,

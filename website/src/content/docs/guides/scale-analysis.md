@@ -42,6 +42,12 @@ The sweep **empties and repopulates every table** in the proof's schema,
 and leaves them empty when it finishes. It refuses to start while any of
 those tables holds rows, or while row-level security hides rows from its
 role, unless you pass `truncate_existing=True`.
+
+To leave your tables alone whatever they hold, pass `in_clone=True`: the
+sweep then runs in a throwaway copy of the database (`CREATE DATABASE ...
+TEMPLATE`), dropped when it ends. That needs the CREATEDB privilege and
+no other sessions on the database while it is copied; behind Supavisor,
+add `release_template_sessions=True`, as for mutation testing.
 :::
 
 ## Why an exponent, and why buffers

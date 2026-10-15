@@ -26,18 +26,27 @@ class PgType:
     composite_fields: tuple[tuple[str, PgType], ...] = ()
 
 
+def array_of(element: PgType, dimensions: int = 1) -> PgType:
+    """The array type of `element`, named as Postgres writes it (`text[]`).
+
+    Postgres does not enforce the declared number of dimensions, so the
+    generators draw one-dimensional arrays whatever `dimensions` says."""
+    return PgType(kind="array", name=f"{element.name}[]", base=element, array_dim=dimensions)
+
+
 @dataclass(frozen=True, slots=True)
 class ParsedCheck:
     """One fact a CHECK states about a column (see schema/checks.py).
 
     Payloads by kind: ``range`` -> ``(op, Decimal)`` with op in
     ``>= > <= <``; ``length`` -> ``(op, int)`` (op may also be ``=``);
+    ``cardinality`` -> ``(op, int)``, an array's element count, likewise;
     ``in_set`` / ``not_in`` -> tuple of literal values; ``compound`` ->
     tuple of ParsedCheck atoms that all hold (``column`` is ``""`` when
     they span several columns). ``regex`` is reserved.
     """
 
-    kind: Literal["range", "in_set", "not_in", "regex", "length", "compound"]
+    kind: Literal["range", "in_set", "not_in", "regex", "length", "cardinality", "compound"]
     column: str
     payload: Any
 
