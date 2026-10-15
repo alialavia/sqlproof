@@ -12,6 +12,7 @@ from sqlproof.schema.model import (
     PgType,
     SchemaInfo,
     Table,
+    array_of,
 )
 from sqlproof.schema.parse_sql import RANGE_ELEMENT_TYPES
 
@@ -26,7 +27,14 @@ def introspect_schema(connection: Any, *, schema: str = "public") -> SchemaInfo:
         key = (str(row["schema_name"]), str(row["table_name"]))
         type_name = str(row["type_name"])
         modifiers = tuple(int(value) for value in (row.get("modifiers") or ()))
-        pg_type = type_by_name.get(type_name) or _resolve_pg_type(type_name, modifiers)
+        element_name = row.get("element_type_name")
+        if element_name is not None:
+            element = type_by_name.get(str(element_name)) or _resolve_pg_type(
+                str(element_name), modifiers
+            )
+            pg_type = array_of(element, max(1, int(row.get("array_dims") or 1)))
+        else:
+            pg_type = type_by_name.get(type_name) or _resolve_pg_type(type_name, modifiers)
         columns_by_table.setdefault(key, []).append(
             Column(
                 name=str(row["column_name"]),
@@ -276,16 +284,18 @@ SELECT
   cls.relname AS table_name,
   att.attname AS column_name,
   typ.typname AS type_name,
+  elem.typname AS element_type_name,
+  att.attndims AS array_dims,
   NOT att.attnotnull AS nullable,
   pg_get_expr(def.adbin, def.adrelid) AS default,
   att.attgenerated <> '' AS is_generated,
   CASE att.attidentity WHEN 'a' THEN 'always' WHEN 'd' THEN 'by default' ELSE NULL END AS identity,
   CASE
-    WHEN typ.typname = 'vector' AND att.atttypmod > 0
+    WHEN COALESCE(elem.typname, typ.typname) = 'vector' AND att.atttypmod > 0
       THEN ARRAY[att.atttypmod]
-    WHEN typ.typname IN ('varchar', 'bpchar') AND att.atttypmod > 0
+    WHEN COALESCE(elem.typname, typ.typname) IN ('varchar', 'bpchar') AND att.atttypmod > 0
       THEN ARRAY[att.atttypmod - 4]
-    WHEN typ.typname = 'numeric' AND att.atttypmod > 0
+    WHEN COALESCE(elem.typname, typ.typname) = 'numeric' AND att.atttypmod > 0
       THEN ARRAY[((att.atttypmod - 4) >> 16) & 65535, (att.atttypmod - 4) & 65535]
     ELSE ARRAY[]::integer[]
   END AS modifiers
@@ -293,6 +303,8 @@ FROM pg_catalog.pg_attribute att
 JOIN pg_catalog.pg_class cls ON cls.oid = att.attrelid
 JOIN pg_catalog.pg_namespace ns ON ns.oid = cls.relnamespace
 JOIN pg_catalog.pg_type typ ON typ.oid = att.atttypid
+-- An array column's element type: arrays are typcategory 'A'.
+LEFT JOIN pg_catalog.pg_type elem ON elem.oid = typ.typelem AND typ.typcategory = 'A'
 LEFT JOIN pg_catalog.pg_attrdef def ON def.adrelid = att.attrelid AND def.adnum = att.attnum
 WHERE ns.nspname = %s
   AND cls.relkind IN ('r', 'p')

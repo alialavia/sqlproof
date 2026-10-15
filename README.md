@@ -290,7 +290,9 @@ Each counterexample records the seed Hypothesis drew; pass it back as
 `double precision`, `boolean`, `text`, `varchar(n)`, `char(n)`, `uuid`,
 `timestamp`, `timestamptz`, `date`, `time`, `json`, `jsonb`, `bytea`,
 `vector(n)` (pgvector), custom `ENUM` types, custom domains (with CHECK
-inheritance), built-in range types, and composite types.
+inheritance), built-in range types, composite types, and arrays of any of
+these (`text[]`, `int[]`, `mood[]`, `jsonb[]`; up to five elements, one
+dimension).
 
 Schema features parsed and respected: foreign keys, CHECK / UNIQUE / EXCLUSION
 constraints, partial unique indexes, `GENERATED ALWAYS AS` columns, and enums.

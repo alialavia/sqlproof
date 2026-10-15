@@ -18,6 +18,7 @@ from sqlproof.schema.model import (
     PgType,
     SchemaInfo,
     Table,
+    array_of,
 )
 
 
@@ -292,6 +293,12 @@ def _parse_column(column: Any, type_names: dict[str, PgType]) -> Column:
 
 
 def _parse_type_node(type_node: Any, type_names: dict[str, PgType]) -> PgType:
+    element = _parse_element_type(type_node, type_names)
+    bounds = tuple(type_node.array_bounds or ())
+    return array_of(element, len(bounds)) if bounds else element
+
+
+def _parse_element_type(type_node: Any, type_names: dict[str, PgType]) -> PgType:
     parts = tuple(_sval(part) for part in type_node.names)
     name = _normalize_type_name(".".join(parts))
     if name in type_names:

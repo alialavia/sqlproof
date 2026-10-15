@@ -524,7 +524,9 @@ def _adapt_insert_value(table: Table, column_name: str, value: Any) -> object:
 
 def _base_type_name(column: Column) -> str:
     pg_type = column.type
-    while pg_type.base is not None:
+    # Through domains only: a jsonb[] column takes a Postgres array (of
+    # wrapped documents), not one jsonb value.
+    while pg_type.base is not None and pg_type.kind != "array":
         pg_type = pg_type.base
     return pg_type.name.lower()
 

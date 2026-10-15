@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
+from sqlproof._database import Json
 from sqlproof._range import Range
 
 
@@ -19,6 +20,8 @@ def write_counterexample(path: Path, payload: dict[str, Any]) -> None:
 
 
 def _json_default(value: Any) -> Any:
+    if isinstance(value, Json):
+        return value.obj  # a json element of an array column: the document itself
     if isinstance(value, Decimal | datetime | date | time | UUID):
         return str(value)
     if isinstance(value, bytes):

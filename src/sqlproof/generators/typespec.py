@@ -46,7 +46,7 @@ from sqlproof.schema.model import Column, PgType
 SpecKind = Literal[
     "integer", "decimal", "float", "boolean", "text", "uuid",
     "datetime", "date", "time", "interval", "json", "binary",
-    "vector", "enum", "range", "composite",
+    "vector", "enum", "range", "composite", "array",
 ]
 
 
@@ -63,6 +63,8 @@ VECTOR_COMPONENT_WINDOW = (-1.0, 1.0)
 """Each component of a generated pgvector value."""
 BINARY_MAX_SIZE = 32
 """The longest generated `bytea` value, in bytes."""
+ARRAY_MAX_SIZE = 5
+"""The most elements a generated array value holds (one dimension)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -278,6 +280,10 @@ def spec_for_type(pg_type: PgType) -> TypeSpec:
         # enforced downstream in rows.py's refinement pipeline, which
         # knows the column name to substitute for VALUE.
         return spec_for_type(pg_type.base)
+    if pg_type.kind == "array" and pg_type.base is not None:
+        return TypeSpec(
+            kind="array", element=spec_for_type(pg_type.base), min_size=0, max_size=ARRAY_MAX_SIZE
+        )
     if pg_type.kind == "range" and pg_type.base is not None:
         element = spec_for_type(pg_type.base)
         if pg_type.name == "tstzrange":

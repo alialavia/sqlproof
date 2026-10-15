@@ -26,6 +26,14 @@ class PgType:
     composite_fields: tuple[tuple[str, PgType], ...] = ()
 
 
+def array_of(element: PgType, dimensions: int = 1) -> PgType:
+    """The array type of `element`, named as Postgres writes it (`text[]`).
+
+    Postgres does not enforce the declared number of dimensions, so the
+    generators draw one-dimensional arrays whatever `dimensions` says."""
+    return PgType(kind="array", name=f"{element.name}[]", base=element, array_dim=dimensions)
+
+
 @dataclass(frozen=True, slots=True)
 class ParsedCheck:
     """One fact a CHECK states about a column (see schema/checks.py).

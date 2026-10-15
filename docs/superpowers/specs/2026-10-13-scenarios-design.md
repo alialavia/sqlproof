@@ -436,10 +436,11 @@ Tier 2 users, the rest generated, the same every time".
   - The Hypothesis path drew a top-level `None` for json columns,
     which loads as SQL NULL and broke `NOT NULL json` columns. JSON
     null now appears only inside a document.
-- Not covered: array columns are not generated yet (they parse as
-  their element type; see the v0.1 scope in SPEC.md), so a
-  counterexample never holds one. The exporter passes lists through
-  for when they are.
+- Array columns are generated since the follow-up after phase 4 (they
+  used to parse as their element type and load as malformed literals).
+  The exporter pins them as lists, and a `json[]`/`jsonb[]` one as the
+  array literal Postgres reads, since a scenario value cannot hold a
+  wrapped document.
 
 ### Phase 1 as implemented
 

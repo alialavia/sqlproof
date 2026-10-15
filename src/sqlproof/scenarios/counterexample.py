@@ -180,6 +180,20 @@ def _literal(pg_type: PgType, value: Any) -> Any:
         if base.kind == "composite":
             return "(" + ",".join("" if item is None else _quoted(item) for item in items) + ")"
         if base.kind == "array" and base.base is not None:
+            element = base.base
+            while element.kind == "domain" and element.base is not None:
+                element = element.base
+            if element.name in ("json", "jsonb"):
+                # A scenario value cannot hold a wrapped document, so write
+                # the array as the literal Postgres reads.
+                return (
+                    "{"
+                    + ",".join(
+                        "NULL" if item is None else _quoted(json.dumps(item, sort_keys=True))
+                        for item in items
+                    )
+                    + "}"
+                )
             return [_literal(base.base, item) if item is not None else None for item in items]
         return items
     return value

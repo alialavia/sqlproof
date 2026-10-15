@@ -9,6 +9,7 @@ from hypothesis.strategies import SearchStrategy
 from sqlproof._range import Range
 from sqlproof.exceptions import SqlProofSchemaError
 from sqlproof.generators.typespec import (
+    ARRAY_MAX_SIZE,
     BINARY_MAX_SIZE,
     DATE_WINDOW,
     DATETIME_WINDOW,
@@ -52,6 +53,16 @@ def strategy_for_spec(spec: TypeSpec) -> SearchStrategy[Any]:
         excluded = spec.excluded_values
         strategy = strategy.filter(lambda value: value not in excluded)
     return strategy
+
+
+def _array_element_strategy(element: TypeSpec) -> SearchStrategy[Any]:
+    """An array element. JSON elements are wrapped, so each one is written
+    as a JSON document inside the array rather than as a nested array."""
+    if element.kind == "json":
+        from sqlproof._database import Json
+
+        return _strategy_for_spec(element).map(Json)
+    return _strategy_for_spec(element)
 
 
 def _strategy_for_spec(spec: TypeSpec) -> SearchStrategy[Any]:
@@ -145,6 +156,13 @@ def _strategy_for_spec(spec: TypeSpec) -> SearchStrategy[Any]:
         )
     if spec.kind == "enum":
         return st.sampled_from(spec.enum_values)
+    if spec.kind == "array":
+        assert spec.element is not None
+        return st.lists(
+            _array_element_strategy(spec.element),
+            min_size=spec.min_size or 0,
+            max_size=spec.max_size if spec.max_size is not None else ARRAY_MAX_SIZE,
+        )
     if spec.kind == "range":
         # Draws two element values, filters out the equal-pair case
         # (which would produce an empty Range with `[)` bounds —

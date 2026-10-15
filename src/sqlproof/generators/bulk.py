@@ -42,6 +42,7 @@ from sqlproof.generators.rows import (
     _unique_value,  # pyright: ignore[reportPrivateUsage]
 )
 from sqlproof.generators.typespec import (
+    ARRAY_MAX_SIZE,
     BINARY_MAX_SIZE,
     DATE_WINDOW,
     DATETIME_WINDOW,
@@ -243,6 +244,17 @@ def _base_sampler_for_spec(spec: TypeSpec, rng: random.Random) -> Callable[[], A
     if kind == "enum":
         values = spec.enum_values
         return lambda: rng.choice(values)
+    if kind == "array":
+        assert spec.element is not None
+        element = sampler_for_spec(spec.element, rng)
+        if spec.element.kind == "json":
+            from sqlproof._database import Json
+
+            plain = element
+            element = lambda: Json(plain())  # noqa: E731 - see columns.py
+        low = spec.min_size or 0
+        high = spec.max_size if spec.max_size is not None else ARRAY_MAX_SIZE
+        return lambda: [element() for _ in range(rng.randint(low, high))]
     if kind == "range":
         assert spec.element is not None
         element_spec = spec.element

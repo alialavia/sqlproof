@@ -426,6 +426,9 @@ def _domain_checks_as_column_checks(column: Column) -> tuple[CheckConstraint, ..
 
 def _unique_value(column_name: str, type_name: str, index: int) -> Any:
     normalized = type_name.lower()
+    if normalized.endswith("[]"):
+        # An array column: a one-element array holding the element's value.
+        return [_unique_value(column_name, normalized[:-2], index)]
     value = index + 1
     if normalized in {"smallint", "int2", "integer", "int", "int4", "serial"}:
         return value
