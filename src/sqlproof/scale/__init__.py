@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any
 from sqlproof import _database as database
 from sqlproof.exceptions import SqlProofScaleError, SqlProofUsageError
 from sqlproof.mutation.persist import capture_git_info
+from sqlproof.scale.advisors import AdvisorHit
 from sqlproof.scale.args import heaviest, median_key, random_key
 from sqlproof.scale.artifact import save_run
 from sqlproof.scale.result import ScaleResult
@@ -33,6 +34,7 @@ if TYPE_CHECKING:
     from sqlproof.scenarios.model import Scenario
 
 __all__ = [
+    "AdvisorHit",
     "ScaleResult",
     "heaviest",
     "median_key",
@@ -73,8 +75,19 @@ def scale_analysis(
     longer, and the sweep ends truncated), `seed` (default 0), `columns` (per-column
     overrides, as `load_dataset` takes them), `distribution` (`"uniform"`,
     the default, or `"zipf"`), `nested_plans` (count the plans of the
-    statements inside the function, through auto_explain) and
-    `scale_cohorts`.
+    statements inside the function, through auto_explain),
+    `scale_cohorts` and `advisors`.
+
+    `advisors=True` (default False) also ranks Supabase `index_advisor`
+    suggestions for the statements the function runs, computed once on
+    the largest factor's data, into `ScaleResult.advisor_hits` and the
+    artifact. It uses the extension only when it is already installed in
+    the database (`CREATE EXTENSION index_advisor CASCADE`; with
+    `in_clone=True` the copy inherits it) and never creates it; when it
+    is missing, or a statement cannot be planned, `advisor_notes` says
+    why and the measurement stands. Without `nested_plans=True` it sees
+    only the outer `SELECT fn(...)` call, which helps only for functions
+    Postgres inlines.
 
     Pass `scenario=` instead of `sizes=` to sweep a scenario: its fills and
     per-parent counts grow with the factor while its cohorts and named

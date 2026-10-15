@@ -132,6 +132,62 @@ function's previous one is flagged `REGRESSED`. A refused exponent shows
 as refused, with the reason, by the same rules `exponent` applies in a
 test.
 
+## Index suggestions
+
+Pass `advisors=True` to ask Supabase's
+[`index_advisor`](https://github.com/supabase/index_advisor) which
+indexes would help. It is called once, after the sweep, on the largest
+dataset it measured, and plans each statement with hypothetical indexes
+(through `hypopg`). Nothing is created and nothing extra runs.
+
+```python
+result = scale_analysis(
+    proof,
+    "public.invoice_count",
+    sizes={"customers": 20, "invoices": 1000},
+    args=[heaviest("public.customers.id")],
+    nested_plans=True,
+    advisors=True,
+)
+result.advisor_hits[0].index_statement
+# 'CREATE INDEX ON public.invoices USING btree (customer_id)'
+```
+
+`result.advisor_hits` lists the suggestions, highest estimated saving
+first. Each hit has `rank`, `relation`, `index_statement`, the
+`statement` it came from, and the planner's estimated
+`startup_cost_before`/`_after` and `total_cost_before`/`_after` for that
+statement. Only indexes on tables the sweep scaled are kept. The same
+list goes into the run artifact as `advisor_hits`, and
+`sqlproof scale report` shows the latest run's suggestions.
+
+Which statements are advised:
+
+- With `nested_plans=True`, every statement the function ran that reads
+  a table, as `auto_explain` reported it. Parameter names in those
+  statements become typed generic parameters (`customer_id = c` becomes
+  `customer_id = ($1::bigint)`).
+- Always, the outer `SELECT fn($1, ...)` call. Without `nested_plans`,
+  that is the only statement, and `index_advisor` sees inside the
+  function only if Postgres inlines it. A PL/pgSQL function, or a SQL
+  function with a `FROM` clause, is never inlined in a select list.
+  Pass `nested_plans=True` for those.
+
+SqlProof never installs the extension. If it is missing,
+`result.advisor_notes` says so
+(`index_advisor not installed (CREATE EXTENSION index_advisor CASCADE)`)
+and the measurement still stands. The notes also list statements
+`index_advisor` could not plan, such as PL/pgSQL expressions that use
+local variables. Install it once in your test database:
+
+```sql
+CREATE EXTENSION index_advisor CASCADE;  -- also installs hypopg
+```
+
+With `in_clone=True`, the throwaway copy inherits the extension from the
+database it copies. Supabase's other advisor, splinter, is not wrapped
+yet.
+
 ## What it cannot see
 
 - **Growth in CPU work alone.** Buffers count pages touched, not CPU. A

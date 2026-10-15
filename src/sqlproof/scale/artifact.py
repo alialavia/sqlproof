@@ -76,6 +76,17 @@ def save_run(
     "callable"}` for a caller's own resolver, or `{"kind": "literal"}`
     (the value itself is in each point's `args`). No entry claims a
     worst case: none of the resolvers guarantees one.
+
+    `advisor_hits` holds the ranked `index_advisor` suggestions when the
+    run asked for them (`advisors: true`), highest estimated saving
+    first: `{"source": "index_advisor", "rank": 1, "relation":
+    "public.invoices", "index_statement": "CREATE INDEX ON public.invoices
+    USING btree (customer_id)", "statement": ..., "startup_cost_before":
+    ..., "startup_cost_after": ..., "total_cost_before": ...,
+    "total_cost_after": ...}`. `advisor_notes` says why there are none or
+    fewer (e.g. the extension is not installed). These keys were added
+    without bumping `schema_version`: a run written before them simply
+    lacks them.
     """
     artifact_dir.mkdir(parents=True, exist_ok=True)
     when = started_at if started_at is not None else datetime.now(UTC)
@@ -118,6 +129,11 @@ def save_run(
         ],
         "regimes": [asdict(regime) for regime in result.regimes],
         "plan_flips": [asdict(flip) for flip in result.plan_flips],
+        # Scale follow-up 6 (additive: older runs lack these keys, and
+        # readers treat a missing key as "advisors not asked").
+        "advisors": result.advisors,
+        "advisor_hits": [asdict(hit) for hit in result.advisor_hits],
+        "advisor_notes": list(result.advisor_notes),
     }
     # Exclusive create ('x'): honor the append-only contract -- never
     # silently overwrite an existing run.

@@ -254,3 +254,43 @@ def test_git_state_is_captured_at_save_time_when_not_given(tmp_path, monkeypatch
     data = json.loads(save_run(_result(), tmp_path).read_text())
     assert data["git_sha"] == "fedcba9"
     assert data["git_dirty"] is False
+
+
+def _hit(rank: int, column: str, before: float, after: float):
+    from sqlproof.scale.advisors import AdvisorHit
+
+    return AdvisorHit(
+        rank=rank, relation="billing.invoices",
+        index_statement=f"CREATE INDEX ON billing.invoices USING btree ({column})",
+        statement="SELECT count(*) FROM billing.invoices WHERE customer_id = ($1::bigint)",
+        startup_cost_before=1.0, startup_cost_after=0.5,
+        total_cost_before=before, total_cost_after=after,
+    )
+
+
+def test_artifact_records_ranked_advisor_hits_and_notes(tmp_path):
+    """Scale follow-up 6: `advisor_hits`, per the umbrella spec's example."""
+    from dataclasses import replace
+
+    result = replace(
+        _result(), advisors=True,
+        advisor_hits=[_hit(1, "customer_id", 300.0, 100.0), _hit(2, "amount", 50.0, 40.0)],
+        advisor_notes=["a note"],
+    )
+    data = json.loads(save_run(result, tmp_path).read_text())
+    assert data["advisors"] is True
+    assert data["advisor_notes"] == ["a note"]
+    first = data["advisor_hits"][0]
+    assert first == {
+        "source": "index_advisor", "rank": 1, "relation": "billing.invoices",
+        "index_statement": "CREATE INDEX ON billing.invoices USING btree (customer_id)",
+        "statement": "SELECT count(*) FROM billing.invoices WHERE customer_id = ($1::bigint)",
+        "startup_cost_before": 1.0, "startup_cost_after": 0.5,
+        "total_cost_before": 300.0, "total_cost_after": 100.0,
+    }
+    assert [h["rank"] for h in data["advisor_hits"]] == [1, 2]
+
+
+def test_artifact_without_advisors_records_an_empty_hit_list(tmp_path):
+    data = json.loads(save_run(_result(), tmp_path).read_text())
+    assert (data["advisors"], data["advisor_hits"], data["advisor_notes"]) == (False, [], [])

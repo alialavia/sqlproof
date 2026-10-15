@@ -400,7 +400,30 @@ result.rows_before_timeout(ms)   # (lo, hi) total rows; machine-dependent
 result.points              # raw ProbePoints
 result.baseline            # the calibrated fixed cost the fit subtracted
 result.argument_policy     # per argument position: how it was chosen
+result.advisor_hits        # ranked index_advisor suggestions (advisors=True)
+result.advisor_notes       # why there are none or fewer (e.g. not installed)
 ```
+
+**As built (scale follow-up 6).** `scale_analysis(..., advisors=True)`
+(default False; also on `run_sweep`) calls Supabase's `index_advisor`
+once, after the ladder and before the final TRUNCATE, so the tables hold
+the largest factor's freshly ANALYZEd data
+(`sqlproof.scale.advisors`). It advises the outer `SELECT fn($1, ...)`
+and, with `nested_plans`, each table-reading statement auto_explain
+reported ("Query Text"), split on top-level semicolons, with parameter
+names rewritten to typed generic parameters. Hits are ranked by the
+statement's estimated total-cost saving (`total_cost_before -
+total_cost_after`), highest first; an index suggested for several
+statements is kept once, with its best statement; suggestions on
+relations the sweep does not scale are dropped, since their estimates
+do not reflect measured data. The extension is used only if it is
+already installed -- never created -- and nothing about it can fail the
+measurement: a missing extension, an unplannable statement or any
+database error becomes an `advisor_notes` entry. The artifact gains
+`advisors`, `advisor_hits` and `advisor_notes` without a
+`schema_version` bump (older runs lack them; the report reads both).
+Splinter is not wrapped: it is SQL lint text rather than a tool, and
+vendoring it is a licensing decision (follow-up 6, remaining part).
 
 Every row-count figure above is **total rows across the profile** — see
 "The unit for row-count thresholds".

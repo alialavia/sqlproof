@@ -154,23 +154,39 @@ _NESTED_PLAN_SETTINGS = (
 class _NestedPlans:
     """Collects the shapes and peak memory of the plans auto_explain
     reports. Distinct shapes only: a function that runs one query a
-    thousand times reports a thousand plans of one shape."""
+    thousand times reports a thousand plans of one shape.
 
-    def __init__(self) -> None:
+    Given `statements`, also adds to it the "Query Text" of each reported
+    statement whose plan reads a relation -- what the index advisor is
+    asked about (scale follow-up 6). PL/pgSQL expressions that read no
+    table (`n + 1`) are left out: there is nothing to index."""
+
+    def __init__(self, statements: set[str] | None = None) -> None:
         self.shapes: set[str] = set()
         self.peak_memory_kb = 0
+        self.statements = statements
 
     def receive(self, message: str) -> bool:
         start = message.find("{")
         if "plan:" not in message[:start] or start < 0:
             return False
         try:
-            plan = json.loads(message[start:])["Plan"]
+            envelope = json.loads(message[start:])
+            plan = envelope["Plan"]
         except (ValueError, KeyError, TypeError):
             return False
+        text = envelope.get("Query Text")
+        if self.statements is not None and isinstance(text, str) and _reads_relation(plan):
+            self.statements.add(text)
         self.shapes.add(_shape(plan))
         self.peak_memory_kb = max(self.peak_memory_kb, _peak_memory(plan))
         return True
+
+
+def _reads_relation(node: dict[str, Any]) -> bool:
+    return "Relation Name" in node or any(
+        _reads_relation(child) for child in node.get("Plans", [])
+    )
 
 
 def _enable_nested_plans(cur: Any) -> None:
@@ -221,6 +237,7 @@ def probe_function(
     relations: Sequence[tuple[str, str]] | None = None,
     timeout_s: float | None = None,
     nested_plans: bool = False,
+    statements: set[str] | None = None,
 ) -> ProbePoint:
     """Measure one call of `function` under EXPLAIN.
 
@@ -232,6 +249,9 @@ def probe_function(
     outside it. It instruments every inner statement, which slows calls
     that run many, so it is off by default; it raises
     `SqlProofUsageError` when the connection cannot use auto_explain.
+    With it, `statements` (a set, updated in place) collects the text of
+    each table-reading statement auto_explain reported, for the index
+    advisor; without `nested_plans` it is left untouched.
 
     With `relations` -- ``(schema, table)`` pairs, as `run_sweep` passes
     the tables it scales -- `work_blocks` counts only buffer accesses to
@@ -275,7 +295,7 @@ def probe_function(
     )
     opened_transaction = not conn.in_transaction
     relation_blocks: int | None = None
-    nested = _NestedPlans() if nested_plans else None
+    nested = _NestedPlans(statements) if nested_plans else None
     with conn.cursor() as cur:
         if opened_transaction:
             cur.execute("BEGIN")

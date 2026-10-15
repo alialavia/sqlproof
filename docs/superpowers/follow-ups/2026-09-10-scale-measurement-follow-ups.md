@@ -93,7 +93,7 @@ A second defect makes it worse. `fit_exponent` sets `r2 = 1.0 if ss_tot == 0 els
 
 ## 6. Rank splinter and `index_advisor` hits alongside scale results
 
-**Label:** `enhancement`.
+**Label:** `enhancement`. **Status:** done for `index_advisor`; splinter remaining. `scale_analysis(..., advisors=True)` (default False, also on `run_sweep`) calls `index_advisor` once on the largest factor's data, on the outer `SELECT fn($1, ...)` and -- with `nested_plans` -- every table-reading statement auto_explain reported, with parameter names rewritten to typed generic parameters. Hits on the scaled tables are ranked by estimated total-cost saving into `ScaleResult.advisor_hits` and the artifact's `advisor_hits` (additive, no `schema_version` bump), and `sqlproof scale report` shows them. The extension is never created: when it is not installed, `advisor_notes` records `index_advisor not installed (CREATE EXTENSION index_advisor CASCADE)` and the measurement stands. A live test (its own database, where the non-superuser role can create the extension on the Supabase image) ranks `CREATE INDEX ON adv.invoices USING btree (customer_id)` first in both. **Remaining:** splinter. It is a set of SQL lint queries, not a tool to shell out to, and vendoring it is a licensing decision still to make.
 
 **Problem.** The umbrella spec's Phase 2 also includes ranking fix suggestions from Supabase's static advisors (`advisor_hits` in its artifact example). Without them, a result says "this is quadratic" but not "add an index on `invoices.customer_id`".
 

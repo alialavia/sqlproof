@@ -22,6 +22,7 @@ from typing import Any
 
 from sqlproof.exceptions import SqlProofScaleError
 from sqlproof.mutation.report.render import _CSS  # pyright: ignore[reportPrivateUsage]
+from sqlproof.scale.advisors import AdvisorHit
 from sqlproof.scale.artifact import SCHEMA_VERSION
 from sqlproof.scale.fit import FitResult, PlanFlip
 from sqlproof.scale.probe import ProbePoint
@@ -55,6 +56,8 @@ class ScaleRun:
     plan_flips: int
     distribution: str
     regressed: bool = False
+    advisor_hits: tuple[AdvisorHit, ...] = ()
+    """Ranked index_advisor suggestions, when the run asked for them."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,6 +135,7 @@ def _read(path: Path) -> ScaleRun:
         spill_point_rows=result.spill_point_rows,
         plan_flips=len(result.plan_flips),
         distribution=str(payload.get("distribution") or "uniform"),
+        advisor_hits=tuple(AdvisorHit(**hit) for hit in payload.get("advisor_hits") or ()),
     )
 
 
@@ -170,9 +174,15 @@ def render_text(report: ScaleReport) -> str:
             lines.append(f"  refused: {latest.refused}")
         if latest.spill_point_rows is not None:
             lines.append(f"  spills at {latest.spill_point_rows:,} rows")
+        for hit in latest.advisor_hits[:3]:
+            lines.append(f"  advisor #{hit.rank}: {hit.index_statement}  ({_cost_text(hit)})")
     for skipped in report.skipped:
         lines.append(f"skipped {skipped.path.name}: {skipped.reason}")
     return "\n".join(lines) + "\n"
+
+
+def _cost_text(hit: AdvisorHit) -> str:
+    return f"est. cost {hit.total_cost_before:,.2f} -> {hit.total_cost_after:,.2f}"
 
 
 def _exponent_text(run: ScaleRun) -> str:
@@ -238,7 +248,25 @@ def _function_section(history: FunctionHistory) -> str:
         f"{_chart(history.runs)}{note}<table>"
         "<tr><th>Started</th><th>Commit</th><th>Exponent</th><th>Std. error</th>"
         "<th>Rows measured</th><th>Spill at</th><th>Plan flips</th><th>Data</th></tr>"
-        f"{''.join(rows)}</table>"
+        f"{''.join(rows)}</table>{_advisor_table(history.latest)}"
+    )
+
+
+def _advisor_table(run: ScaleRun) -> str:
+    """The latest run's index_advisor suggestions, best first."""
+    if not run.advisor_hits:
+        return ""
+    rows = "".join(
+        f"<tr><td>{hit.rank}</td><td><code>{html.escape(hit.index_statement)}</code></td>"
+        f"<td>{hit.total_cost_before:,.2f}</td><td>{hit.total_cost_after:,.2f}</td>"
+        f"<td><code>{html.escape(hit.statement)}</code></td></tr>"
+        for hit in run.advisor_hits
+    )
+    return (
+        "<h3>Index suggestions (latest run)</h3><table>"
+        "<tr><th>Rank</th><th>Index</th><th>Est. cost before</th>"
+        "<th>Est. cost after</th><th>From statement</th></tr>"
+        f"{rows}</table>"
     )
 
 
