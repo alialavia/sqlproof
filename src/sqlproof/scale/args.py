@@ -83,6 +83,7 @@ JOIN pg_namespace n ON n.oid = child.relnamespace
 JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = c.conkey[1]
 JOIN pg_attribute p ON p.attrelid = c.confrelid AND p.attnum = c.confkey[1]
 WHERE c.contype = 'f'
+  AND c.conparentid = 0
   AND cardinality(c.conkey) = 1
   AND c.confrelid = %s::regclass
   AND p.attname = %s
@@ -108,7 +109,9 @@ def heaviest(column: str) -> Resolver:
     table, name = _split(column)
 
     def resolve(conn: Any) -> Any:
-        children = conn.execute(_REFERENCING, [table, name]).fetchall()
+        # Unquoted identifiers fold to lower case, as in the fallback query;
+        # a partitioned child's per-partition copies of its key are skipped.
+        children = conn.execute(_REFERENCING, [table, name.lower()]).fetchall()
         if not children:
             # Identifiers come from the caller's schema (table/column
             # names), never from row data, so this is not user input.

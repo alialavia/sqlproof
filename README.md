@@ -281,7 +281,7 @@ sqlproof replay .sqlproof/failures/test_name.json --as-scenario \
   --schema-file schema.sql --output scenarios/failure.scenario.yaml
 ```
 
-Each counterexample records the seed it ran under; pass it back as
+Each counterexample records the seed Hypothesis drew; pass it back as
 `seed=` to repeat the search.
 
 ## Supported PostgreSQL types

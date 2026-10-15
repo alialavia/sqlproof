@@ -391,10 +391,14 @@ Tier 2 users, the rest generated, the same every time".
 ### Phase 4 as implemented
 
 - **Reproducibility.** `sqlproof(..., seed=)` now seeds Hypothesis
-  (it was accepted and ignored). Without a seed, each run picks one at
-  random; either way the counterexample's `seed` field records it, so
-  the same seed repeats the same search. `sqlproof replay FILE` prints
-  it.
+  (it was accepted and ignored). Only an explicit seed is forced:
+  Hypothesis's `@seed` also turns off the example database and overrides
+  `derandomize` and `--hypothesis-seed`, so a run without one is left to
+  Hypothesis, and the counterexample records the seed Hypothesis drew
+  (or the forced one, or none when derandomized). The same seed repeats
+  the same search. `sqlproof replay FILE` prints it. (An earlier cut
+  always forced a random seed; review caught that it silently undid
+  `derandomize` profiles.)
 - **`sqlproof replay FILE --as-scenario`** (`--schema-file` or `--dsn`,
   `--name`, `--format`, `--output`) builds the scenario in
   `sqlproof.scenarios.counterexample`. Each row becomes a pinned row:
@@ -415,11 +419,18 @@ Tier 2 users, the rest generated, the same every time".
   - Serialized values may be lists (array columns) and objects (json
     columns). A json column pinned to a string used to load as a JSON
     string, not the document the earlier docs implied.
-  - The columns of a *composite* primary key are pinnable (a join
-    table's key is its references), and the bulk generator honours an
-    override on them, as the Hypothesis path already did. Keeping the
-    pairs distinct is then the scenario's job; a duplicate is a unique
-    violation at load.
+  - A primary key is pinnable where it is made of references: a
+    composite key (a join table), or a single-column key that is also
+    a foreign key (`profiles.id -> auth.users`, a 1:1 settings table).
+    Then every row of the table must pin all of it, one row per group,
+    distinct, and a single-column one only with references; tables
+    that reference such a table must pin their reference too, since the
+    generator finds parents by arithmetic over generated keys. Both
+    generators honour these pins; a pinned single-column key reaches
+    them wrapped in `PinnedKey`, so a plain `columns=` override on a key
+    is still ignored. The exporter relies on this to keep 1:1 rows with
+    their parents. (Review caught that the first cut dropped such keys,
+    and allowed partial composite pins that collided at load.)
   - Counterexample files write `bytea` values as `\x...` (they failed
     to serialize).
   - The Hypothesis path drew a top-level `None` for json columns,

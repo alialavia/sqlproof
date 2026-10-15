@@ -71,3 +71,21 @@ def test_an_unreferenced_column_falls_back_to_the_largest_key(conn):
         schema = introspect_schema(c, schema=SCHEMA)
     load_dataset(conn, schema, {"customers": 5, "invoices": 20, "notes": 0}, seed=1)
     assert heaviest(f"{SCHEMA}.invoices.id")(conn) == 20
+
+
+def test_a_partitioned_child_is_counted_once(conn):
+    """Each partition carries a clone of its parent's foreign key in
+    pg_constraint; counting those too would double a partitioned table."""
+    conn.execute(
+        f"CREATE TABLE {SCHEMA}.remarks (id bigint, about bigint REFERENCES {SCHEMA}.customers(id),"
+        f" PRIMARY KEY (id)) PARTITION BY RANGE (id);"
+        f"CREATE TABLE {SCHEMA}.remarks_low PARTITION OF {SCHEMA}.remarks"
+        f" FOR VALUES FROM (MINVALUE) TO (100);"
+        f"CREATE TABLE {SCHEMA}.remarks_high PARTITION OF {SCHEMA}.remarks"
+        f" FOR VALUES FROM (100) TO (MAXVALUE);"
+        f"INSERT INTO {SCHEMA}.customers VALUES (1), (2), (3);"
+        # customer 1: three invoices; customer 2: two remarks, one per partition.
+        f"INSERT INTO {SCHEMA}.invoices VALUES (1, 1), (2, 1), (3, 1);"
+        f"INSERT INTO {SCHEMA}.remarks VALUES (10, 2), (200, 2);"
+    )
+    assert heaviest(f"{SCHEMA}.customers.id")(conn) == 1

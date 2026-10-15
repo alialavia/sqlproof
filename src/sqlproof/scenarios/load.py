@@ -154,9 +154,11 @@ def _owned_sequences(conn: database.Connection, schema: SchemaInfo) -> list[_Own
     return found
 
 
-def _insert_auth_users(conn: database.Connection, users: tuple[AuthUser, ...]) -> None:
+def _insert_auth_users(conn: database.Connection, users: tuple[AuthUser, ...]) -> list[str]:
+    """Insert the scenario's auth users; return the ids actually inserted
+    (an id already present is left alone)."""
     if not users:
-        return
+        return []
     with conn.cursor(row_factory=tuple_row) as cur:
         rows: list[tuple[Any, ...]] = cur.execute(
             "SELECT column_name FROM information_schema.columns "
@@ -174,8 +176,11 @@ def _insert_auth_users(conn: database.Connection, users: tuple[AuthUser, ...]) -
     sql = (
         f"INSERT INTO auth.users ({', '.join(columns)}) "
         f"VALUES ({', '.join(_AUTH_USERS_VALUES[c] for c in columns)}) "
-        "ON CONFLICT DO NOTHING"
+        "ON CONFLICT DO NOTHING RETURNING id"
     )
+    inserted: list[str] = []
     for user in users:
         params = [user.id if c == "id" else user.email for c in columns if c in ("id", "email")]
-        conn.execute(sql, params).close()
+        with conn.cursor(row_factory=tuple_row) as cur:
+            inserted.extend(str(row[0]) for row in cur.execute(sql, params).fetchall())
+    return inserted

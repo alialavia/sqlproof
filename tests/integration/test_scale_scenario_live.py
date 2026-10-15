@@ -119,18 +119,30 @@ def test_a_scenario_sweep_removes_the_auth_users_it_seeded(tmp_path):
         s.table("auth.users").fill(5)
         s.table("notes").fill(400)
 
+    proof = SqlProof.from_config(SqlProofConfig(connection_string=dsn, schema="scale_auth"))
+    # A user the scenario would seed already exists (say, from an earlier
+    # `scenarios up`): the sweep must leave it alone.
+    existing = owners.compile(proof.schema_info).auth_users[0]
+    with database.connect(dsn, autocommit=True) as connection:
+        connection.execute(
+            "INSERT INTO auth.users (id, email) VALUES (%s, %s)", [existing.id, existing.email]
+        )
     try:
-        proof = SqlProof.from_config(SqlProofConfig(connection_string=dsn, schema="scale_auth"))
         result = scale_analysis(
             proof, "scale_auth.note_count", scenario=owners, max_factor=8, artifact_dir=None
         )
         assert result.points
         with database.connect(dsn) as conn:
             after = conn.execute("SELECT count(*) FROM auth.users").fetchone()
-        assert after == before
+            kept = conn.execute(
+                "SELECT count(*) FROM auth.users WHERE id = %s", [existing.id]
+            ).fetchone()
+        assert after == (before[0] + 1,)
+        assert kept == (1,)
     finally:
         with database.connect(dsn, autocommit=True) as connection:
             connection.execute("DROP SCHEMA IF EXISTS scale_auth CASCADE")
+            connection.execute("DELETE FROM auth.users WHERE id = %s", [existing.id])
 
 
 def test_a_scenario_strategy_drives_a_property_test(proof):

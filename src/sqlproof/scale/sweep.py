@@ -100,8 +100,8 @@ class ScenarioProfile:
         users = compiled.auth_users
 
         def before_load(conn: database.Connection) -> None:
-            _insert_auth_users(conn, users)
-            self._auth_ids.update(user.id for user in users)
+            # Only the rows this sweep created are its to remove at the end.
+            self._auth_ids.update(_insert_auth_users(conn, users))
 
         return LoadStep(compiled.sizes, compiled.columns, compiled.refs, before_load)
 

@@ -6,8 +6,10 @@ into a database for a person to inspect:
 
 * every row becomes a pinned row: a named row (`row: orders_1`) in a table
   with a single-column primary key, a one-row cohort otherwise;
-* every column the dataset holds is pinned, except a single-column primary
-  key and generated columns, which the scenario assigns;
+* every column the dataset holds is pinned, except generated columns and
+  a single-column primary key, which the scenario assigns -- unless that
+  key is also a foreign key (`profiles.id -> auth.users`), which is pinned
+  as a reference like any other;
 * a foreign key to a row in the dataset becomes a reference to that row
   (`{ref: customers_2}`), so relationships survive the new keys; one to
   `auth.users` becomes a reference to a seeded auth user.
@@ -74,7 +76,11 @@ def scenario_from_counterexample(
             for column in table.columns:
                 if column.name not in row or column.is_generated:
                     continue
-                if table.primary_key == (column.name,):
+                # The scenario assigns a plain key; one that is also a
+                # foreign key is pinned, as a reference to its parent row.
+                if table.primary_key == (column.name,) and (
+                    _single_column_fk(table, column.name) is None
+                ):
                     continue
                 pinned[column.name] = _pinned_value(
                     table, column, row[column.name], keys, auth_users

@@ -281,7 +281,7 @@ scenario's name and fingerprint.
 ## From a failing property
 
 A failing property writes its counterexample to
-`.sqlproof/failures/<test>.json`, with the seed it ran under. Turn the
+`.sqlproof/failures/<test>.json`, with the seed Hypothesis drew. Turn the
 counterexample into a scenario and load it into a database to look at
 the rows that broke the property:
 
@@ -297,18 +297,23 @@ supplies the keys and references. Each row becomes a pinned row, named
 key to a row in the counterexample becomes a reference to it. The
 scenario assigns new keys in the same order, so relationships survive
 but key values do not: a property that depends on the numbers
-themselves keeps the counterexample file for that. Pass `--name` to
-choose the scenario's name.
+themselves keeps the counterexample file for that. A key that is also a
+foreign key (`profiles.id` referencing `auth.users`) is pinned as a
+reference, so it keeps its parent. Pass `--name` to choose the scenario's
+name.
 
 To repeat the search instead, pass the recorded seed back:
-`@sqlproof(proof, sizes=..., seed=<seed>)`. `sqlproof replay FILE`
-prints it.
+`@sqlproof(proof, sizes=..., seed=<seed>)`; `sqlproof replay FILE`
+prints it. A run with no `seed=` is left to Hypothesis, so a
+`derandomize` profile or `--hypothesis-seed` still applies (and then the
+file records no seed, or the forced one).
 
 ## Errors before the database
 
 The scenario is checked against the schema before any row is written:
-unknown tables and columns, a pinned single-column primary key or a
-generated column,
+unknown tables and columns, a pinned generated column, a pinned primary
+key that is not made of references (and one that is, unless every row
+of the table pins all of it, distinctly),
 values that break a `NOT NULL`, enum or `CHECK` constraint, a unique
 value pinned on two rows, references to undeclared rows or to the wrong
 table, and child rows whose required parent table would be empty.

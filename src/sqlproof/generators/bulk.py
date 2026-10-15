@@ -34,6 +34,7 @@ from sqlproof.generators.narrowing import narrow_spec_for_checks
 from sqlproof.generators.rows import (
     GENERATE,
     ColumnOverrides,
+    PinnedKey,
     _column_override,  # pyright: ignore[reportPrivateUsage]
     _domain_checks_as_column_checks,  # pyright: ignore[reportPrivateUsage]
     _foreign_key_for_column,  # pyright: ignore[reportPrivateUsage]
@@ -675,6 +676,18 @@ def bulk_table_rows(
                 row[name] = key_values[name]
                 continue
             if name == single_pk:
+                # A pinned key (a scenario pins a key that is also a foreign
+                # key) wins, as on the Hypothesis path.
+                if isinstance(override_map.get(name), PinnedKey):
+                    value = _resolve_override(
+                        override_map[name],
+                        BulkColumnContext(
+                            table=table, column_name=name, row_index=index, row=row
+                        ),
+                    )
+                    if value is not GENERATE:
+                        row[name] = value
+                        continue
                 row[name] = _unique_value(name, column.type.name, index)
                 continue
             # Branch order below mirrors `rows.py`'s per-row loop exactly:

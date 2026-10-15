@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import inspect
-import random
 from collections.abc import Callable, Generator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
@@ -65,9 +64,11 @@ def sqlproof(
 
     Parameters not declared in the signature are not passed.
 
-    `seed` fixes Hypothesis's random choices. Without one, each run picks
-    a seed at random; either way the counterexample file records it, so
-    passing it back reproduces the same search.
+    `seed` fixes Hypothesis's random choices (and, as Hypothesis's `@seed`
+    does, turns off its example database for the run). Without one,
+    Hypothesis chooses as usual -- `derandomize` and `--hypothesis-seed`
+    apply -- and the counterexample records the seed it drew, so passing
+    it back repeats the search.
     """
     del timeout_ms, commit
 
@@ -108,9 +109,7 @@ def run_property(
     wants_check = "check" in signature.parameters
     wants_dataset = "dataset" in signature.parameters
     run_count = 0
-    run_seed = seed if seed is not None else random.SystemRandom().getrandbits(32)
 
-    @hypothesis_seed(run_seed)
     @given(strategy)
     @settings(
         max_examples=runs,
@@ -134,7 +133,7 @@ def run_property(
                 "$schema": "https://sqlproof.dev/schemas/counterexample-v1.json",
                 "version": 1,
                 "property_name": function.__name__,
-                "seed": run_seed,
+                "seed": _seed_in_use(execute, seed),
                 "runs": run_count,
                 "shrink_steps": 0,
                 "schema_fingerprint": proof.schema_fingerprint,
@@ -150,4 +149,24 @@ def run_property(
             write_counterexample(failure_dir / f"{function.__name__}.json", payload)
             raise SqlProofPropertyFailure(str(exc), counterexample=payload) from exc
 
+    if seed is not None:
+        # Only an explicit seed is forced: `@seed` also turns off the example
+        # database and overrides `derandomize` and `--hypothesis-seed`.
+        execute = hypothesis_seed(seed)(execute)
     execute()
+
+
+def _seed_in_use(wrapped: Any, explicit: int | None) -> int | None:
+    """The seed this run used, for the counterexample: the one passed in,
+    else the one Hypothesis drew (or was forced to with `--hypothesis-seed`).
+    None when the run was derandomized, which reproduces without a seed."""
+    if explicit is not None:
+        return explicit
+    from hypothesis import core
+
+    # Hypothesis records the seed it drew on the wrapped test.
+    generated = getattr(wrapped, "_hypothesis_internal_use_generated_seed", None)
+    if generated is not None:
+        return int(generated)
+    forced = getattr(core, "global_force_seed", None)
+    return None if forced is None else int(forced)
