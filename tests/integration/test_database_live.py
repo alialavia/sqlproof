@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import os
 from configparser import ConfigParser
+from contextlib import nullcontext
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from hypothesis import given, settings
@@ -15,6 +16,7 @@ from hypothesis import strategies as st
 from sqlproof import _database as database
 from sqlproof._dsn import conninfo_to_dict, make_conninfo
 from sqlproof._range import Range
+from sqlproof.client import PostgresSqlProofClient
 from sqlproof.generators.graph import dataset_strategy
 from sqlproof.scale.load import copy_table
 from sqlproof.schema.parse_sql import parse_schema_sql
@@ -94,6 +96,116 @@ def test_copy_preserves_generated_text_and_sql_nulls(dataset) -> None:
             assert stored.fetchall() == sorted(rows, key=lambda row: row["id"])
 
 
+@settings(max_examples=20, deadline=None)
+@given(dataset=DATASETS)
+def test_copy_can_be_committed_without_an_intervening_query(dataset) -> None:
+    """Oracle: a later rollback cannot undo rows whose COPY was committed."""
+    with database.connect(os.environ["SQLPROOF_TEST_DATABASE_URL"]) as conn:
+        conn.execute("CREATE TEMPORARY TABLE transport_rows (id integer PRIMARY KEY, value text)")
+        conn.commit()
+        rows = dataset["transport_rows"]
+        copy_table(conn, SCHEMA.tables[0], rows, ["id", "value"])
+        assert conn.in_transaction, "COPY must leave the transaction state ready for commit"
+        conn.commit()
+        assert not conn.in_transaction
+        conn.rollback()
+        assert conn.execute("SELECT id, value FROM transport_rows ORDER BY id").fetchall() == [
+            (row["id"], row["value"]) for row in sorted(rows, key=lambda row: row["id"])
+        ]
+
+
+@settings(max_examples=20, deadline=None)
+@given(dataset=DATASETS)
+def test_copy_can_be_rolled_back_without_an_intervening_query(dataset) -> None:
+    """Oracle: the table committed before COPY survives, but the copied rows do not."""
+    with database.connect(os.environ["SQLPROOF_TEST_DATABASE_URL"]) as conn:
+        conn.execute("CREATE TEMPORARY TABLE transport_rows (id integer PRIMARY KEY, value text)")
+        conn.commit()
+        copy_table(conn, SCHEMA.tables[0], dataset["transport_rows"], ["id", "value"])
+        conn.rollback()
+        assert not conn.in_transaction
+        assert conn.execute("SELECT count(*) FROM transport_rows").fetchone() == (0,)
+
+
+def test_copy_in_autocommit_leaves_no_transaction_open() -> None:
+    with database.connect(os.environ["SQLPROOF_TEST_DATABASE_URL"], autocommit=True) as conn:
+        conn.execute("CREATE TEMPORARY TABLE transport_rows (id integer PRIMARY KEY, value text)")
+        copy_table(conn, SCHEMA.tables[0], [{"id": 1, "value": "copied"}], ["id", "value"])
+        assert not conn.in_transaction
+        conn.rollback()
+        assert conn.execute("SELECT value FROM transport_rows").fetchone() == ("copied",)
+
+
+def test_copy_constraint_errors_can_be_rolled_back_without_an_intervening_query() -> None:
+    with database.connect(os.environ["SQLPROOF_TEST_DATABASE_URL"]) as conn:
+        conn.execute("CREATE TEMPORARY TABLE transport_rows (id integer PRIMARY KEY, value text)")
+        conn.commit()
+        with pytest.raises(OSError, match="duplicate key"):
+            copy_table(conn, SCHEMA.tables[0], [{"id": 1}, {"id": 1}], ["id", "value"])
+        assert conn.in_transaction, "a failed COPY must expose the aborted transaction"
+        conn.rollback()
+        assert conn.execute("SELECT count(*) FROM transport_rows").fetchone() == (0,)
+
+
+@pytest.mark.parametrize("error_type", [ValueError, KeyboardInterrupt])
+def test_a_copy_stream_error_can_be_rolled_back_and_preserves_the_original_error(
+    error_type,
+) -> None:
+    error = error_type("stream failed")
+
+    class FailingStream:
+        def read(self, _size):
+            raise error
+
+    with database.connect(os.environ["SQLPROOF_TEST_DATABASE_URL"]) as conn:
+        conn.execute("CREATE TEMPORARY TABLE transport_rows (id integer PRIMARY KEY, value text)")
+        conn.commit()
+        with pytest.raises(error_type) as exc, conn.cursor() as cur:
+            cur.execute("COPY transport_rows FROM STDIN", stream=FailingStream())
+        assert exc.value is error
+        assert conn.in_transaction
+        conn.rollback()
+        assert conn.execute("SELECT count(*) FROM transport_rows").fetchone() == (0,)
+
+
+@pytest.mark.parametrize("fails", [False, True])
+def test_a_connection_block_finishes_its_transaction_immediately_after_copy(fails) -> None:
+    dsn = os.environ["SQLPROOF_TEST_DATABASE_URL"]
+    schema_name = f"sqlproof_copy_{uuid4().hex}"
+    schema = parse_schema_sql("CREATE TABLE items (id integer PRIMARY KEY)", schema=schema_name)
+    with database.connect(dsn, autocommit=True) as observer:
+        observer.execute(f'CREATE SCHEMA "{schema_name}"')
+        try:
+            observer.execute(f'CREATE TABLE "{schema_name}".items (id integer PRIMARY KEY)')
+            outcome = pytest.raises(ValueError, match="caller failed") if fails else nullcontext()
+            with outcome, database.connect(dsn) as conn:
+                copy_table(conn, schema.tables[0], [{"id": 1}], ["id"])
+                if fails:
+                    raise ValueError("caller failed")
+            assert observer.execute(f'SELECT id FROM "{schema_name}".items').fetchall() == (
+                [] if fails else [(1,)]
+            )
+        finally:
+            observer.execute(f'DROP SCHEMA "{schema_name}" CASCADE')
+
+
+@pytest.mark.parametrize(
+    ("sql_type", "minimum"),
+    [("smallint", -(2**15)), ("integer", -(2**31)), ("bigint", -(2**63))],
+)
+def test_the_smallest_integer_parameter_survives_an_explicit_cast(sql_type, minimum) -> None:
+    with database.connect(os.environ["SQLPROOF_TEST_DATABASE_URL"]) as conn:
+        assert conn.execute(f"SELECT %s::{sql_type}", (minimum,)).fetchone() == (minimum,)
+
+
+@pytest.mark.parametrize("value", [-1, -0.5, -0.0, Decimal("-1.25"), Decimal("-0.00")])
+def test_negative_numeric_parameters_keep_their_sign_inside_casts(value) -> None:
+    with database.connect(os.environ["SQLPROOF_TEST_DATABASE_URL"]) as conn:
+        # A text parameter cast on the server is independent of numeric adaptation.
+        expected = conn.execute("SELECT %s::numeric::text", (str(value),)).fetchone()
+        assert conn.execute("SELECT %s::numeric::text", (value,)).fetchone() == expected
+
+
 def test_a_failed_nested_transaction_preserves_the_outer_transaction() -> None:
     with database.connect(os.environ["SQLPROOF_TEST_DATABASE_URL"]) as conn:
         conn.execute("CREATE TEMPORARY TABLE transaction_rows (id int PRIMARY KEY)")
@@ -117,6 +229,99 @@ def test_a_successful_nested_transaction_keeps_its_rows_and_the_outer_transactio
         assert conn.execute("SELECT id FROM transaction_rows").fetchall() == [(1,)]
         conn.rollback()
         assert not conn.in_transaction
+
+
+@settings(max_examples=20, deadline=None)
+@given(dataset=DATASETS)
+def test_a_successful_client_savepoint_keeps_changes_until_the_caller_rolls_back(dataset) -> None:
+    """Oracle: stored rows return after the caller rolls back a released savepoint."""
+    with database.connect(
+        os.environ["SQLPROOF_TEST_DATABASE_URL"], row_factory=database.dict_row
+    ) as conn:
+        conn.execute("CREATE TEMPORARY TABLE transport_rows (id integer PRIMARY KEY, value text)")
+        rows = dataset["transport_rows"]
+        copy_table(conn, SCHEMA.tables[0], rows, ["id", "value"])
+        conn.commit()
+        client = PostgresSqlProofClient(conn)
+
+        with client.savepoint():
+            client.execute("DELETE FROM transport_rows")
+
+        assert conn.in_transaction, "releasing a client savepoint must not commit the caller"
+        assert client.scalar("SELECT count(*) FROM transport_rows") == 0
+        conn.rollback()
+        assert client.query("SELECT id, value FROM transport_rows ORDER BY id") == sorted(
+            rows, key=lambda row: row["id"]
+        )
+
+
+@pytest.mark.parametrize("error_type", [ValueError, KeyboardInterrupt])
+@settings(max_examples=20, deadline=None)
+@given(dataset=DATASETS)
+def test_a_failed_client_savepoint_restores_rows_and_preserves_the_callers_error(
+    error_type, dataset
+) -> None:
+    """Oracle: pre-savepoint rows survive, including when cancellation interrupts the body."""
+    with database.connect(
+        os.environ["SQLPROOF_TEST_DATABASE_URL"], row_factory=database.dict_row
+    ) as conn:
+        conn.execute("CREATE TEMPORARY TABLE transport_rows (id integer PRIMARY KEY, value text)")
+        rows = dataset["transport_rows"]
+        copy_table(conn, SCHEMA.tables[0], rows, ["id", "value"])
+        client = PostgresSqlProofClient(conn)
+        error = error_type("the caller's error")
+
+        with pytest.raises(error_type) as exc, client.savepoint():
+            client.execute("DELETE FROM transport_rows")
+            raise error
+
+        assert exc.value is error, "savepoint cleanup must preserve the original exception"
+        assert conn.in_transaction
+        assert client.query("SELECT id, value FROM transport_rows ORDER BY id") == sorted(
+            rows, key=lambda row: row["id"]
+        )
+
+
+def test_a_sql_error_in_a_client_savepoint_leaves_the_connection_usable() -> None:
+    with database.connect(
+        os.environ["SQLPROOF_TEST_DATABASE_URL"], row_factory=database.dict_row
+    ) as conn:
+        client = PostgresSqlProofClient(conn)
+        with pytest.raises(database.DatabaseError) as exc, client.savepoint():
+            client.execute("SELECT 1 / 0")
+
+        assert database.sqlstate(exc.value) == "22012"
+        assert conn.in_transaction
+        assert client.scalar("SELECT 42") == 42, "the failed query must not poison the transaction"
+
+
+@settings(max_examples=20, deadline=None)
+@given(dataset=DATASETS)
+def test_a_failed_inner_client_savepoint_preserves_changes_in_the_outer_savepoint(dataset) -> None:
+    """Oracle: an inner rollback restores the outer update, then the caller can roll it back."""
+    with database.connect(
+        os.environ["SQLPROOF_TEST_DATABASE_URL"], row_factory=database.dict_row
+    ) as conn:
+        conn.execute("CREATE TEMPORARY TABLE transport_rows (id integer PRIMARY KEY, value text)")
+        rows = dataset["transport_rows"]
+        copy_table(conn, SCHEMA.tables[0], rows, ["id", "value"])
+        conn.commit()
+        client = PostgresSqlProofClient(conn)
+
+        with client.savepoint():
+            client.execute("UPDATE transport_rows SET value = 'outer update'")
+            with pytest.raises(ValueError, match="inner failure"), client.savepoint():
+                client.execute("DELETE FROM transport_rows")
+                raise ValueError("inner failure")
+            assert client.query("SELECT id, value FROM transport_rows ORDER BY id") == [
+                {"id": row["id"], "value": "outer update"}
+                for row in sorted(rows, key=lambda row: row["id"])
+            ]
+
+        conn.rollback()
+        assert client.query("SELECT id, value FROM transport_rows ORDER BY id") == sorted(
+            rows, key=lambda row: row["id"]
+        )
 
 
 def test_a_generation_error_leaves_copy_and_the_connection_untouched() -> None:

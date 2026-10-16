@@ -75,6 +75,11 @@ def _adapt(value: Any) -> Any:
         return pgdb.Binary(value)
     if isinstance(value, Range) or (isinstance(value, Decimal) and not value.is_finite()):
         return str(value)
+    if isinstance(value, int | float | Decimal) and str(value).startswith("-") and value != -inf:
+        # PyGreSQL inlines numbers. Casts bind before unary minus, so a bare
+        # -2147483648::integer overflows, and -1::text tries to negate text.
+        # Parentheses keep the complete numeric value together, including -0.0.
+        return pgdb.Literal(f"({value})")
     if isinstance(value, list):
         if _is_numeric_or_boolean_array(cast(list[Any], value)):  # type: ignore[redundant-cast]
             # PyGreSQL renders these as a typed ARRAY[...] constructor, so
@@ -234,15 +239,26 @@ class Cursor:
                 )
                 raise RuntimeError(msg)
             try:
-                while chunk := stream.read(8192):
-                    putdata(chunk)
-            except BaseException as error:
-                # PyGreSQL finishes the COPY protocol, then raises OSError
-                # for the cancellation. Preserve the stream's original error.
-                with suppress(OSError):
-                    putdata(error)
+                try:
+                    while chunk := stream.read(8192):
+                        putdata(chunk)
+                except BaseException as error:
+                    # PyGreSQL finishes the COPY protocol, then raises OSError
+                    # for the cancellation. Preserve the stream's original error.
+                    with suppress(OSError):
+                        putdata(error)
+                    raise
+                self._cursor.rowcount = putdata(None)
+            except BaseException:
+                # putdata reads COPY's result but leaves ReadyForQuery pending.
+                # Synchronize even on failure, preserving the original error
+                # when the transaction is aborted (or the connection is lost).
+                with suppress(Error):
+                    self._connection.execute("SELECT 1").close()
                 raise
-            self._cursor.rowcount = putdata(None)
+            # Without this, libpq still reports TRANS_ACTIVE: commit(),
+            # rollback() and connection cleanup would skip the transaction.
+            self._connection.execute("SELECT 1").close()
         return self
 
     def _row(self, values: Sequence[Any]) -> Any:
