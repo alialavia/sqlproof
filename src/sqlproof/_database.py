@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable, Generator, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
-from math import inf
+from math import copysign, inf
 from types import TracebackType
 from typing import Any, Literal, Self, cast
 
@@ -65,7 +66,49 @@ def _json_without_nul(value: Json) -> str:
     return json.dumps(value.obj)
 
 
-def _adapt(value: Any) -> Any:
+_MERGING_OPERATOR_CHARACTERS = frozenset("-~!@#%^&|`?")
+"""Characters that join a following minus sign into one token: `--`
+starts a comment, and PostgreSQL lexes `@-` or `%-` as a single operator."""
+
+
+def _placeholder_contexts(sql: str) -> list[bool]:
+    """For each positional `%s` in `sql`, whether a negative number there
+    must be grouped in parentheses.
+
+    PyGreSQL inlines numbers into the SQL text. A bare negative is the only
+    form PostgreSQL accepts where its grammar wants a signed constant
+    (`SET name = -1`, `INCREMENT BY -1`), so grouping is limited to the two
+    places a bare one is misread: before a `::` cast, which binds tighter
+    than unary minus (`-2147483648::integer` overflows, `-1::text` negates
+    text), and after a character that merges with the minus sign.
+    """
+    contexts: list[bool] = []
+    index = 0
+    while index < len(sql) - 1:
+        if sql[index] == "%":
+            following = sql[index + 1]
+            if following == "s":
+                cast_follows = sql[index + 2 :].lstrip().startswith("::")
+                merges = index > 0 and sql[index - 1] in _MERGING_OPERATOR_CHARACTERS
+                contexts.append(cast_follows or merges)
+                index += 2
+                continue
+            if following == "%":
+                index += 2
+                continue
+        index += 1
+    return contexts
+
+
+def _adapt_parameters(sql: str, params: Sequence[Any]) -> tuple[Any, ...]:
+    contexts = _placeholder_contexts(sql)
+    return tuple(
+        _adapt(value, grouped=position < len(contexts) and contexts[position])
+        for position, value in enumerate(params)
+    )
+
+
+def _adapt(value: Any, *, grouped: bool = False) -> Any:
     if isinstance(value, str):
         return _reject_nul(value)
     if isinstance(value, Json):
@@ -75,6 +118,17 @@ def _adapt(value: Any) -> Any:
         return pgdb.Binary(value)
     if isinstance(value, Range) or (isinstance(value, Decimal) and not value.is_finite()):
         return str(value)
+    if isinstance(value, float) and value == 0.0 and copysign(1.0, value) < 0:
+        # A bare -0.0 is a numeric literal, and numeric has no negative zero.
+        return pgdb.Literal("'-0'::float8")
+    if (
+        grouped
+        and isinstance(value, int | float | Decimal)
+        and not isinstance(value, bool)
+        and str(value).startswith("-")
+        and value != -inf
+    ):
+        return pgdb.Literal(f"({value})")
     if isinstance(value, list):
         if _is_numeric_or_boolean_array(cast(list[Any], value)):  # type: ignore[redundant-cast]
             # PyGreSQL renders these as a typed ARRAY[...] constructor, so
@@ -219,7 +273,7 @@ class Cursor:
 
     def execute(self, sql: str, params: Sequence[Any] | None = None, *, stream: Any = None) -> Self:
         self._connection._begin()  # pyright: ignore[reportPrivateUsage]
-        self._cursor.execute(sql, tuple(_adapt(value) for value in params or ()))
+        self._cursor.execute(sql, _adapt_parameters(sql, params or ()))
         if stream is not None:
             # Use the source that started COPY, preserving our already-quoted
             # schema/table identifiers rather than splitting them on dots.
@@ -234,15 +288,26 @@ class Cursor:
                 )
                 raise RuntimeError(msg)
             try:
-                while chunk := stream.read(8192):
-                    putdata(chunk)
-            except BaseException as error:
-                # PyGreSQL finishes the COPY protocol, then raises OSError
-                # for the cancellation. Preserve the stream's original error.
-                with suppress(OSError):
-                    putdata(error)
+                try:
+                    while chunk := stream.read(8192):
+                        putdata(chunk)
+                except BaseException as error:
+                    # PyGreSQL finishes the COPY protocol, then raises OSError
+                    # for the cancellation. Preserve the stream's original error.
+                    with suppress(OSError):
+                        putdata(error)
+                    raise
+                self._cursor.rowcount = putdata(None)
+            except BaseException:
+                # putdata reads COPY's result but leaves ReadyForQuery pending.
+                # Synchronize even on failure, preserving the original error
+                # when the transaction is aborted (or the connection is lost).
+                with suppress(Error):
+                    self._connection.execute("SELECT 1").close()
                 raise
-            self._cursor.rowcount = putdata(None)
+            # Without this, libpq still reports TRANS_ACTIVE: commit(),
+            # rollback() and connection cleanup would skip the transaction.
+            self._connection.execute("SELECT 1").close()
         return self
 
     def _row(self, values: Sequence[Any]) -> Any:
@@ -494,6 +559,16 @@ def connect(
             return default_timestamptz(value)
 
         cast(Any, connection.type_cache).set_typecast("timestamptz", cast_timestamptz)
+        default_interval = cast(Any, connection.type_cache).get_typecast("interval")
+
+        def cast_interval(value: str) -> Any:
+            # PostgreSQL trims trailing fractional zeros. PyGreSQL treats
+            # the remaining digits as microseconds ('.1' becomes 1 us).
+            # Pad before its parser, preserving all four IntervalStyles.
+            padded = re.sub(r"\.\d+", lambda match: match[0].ljust(7, "0"), value)
+            return default_interval(padded)
+
+        cast(Any, connection.type_cache).set_typecast("interval", cast_interval)
     except BaseException:
         native.close()
         raise

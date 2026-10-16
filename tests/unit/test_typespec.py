@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from decimal import Decimal, localcontext
+
 import pytest
 
 from sqlproof.generators.typespec import (
@@ -82,3 +84,28 @@ def test_every_registered_name_builds_a_spec():
         builder = TYPE_SPEC_BUILDERS[name]
         modifiers = (8, 2) if name in {"numeric", "decimal"} else (8,)
         assert builder(PgType("scalar", name, modifiers=modifiers)) is not None
+
+
+@pytest.mark.parametrize(
+    ("modifiers", "largest", "scale"),
+    [
+        ((2,), "99", 0),
+        ((2, -3), "99000", -3),
+        ((3, 5), "0.00999", 5),
+        ((40, 2), "9" * 38 + ".99", 2),
+        ((1000,), "9" * 1000, 0),
+        ((2, -1000), "99" + "0" * 1000, -1000),
+        ((2, 1000), "0." + "0" * 998 + "99", 1000),
+    ],
+    ids=["precision-only", "negative-scale", "fraction-only", "wide", "max-precision",
+         "min-scale", "max-scale"],
+)
+def test_numeric_bounds_are_exact_even_with_a_small_decimal_context(modifiers, largest, scale):
+    """Oracle: PostgreSQL's declared digit count, including negative scales."""
+    with localcontext() as context:
+        context.prec = 6
+        spec = spec_for_type(PgType("scalar", "numeric", modifiers=modifiers))
+    expected = Decimal(largest)
+    assert spec.max_value == expected
+    assert spec.min_value == expected.copy_negate()
+    assert spec.places == scale

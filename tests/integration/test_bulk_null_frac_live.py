@@ -10,7 +10,8 @@ re-establishing its premise -- see below.
 `st.one_of(st.none(), strategy)` (columns.py) has no stable null rate
 to match: the observed rate is an artifact of which SqlProof entry
 point draws from the strategy, not a property of the strategy itself.
-`core.py`'s `invariant()` draws via `draw_example`, which is
+`core.py`'s `invariant()` used to draw via `draw_example` (it now runs
+a full `@given` search), which is
 `SearchStrategy.example()` -- internally `@given(strategy)` with
 `phases=(Phase.generate,)` and `max_examples=10` only, so it never
 leaves Hypothesis's "cold start" region and is heavily biased toward
