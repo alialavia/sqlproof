@@ -9,7 +9,7 @@ from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
-from math import inf
+from math import copysign, inf
 from types import TracebackType
 from typing import Any, Literal, Self, cast
 
@@ -66,7 +66,49 @@ def _json_without_nul(value: Json) -> str:
     return json.dumps(value.obj)
 
 
-def _adapt(value: Any) -> Any:
+_MERGING_OPERATOR_CHARACTERS = frozenset("-~!@#%^&|`?")
+"""Characters that join a following minus sign into one token: `--`
+starts a comment, and PostgreSQL lexes `@-` or `%-` as a single operator."""
+
+
+def _placeholder_contexts(sql: str) -> list[bool]:
+    """For each positional `%s` in `sql`, whether a negative number there
+    must be grouped in parentheses.
+
+    PyGreSQL inlines numbers into the SQL text. A bare negative is the only
+    form PostgreSQL accepts where its grammar wants a signed constant
+    (`SET name = -1`, `INCREMENT BY -1`), so grouping is limited to the two
+    places a bare one is misread: before a `::` cast, which binds tighter
+    than unary minus (`-2147483648::integer` overflows, `-1::text` negates
+    text), and after a character that merges with the minus sign.
+    """
+    contexts: list[bool] = []
+    index = 0
+    while index < len(sql) - 1:
+        if sql[index] == "%":
+            following = sql[index + 1]
+            if following == "s":
+                cast_follows = sql[index + 2 :].lstrip().startswith("::")
+                merges = index > 0 and sql[index - 1] in _MERGING_OPERATOR_CHARACTERS
+                contexts.append(cast_follows or merges)
+                index += 2
+                continue
+            if following == "%":
+                index += 2
+                continue
+        index += 1
+    return contexts
+
+
+def _adapt_parameters(sql: str, params: Sequence[Any]) -> tuple[Any, ...]:
+    contexts = _placeholder_contexts(sql)
+    return tuple(
+        _adapt(value, grouped=position < len(contexts) and contexts[position])
+        for position, value in enumerate(params)
+    )
+
+
+def _adapt(value: Any, *, grouped: bool = False) -> Any:
     if isinstance(value, str):
         return _reject_nul(value)
     if isinstance(value, Json):
@@ -76,10 +118,16 @@ def _adapt(value: Any) -> Any:
         return pgdb.Binary(value)
     if isinstance(value, Range) or (isinstance(value, Decimal) and not value.is_finite()):
         return str(value)
-    if isinstance(value, int | float | Decimal) and str(value).startswith("-") and value != -inf:
-        # PyGreSQL inlines numbers. Casts bind before unary minus, so a bare
-        # -2147483648::integer overflows, and -1::text tries to negate text.
-        # Parentheses keep the complete numeric value together, including -0.0.
+    if isinstance(value, float) and value == 0.0 and copysign(1.0, value) < 0:
+        # A bare -0.0 is a numeric literal, and numeric has no negative zero.
+        return pgdb.Literal("'-0'::float8")
+    if (
+        grouped
+        and isinstance(value, int | float | Decimal)
+        and not isinstance(value, bool)
+        and str(value).startswith("-")
+        and value != -inf
+    ):
         return pgdb.Literal(f"({value})")
     if isinstance(value, list):
         if _is_numeric_or_boolean_array(cast(list[Any], value)):  # type: ignore[redundant-cast]
@@ -225,7 +273,7 @@ class Cursor:
 
     def execute(self, sql: str, params: Sequence[Any] | None = None, *, stream: Any = None) -> Self:
         self._connection._begin()  # pyright: ignore[reportPrivateUsage]
-        self._cursor.execute(sql, tuple(_adapt(value) for value in params or ()))
+        self._cursor.execute(sql, _adapt_parameters(sql, params or ()))
         if stream is not None:
             # Use the source that started COPY, preserving our already-quoted
             # schema/table identifiers rather than splitting them on dots.

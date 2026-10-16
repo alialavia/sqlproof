@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 from configparser import ConfigParser
 from contextlib import nullcontext
@@ -201,9 +202,64 @@ def test_the_smallest_integer_parameter_survives_an_explicit_cast(sql_type, mini
 @pytest.mark.parametrize("value", [-1, -0.5, -0.0, Decimal("-1.25"), Decimal("-0.00")])
 def test_negative_numeric_parameters_keep_their_sign_inside_casts(value) -> None:
     with database.connect(os.environ["SQLPROOF_TEST_DATABASE_URL"]) as conn:
-        # A text parameter cast on the server is independent of numeric adaptation.
-        expected = conn.execute("SELECT %s::numeric::text", (str(value),)).fetchone()
+        # A text parameter cast on the server is independent of numeric
+        # adaptation. A float has no decimal scale, so it is parsed as one.
+        source = "%s::float8::numeric::text" if isinstance(value, float) else "%s::numeric::text"
+        expected = conn.execute(f"SELECT {source}", (str(value),)).fetchone()
         assert conn.execute("SELECT %s::numeric::text", (value,)).fetchone() == expected
+
+
+def test_negative_zero_keeps_its_sign_as_a_float() -> None:
+    """Oracle: IEEE 754 sign of zero, read with math.copysign."""
+    with database.connect(os.environ["SQLPROOF_TEST_DATABASE_URL"]) as conn:
+        conn.execute("CREATE TEMPORARY TABLE float_zeros (value float8, items float8[])")
+        conn.execute("INSERT INTO float_zeros VALUES (%s, %s)", (-0.0, [1.5, -0.0]))
+        cast_value = conn.execute("SELECT %s::float8", (-0.0,)).fetchone()[0]
+        stored, items = conn.execute("SELECT value, items FROM float_zeros").fetchone()
+    assert math.copysign(1.0, cast_value) == -1.0
+    assert math.copysign(1.0, stored) == -1.0
+    assert math.copysign(1.0, items[1]) == -1.0
+
+
+@pytest.mark.parametrize(
+    ("statement", "check"),
+    [
+        ("SET extra_float_digits = %s", "SHOW extra_float_digits"),
+        (
+            "CREATE TEMPORARY SEQUENCE descending_ids INCREMENT BY %s",
+            "SELECT increment_by FROM pg_sequences WHERE sequencename = 'descending_ids'",
+        ),
+    ],
+    ids=["set", "sequence"],
+)
+def test_negative_parameters_stay_bare_where_postgres_wants_a_signed_constant(
+    statement, check
+) -> None:
+    """Grammar positions that accept only a signed constant reject `(-1)`;
+    grouping is limited to casts and operator characters."""
+    with database.connect(os.environ["SQLPROOF_TEST_DATABASE_URL"], autocommit=True) as conn:
+        conn.execute(statement, (-1,))
+        assert str(conn.execute(check).fetchone()[0]) == "-1"
+
+
+@pytest.mark.parametrize(
+    ("sql", "value", "expected"),
+    [
+        ("SELECT 2-%s", -5, 7),
+        ("SELECT @%s", -3, 3),
+        ("SELECT -%s", -5, 5),
+        ("SELECT %s ::int2", -(2**15), -(2**15)),
+        ("SELECT 7 %% 3 + %s::int", -4, -3),
+    ],
+    ids=["after-minus", "after-operator", "negated", "spaced-cast", "percent-escape"],
+)
+def test_negative_parameters_are_grouped_where_a_bare_sign_would_be_misread(
+    sql, value, expected
+) -> None:
+    """Oracle: the arithmetic value; `2--5` would be a comment and `@-3`
+    one operator token if the sign were not grouped."""
+    with database.connect(os.environ["SQLPROOF_TEST_DATABASE_URL"]) as conn:
+        assert conn.execute(sql, (value,)).fetchone()[0] == expected
 
 
 def test_a_failed_nested_transaction_preserves_the_outer_transaction() -> None:
