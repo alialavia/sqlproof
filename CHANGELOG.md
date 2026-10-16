@@ -5,6 +5,16 @@ All notable changes to SqlProof will be documented here. The format is based on
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While SqlProof
 remains in `0.x`, minor versions may include breaking changes.
 
+## [0.14.0](https://github.com/alialavia/sqlproof/compare/v0.13.0...v0.14.0) (2026-10-15)
+
+
+### Added
+
+* generate Postgres array columns, and sweep scale analysis in a template clone ([#161](https://github.com/alialavia/sqlproof/issues/161)) ([32fd453](https://github.com/alialavia/sqlproof/commit/32fd453ea93d0558ed6d6c21c20de6360efd4eb2))
+* **scale:** rank index_advisor suggestions alongside scale results ([#163](https://github.com/alialavia/sqlproof/issues/163)) ([8698846](https://github.com/alialavia/sqlproof/commit/869884665eb4e19c0369a64a17afc2c93a7f224e))
+* scenarios phases 3-4 and the remaining scale follow-ups ([#160](https://github.com/alialavia/sqlproof/issues/160)) ([2e99676](https://github.com/alialavia/sqlproof/commit/2e99676782dcd3703a24a72642552f2272f07adc))
+* **scenarios:** serialized YAML/JSON scenarios, export and MCP tools (phase 2) ([#158](https://github.com/alialavia/sqlproof/issues/158)) ([91ff953](https://github.com/alialavia/sqlproof/commit/91ff9532d3e4ba37fa0660aaadd93c5ea0cef921))
+
 ## [0.13.0](https://github.com/alialavia/sqlproof/compare/v0.12.0...v0.13.0) (2026-10-14)
 
 
