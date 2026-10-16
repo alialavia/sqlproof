@@ -206,7 +206,8 @@ def _copy_digest(compiled: CompiledScenario, schema: SchemaInfo) -> str:
     return digest.hexdigest()
 
 
-GOLDEN_DIGEST = "ab7b626a1a600dab5dff5f710360ca5e6bd6312b4806d9752c6f64926e18ea88"
+# Exact-unit numeric sampling replaces float-based draws; see Unreleased notes.
+GOLDEN_DIGEST = "3f16d07e866339956bdd2a344e2020cb20a15d3387cc602fc0f8cb35037a2e98"
 
 
 def test_golden_copy_bytes(schema: SchemaInfo) -> None:

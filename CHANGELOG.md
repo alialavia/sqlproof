@@ -5,6 +5,26 @@ All notable changes to SqlProof will be documented here. The format is based on
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While SqlProof
 remains in `0.x`, minor versions may include breaking changes.
 
+## [Unreleased]
+
+### Changed
+
+* **generators:** numeric values are sampled as exact decimal units instead
+  of through floats. Bulk loads and scenario `load()` calls can produce
+  different numeric values and subsequent draws for the same seed after this
+  upgrade. Recreate generated fixtures when upgrading; the same scenario,
+  schema, seed and SqlProof version still reproduce identical rows.
+
+### Fixed
+
+* **generators:** honor `numeric(p)` precision and zero scale, negative
+  scales, and precision beyond the Python Decimal context. Numeric CHECK
+  bounds preserve valid multiples of the declared unit, including bounds
+  between those multiples. Database introspection decodes signed scales for
+  columns, arrays and domains.
+* **database:** preserve fractional interval seconds when PostgreSQL omits
+  trailing zeros, for every IntervalStyle and interval array values.
+
 ## [0.13.0](https://github.com/alialavia/sqlproof/compare/v0.12.0...v0.13.0) (2026-10-14)
 
 
