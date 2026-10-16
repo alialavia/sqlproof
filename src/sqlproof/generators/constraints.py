@@ -103,6 +103,43 @@ def warn_unhonored_checks(
         )
 
 
+def warn_reference_checks(
+    table: Table,
+    referencing_columns: Iterable[str],
+    domain_checks: Sequence[CheckConstraint] = (),
+) -> None:
+    """Warn about CHECKs that restrict foreign-key columns.
+
+    A foreign-key column takes its parent's key values, which sqlproof does
+    not filter through the child's own CHECKs. A CHECK such as
+    `parent_id > 100` can therefore reject generated rows on load.
+    """
+    referencing = set(referencing_columns)
+    if not referencing:
+        return
+    for check in (*table.check_constraints, *domain_checks):
+        touched = sorted(_check_columns(check.expression) & referencing)
+        if not touched:
+            continue
+        warnings.warn(
+            f"CHECK constraint {check.expression!r} on {table.qualified_name} restricts "
+            f"foreign-key column(s) {', '.join(touched)}, which take their parent's key "
+            "values without that CHECK; generated rows may violate it. Narrow the "
+            "parent's key, or pass a columns={...} override for the column.",
+            UnhonoredCheckWarning,
+            stacklevel=3,
+        )
+
+
+def _check_columns(expression: str) -> set[str]:
+    analysis = analyze_check(expression)
+    columns: set[str] = set()
+    for refs in analysis.unrecognized:
+        columns |= refs
+    columns.update(atom.column for atom in analysis.atoms if atom.column)
+    return columns
+
+
 def unique_rows(rows: list[dict[str, Any]], columns: tuple[str, ...]) -> bool:
     from sqlproof.generators.rows import _hashable  # pyright: ignore[reportPrivateUsage]
 

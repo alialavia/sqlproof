@@ -125,7 +125,14 @@ file or a live connection: numeric comparisons and `BETWEEN` against literals
 `AND` of those, and `<shape> OR col IS NULL`. A CHECK sqlproof can't interpret
 (regexes, function calls, cross-column comparisons like `starts_at < ends_at`)
 raises a `sqlproof.exceptions.UnhonoredCheckWarning` naming the constraint — Postgres still
-enforces it, so pin the affected column with `columns={...}`.
+enforces it, so pin the affected column with `columns={...}`. The same warning
+reports a CHECK on a foreign-key column, whose values are the parent's keys. To
+refuse such schemas instead of warning, turn the warning into an error:
+
+```toml
+[tool.pytest.ini_options]
+filterwarnings = ["error::sqlproof.exceptions.UnhonoredCheckWarning"]
+```
 
 Useful far beyond tests: seed local dev databases, generate fixtures, replay
 schema-respecting data through migrations, sample child-row FKs from external

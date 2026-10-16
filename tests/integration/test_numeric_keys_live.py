@@ -108,3 +108,56 @@ def test_numeric_keys_and_references_survive_loading_unchanged(key_schema, sourc
     load_dataset(conn, proof.schema_info, sizes, seed=42, columns=columns)
     with conn.cursor(row_factory=postgres.dict_row) as cur:
         assert_stored(lambda sql: cur.execute(sql).fetchall(), dataset)
+
+
+WHOLE_CHILD_SQL = """
+CREATE TABLE prices (id numeric(5,2) PRIMARY KEY);
+CREATE TABLE int_refs (id int PRIMARY KEY, price_id int NOT NULL REFERENCES prices(id));
+CREATE TABLE big_refs (id int PRIMARY KEY, price_id bigint NOT NULL REFERENCES prices(id));
+CREATE TABLE whole_refs (
+    id int PRIMARY KEY, price_id numeric(5,0) NOT NULL REFERENCES prices(id)
+);
+"""
+WHOLE_CHILD_SIZES = {"prices": 4, "int_refs": 8, "big_refs": 8, "whole_refs": 8}
+
+
+@pytest.mark.parametrize("source", ["sql", "database"])
+@pytest.mark.parametrize("path", ["hypothesis", "bulk"])
+def test_whole_number_children_of_a_scaled_numeric_key_load_and_match(source, path):
+    """Oracle: PostgreSQL's foreign-key check and the stored rows. Every
+    child must load, and read back equal to what was generated."""
+    dsn = os.environ["SQLPROOF_TEST_DATABASE_URL"]
+    name = f"sqlproof_whole_refs_{uuid4().hex}"
+    with postgres.connect(dsn, autocommit=True) as conn:
+        conn.execute(f'CREATE SCHEMA "{name}"')
+        try:
+            conn.execute(f'SET search_path TO "{name}"')
+            conn.execute(WHOLE_CHILD_SQL)
+            proof = SqlProof.from_config(SqlProofConfig(connection_string=dsn, schema=name))
+            if source == "sql":
+                proof.schema_info = parse_schema_sql(WHOLE_CHILD_SQL, schema=name)
+
+            def assert_stored(query, dataset):
+                for table, rows in dataset.items():
+                    stored = query(f'SELECT * FROM "{name}"."{table}" ORDER BY id')
+                    assert stored == sorted(rows, key=lambda row: row["id"]), table
+
+            if path == "hypothesis":
+                @settings(max_examples=15, deadline=None, database=None)
+                @given(data=st.data())
+                def check(data):
+                    dataset = data.draw(proof.dataset_strategy(sizes=WHOLE_CHILD_SIZES))
+                    with proof.client_for_dataset(dataset) as db:
+                        assert_stored(db.query, dataset)
+
+                check()
+                return
+            dataset = {
+                table.name: list(rows)
+                for table, rows in generate_dataset(proof.schema_info, WHOLE_CHILD_SIZES, seed=5)
+            }
+            load_dataset(conn, proof.schema_info, WHOLE_CHILD_SIZES, seed=5)
+            with conn.cursor(row_factory=postgres.dict_row) as cur:
+                assert_stored(lambda sql: cur.execute(sql).fetchall(), dataset)
+        finally:
+            conn.execute(f'DROP SCHEMA "{name}" CASCADE')

@@ -16,13 +16,14 @@ import string
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import UTC, time, timedelta
+from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
 from hypothesis.strategies import SearchStrategy
 
 from sqlproof.exceptions import SqlProofGenerationError, SqlProofUsageError
-from sqlproof.generators.constraints import warn_unhonored_checks
+from sqlproof.generators.constraints import warn_reference_checks, warn_unhonored_checks
 from sqlproof.generators.narrowing import narrow_spec_for_checks
 
 # These four are private to rows.py, but they are the exact functions
@@ -72,8 +73,9 @@ BULK_TEXT_ALPHABET = string.ascii_letters + string.digits + " _-."
 # nullable column and match it". That plan doesn't work: there is no
 # such rate. `st.one_of(st.none(), strategy)` (columns.py) has no
 # stable null probability -- it's an artifact of which SqlProof entry
-# point draws from it. `core.py`'s `invariant()` draws via
-# `draw_example`, which is `SearchStrategy.example()`: internally
+# point draws from it. `core.py`'s `invariant()` used to draw via
+# `draw_example` (it now runs a full `@given` search), which is
+# `SearchStrategy.example()`: internally
 # `@given(strategy)` with `phases=(Phase.generate,)` and
 # `max_examples=10` only, so it never leaves Hypothesis's "cold start"
 # region and is heavily biased toward `one_of`'s first, simplest
@@ -501,17 +503,27 @@ def composite_key_values(
 def _parent_key_value(
     column: Column, fk: ForeignKey, index: int, parent_tables: Mapping[str, Table] | None,
 ) -> Any:
+    """The `index`-th parent key, in the form `column` stores it."""
+    return _as_reference(column, _referenced_key_value(column, fk, index, parent_tables))
+
+
+def _referenced_key_value(
+    column: Column, fk: ForeignKey, index: int, parent_tables: Mapping[str, Table] | None,
+) -> Any:
     parent = None
     if parent_tables is not None:
         schema = fk.referenced_schema or "public"
         parent = parent_tables.get(f"{schema}.{fk.referenced_table}")
-        if parent is None:
+        if parent is None and fk.referenced_schema is None:
+            # Only an unqualified reference may match by bare name. A
+            # reference into another schema (auth.users) must not pick up
+            # a same-named table here (public.users) and its key type.
             parent = parent_tables.get(fk.referenced_table)
     if parent is not None:
         referenced = parent.column(fk.referenced_columns[0])
         parent_fk = _foreign_key_for_column(parent, referenced.name)
         if parent.primary_key == (referenced.name,) and parent_fk is not None:
-            return _parent_key_value(referenced, parent_fk, index, parent_tables)
+            return _referenced_key_value(referenced, parent_fk, index, parent_tables)
         return _unique_column_value(parent, referenced, index)
     # Low-level callers historically supplied only parent counts. Numeric
     # keys need the parent's modifiers and CHECKs; guessing from the child
@@ -521,6 +533,45 @@ def _parent_key_value(
         msg = f"Numeric foreign key {column.name} requires parent_tables for {fk.referenced_table}."
         raise SqlProofGenerationError(msg)
     return _unique_value(fk.referenced_columns[0], column.type, index)
+
+
+_INTEGER_TYPES = frozenset(
+    {"smallint", "int2", "integer", "int", "int4", "serial", "smallserial",
+     "bigint", "int8", "bigserial"}
+)
+
+
+def _as_reference(column: Column, value: Any) -> Any:
+    """Convert a numeric parent key for the referencing column.
+
+    COPY parses text, so `1.00` cannot load into an integer column even
+    though PostgreSQL compares it equal to `1`. A whole key becomes an int.
+    A key the column cannot hold exactly would be rounded on load and then
+    fail the foreign key, so it raises instead.
+    """
+    if not isinstance(value, Decimal):
+        return value
+    base = column.type
+    while base.kind == "domain" and base.base is not None:
+        base = base.base
+    name = base.name.lower()
+    if name in _INTEGER_TYPES:
+        if value != value.to_integral_value():
+            msg = (
+                f"Cannot reference parent key {value} from integer column {column.name}: "
+                "the parent needs more rows than it has whole-number keys."
+            )
+            raise SqlProofGenerationError(msg)
+        return int(value)
+    if name in {"numeric", "decimal"} and len(base.modifiers) >= 2:
+        scale = base.modifiers[1]
+        if value.scaleb(scale) != value.scaleb(scale).to_integral_value():
+            msg = (
+                f"Cannot reference parent key {value} from {column.name}: "
+                f"numeric scale {scale} would round it."
+            )
+            raise SqlProofGenerationError(msg)
+    return value
 
 
 def _composite_key_space(
@@ -671,6 +722,15 @@ def bulk_table_rows(
             table, column, rng, null_frac=null_frac, unhonored_scope=unhonored_scope
         )
     warn_unhonored_checks(table, unhonored_scope, samplers)
+    referencing = [
+        column for column in table.columns
+        if fk_map.get(column.name) is not None and column.name not in override_map
+    ]
+    warn_reference_checks(
+        table,
+        [column.name for column in referencing],
+        [check for column in referencing for check in _domain_checks_as_column_checks(column)],
+    )
 
     def sampler(column: Column) -> Callable[[], Any]:
         """The column's sampler, built on first use for a column the loop

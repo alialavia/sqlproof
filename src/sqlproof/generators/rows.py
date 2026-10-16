@@ -16,7 +16,11 @@ from hypothesis.strategies import SearchStrategy
 
 from sqlproof.exceptions import SqlProofGenerationError
 from sqlproof.generators.columns import strategy_for_column
-from sqlproof.generators.constraints import refine_for_checks, warn_unhonored_checks
+from sqlproof.generators.constraints import (
+    refine_for_checks,
+    warn_reference_checks,
+    warn_unhonored_checks,
+)
 from sqlproof.generators.narrowing import (
     array_element_type,
     element_domain_checks,
@@ -135,6 +139,7 @@ def table_rows_strategy(
     # values come from a type strategy; a CHECK sqlproof can't read
     # that touches one of them may be violated, so say so.
     warn_unhonored_checks(table, unhonored_scope, refined_by_column)
+    _warn_reference_checks(table, columns)
 
     def refined_strategy(column: Column) -> SearchStrategy[Any]:
         """The column's CHECK-refined strategy, built on first use for a
@@ -578,17 +583,15 @@ def _numeric_key_domain(
         return len(values), values.__getitem__
     low, high = decimal_unit_bounds(spec)
     places = spec.places if spec.places is not None else 2
-    start = min(max(1, low), high)
-    upward = high - start + 1
+    coefficient, rank = _whole_units_first(low, high, places)
     blocked: set[int] = set()
     for value in spec.excluded_values:
         lower, upper = decimal_unit_bounds(
             TypeSpec(kind="decimal", min_value=value, max_value=value, places=places)
         )
         if lower == upper and low <= lower <= high:
-            blocked.add(lower - start if lower >= start else upward + start - 1 - lower)
+            blocked.add(rank(lower))
     skipped = sorted(blocked)
-    coefficient = _integer_from_one(low, high)
 
     def nth(index: int) -> Decimal:
         for position in skipped:
@@ -673,6 +676,92 @@ def _counting_array(count: int, nth: Callable[[int], Any], index: int) -> list[A
         remaining //= count
     return digits
 
+
+
+def _warn_reference_checks(table: Table, overrides: Any) -> None:
+    """Warn once per table about CHECKs on foreign-key columns whose values
+    come from the parent (an override replaces those values)."""
+    referencing = [
+        column for column in table.columns
+        if _foreign_key_for_column(table, column.name) is not None
+        and _column_override(overrides, table, column.name) is None
+    ]
+    domain_checks = [
+        check for column in referencing for check in _domain_checks_as_column_checks(column)
+    ]
+    warn_reference_checks(table, [column.name for column in referencing], domain_checks)
+
+
+def _whole_units_first(
+    low: int, high: int, places: int,
+) -> tuple[Callable[[int], int], Callable[[int], int]]:
+    """Order the storage units `low..high` so whole numbers come first.
+
+    Returns `(order, rank)`: `order(p)` is the p-th unit and `rank(u)` its
+    position. Whole numbers follow `_integer_from_one` (1, 2, ..., then 0,
+    -1, ...), so a `numeric(5,2)` key counts 1.00, 2.00, ... and an integer
+    column can still reference it. Fractional units follow, in the same
+    order, until the full domain is used. Scales of zero or below have
+    only whole units, which keeps their order unchanged.
+    """
+    step = 10**places if places > 0 else 1
+    whole_low, whole_high = -((-low) // step), high // step
+    whole_count = max(0, whole_high - whole_low + 1)
+    start = min(max(1, low), high)
+    if step == 1:
+        upward = high - start + 1
+        return _integer_from_one(low, high), lambda unit: (
+            unit - start if unit >= start else upward + start - 1 - unit
+        )
+
+    def multiples(first: int, last: int) -> int:
+        return last // step - (first - 1) // step if first <= last else 0
+
+    def fractions(first: int, last: int) -> int:
+        return (last - first + 1) - multiples(first, last) if first <= last else 0
+
+    upward_fractions = fractions(start, high)
+
+    def fractional(position: int) -> int:
+        # The position-th non-whole unit of `_integer_from_one(low, high)`:
+        # upward from `start`, then downward from `start - 1`.
+        if position < upward_fractions:
+            lo, hi = start, high
+            while lo < hi:
+                mid = (lo + hi) // 2
+                if fractions(start, mid) > position:
+                    hi = mid
+                else:
+                    lo = mid + 1
+            return lo
+        position -= upward_fractions
+        lo, hi = low, start - 1
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if fractions(mid, start - 1) > position:
+                lo = mid
+            else:
+                hi = mid - 1
+        return lo
+
+    whole = _integer_from_one(whole_low, whole_high) if whole_count else None
+    whole_start = min(max(1, whole_low), whole_high)
+    whole_upward = whole_high - whole_start + 1
+
+    def order(position: int) -> int:
+        if whole is not None and position < whole_count:
+            return whole(position) * step
+        return fractional(position - whole_count)
+
+    def rank(unit: int) -> int:
+        if unit % step == 0 and whole_count:
+            q = unit // step
+            return q - whole_start if q >= whole_start else whole_upward + whole_start - 1 - q
+        if unit >= start:
+            return whole_count + fractions(start, unit) - 1
+        return whole_count + upward_fractions + fractions(unit, start - 1) - 1
+
+    return order, rank
 
 
 def _integer_from_one(low: int, high: int) -> Callable[[int], int]:
