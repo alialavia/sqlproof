@@ -88,12 +88,10 @@ def test_in_memory_invariant_refuses_foreign_qualifier(proof: SqlProof) -> None:
 def test_refusal_happens_before_any_dataset_is_drawn(
     proof: SqlProof, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from sqlproof import core
-
     def fail_if_called(*args: object, **kwargs: object) -> object:
         raise AssertionError("dataset should not be drawn for a refused query")
 
-    monkeypatch.setattr(core, "draw_example", fail_if_called)
+    monkeypatch.setattr(proof, "dataset_strategy", fail_if_called)
     with pytest.raises(SqlProofUsageError):
         proof.invariant(
             "refused",

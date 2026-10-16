@@ -17,6 +17,7 @@ import pytest
 from hypothesis import settings
 from hypothesis import strategies as st
 
+from sqlproof import SqlProof
 from sqlproof.exceptions import SqlProofPropertyFailure
 from sqlproof.runners.property import run_property
 
@@ -72,3 +73,113 @@ def test_a_derandomized_profile_stays_derandomized(tmp_path: Path) -> None:
         second = _fail(tmp_path / "b", None)
     assert first["seed"] is None and second["seed"] is None
     assert first["dataset"] == second["dataset"]
+
+
+@pytest.fixture
+def recorded_proof(tmp_path: Path, monkeypatch):
+    schema = tmp_path / "schema.sql"
+    schema.write_text("CREATE TABLE numbers (value integer NOT NULL)", encoding="utf-8")
+    proof = SqlProof.from_schema_file(schema)
+    observed = []
+    original = proof.client_for_dataset
+
+    @contextlib.contextmanager
+    def record(dataset):
+        observed.append(dataset)
+        with original(dataset) as client:
+            yield client
+
+    monkeypatch.setattr(proof, "client_for_dataset", record)
+    return proof, observed
+
+
+def _imperative_run(proof, method, seed, *, expect_failure=False):
+    if method == "check":
+
+        def property_holds(db):
+            assert not expect_failure, "deliberate failure"
+
+        proof.check(
+            "seeded numbers", sizes={"numbers": 1}, property=property_holds, runs=10, seed=seed
+        )
+    else:
+        proof.invariant(
+            "seeded numbers",
+            sizes={"numbers": 1},
+            query="SELECT value FROM numbers",
+            expect_empty=expect_failure,
+            runs=10,
+            seed=seed,
+        )
+
+
+@pytest.mark.parametrize("method", ["check", "invariant"])
+@pytest.mark.parametrize("seed", [0, 1234])
+def test_the_same_seed_repeats_the_generated_datasets(recorded_proof, method, seed) -> None:
+    """Oracle: two independent calls with one seed must have the same trace."""
+    proof, observed = recorded_proof
+    with _profile("sqlproof-test-imperative", derandomize=False):
+        _imperative_run(proof, method, seed)
+        first = list(observed)
+        observed.clear()
+        _imperative_run(proof, method, seed)
+    assert len(first) == 10
+    assert observed == first
+
+
+@pytest.mark.parametrize("method", ["check", "invariant"])
+def test_different_seeds_explore_different_datasets(recorded_proof, method) -> None:
+    """A constant dataset stream must not satisfy the repeatability check."""
+    proof, observed = recorded_proof
+    _imperative_run(proof, method, 0)
+    first = list(observed)
+    observed.clear()
+    _imperative_run(proof, method, 1234)
+    assert observed != first
+
+
+@pytest.mark.parametrize("method", ["check", "invariant"])
+def test_imperative_failures_record_the_requested_seed(recorded_proof, method) -> None:
+    """Oracle: the public exception must carry the caller's replay seed."""
+    proof, _ = recorded_proof
+    with pytest.raises(SqlProofPropertyFailure) as failure:
+        _imperative_run(proof, method, 0, expect_failure=True)
+    assert failure.value.counterexample["seed"] == 0
+
+
+def test_unseeded_invariants_record_the_seed_hypothesis_chose(recorded_proof) -> None:
+    """Oracle: the failure carries a replay seed even when none was supplied."""
+    proof, _ = recorded_proof
+    with (
+        _profile("sqlproof-test-invariant-random", derandomize=False),
+        pytest.raises(SqlProofPropertyFailure) as failure,
+    ):
+        _imperative_run(proof, "invariant", None, expect_failure=True)
+    assert isinstance(failure.value.counterexample["seed"], int)
+
+
+def test_a_derandomized_invariant_does_not_invent_a_seed(recorded_proof) -> None:
+    """A derandomized profile is reproducible without a numeric seed."""
+    proof, _ = recorded_proof
+    with (
+        _profile("sqlproof-test-invariant-derandomize", derandomize=True),
+        pytest.raises(SqlProofPropertyFailure) as failure,
+    ):
+        _imperative_run(proof, "invariant", None, expect_failure=True)
+    assert failure.value.counterexample["seed"] is None
+
+
+def test_an_invariant_shrinks_to_the_smallest_violating_dataset(recorded_proof) -> None:
+    """Oracle: exactly one row is the smallest nonempty result set."""
+    proof, _ = recorded_proof
+    with pytest.raises(SqlProofPropertyFailure) as failure:
+        proof.invariant(
+            "no numbers",
+            sizes={"numbers": st.integers(0, 6)},
+            query="SELECT value FROM numbers",
+            runs=20,
+            seed=1234,
+        )
+    counterexample = failure.value.counterexample
+    assert counterexample["property_name"] == "no numbers"
+    assert counterexample["dataset"] == {"numbers": [{"value": 0}]}

@@ -19,10 +19,9 @@ from sqlproof.client import (
     normalize_identifier,
 )
 from sqlproof.config import ExternalSeed, ExternalTableSpec, SqlProofConfig
-from sqlproof.exceptions import SqlProofPropertyFailure, SqlProofUsageError
+from sqlproof.exceptions import SqlProofUsageError
 from sqlproof.generators.graph import ColumnOverrides, Dataset, SizeSpec, dataset_strategy
 from sqlproof.generators.rows import table_rows_strategy
-from sqlproof.generators.sampling import draw_example
 from sqlproof.schema.dependency_graph import resolve_insertion_plan
 from sqlproof.schema.fingerprint import compute
 from sqlproof.schema.introspect import introspect_schema
@@ -210,11 +209,18 @@ class SqlProof:
     ) -> None:
         from sqlproof.runners.property import run_property
 
-        del name, setup, seed, timeout_ms, commit
+        del name, setup, timeout_ms, commit
         if not callable(property):
             msg = "property must be callable"
             raise TypeError(msg)
-        run_property(self, property, sizes=sizes, runs=runs, failure_dir=Path(".sqlproof/failures"))
+        run_property(
+            self,
+            property,
+            sizes=sizes,
+            runs=runs,
+            failure_dir=Path(".sqlproof/failures"),
+            seed=seed,
+        )
 
     def invariant(
         self,
@@ -240,6 +246,10 @@ class SqlProof:
         error, ...) propagate unchanged: a query that cannot run is never
         reported as a passing invariant.
 
+        ``seed`` repeats Hypothesis's search, just as it does for
+        ``check()`` and ``@sqlproof``. Failing datasets are shrunk and the
+        counterexample records the seed used by the run.
+
         Without a database connection (``from_schema_file`` and no DSN)
         there is nothing to execute SQL on, so only a plain
         ``SELECT <columns> FROM <table>`` -- no WHERE, JOIN, GROUP BY,
@@ -247,27 +257,20 @@ class SqlProof:
         other query raises ``SqlProofUsageError`` rather than being
         evaluated with its predicates silently ignored.
         """
-        del seed, timeout_ms
+        from sqlproof.runners.property import run_invariant
+
+        del timeout_ms
         if self._db_manager is None:
             _require_in_memory_evaluable(query, self.schema_info)
-        strategy = self.dataset_strategy(sizes=sizes)
-        for run_index in range(runs):
-            dataset = draw_example(strategy)
-            with self.client_for_dataset(dataset) as client:
-                rows = client.query(query)
-            failed = bool(rows) if expect_empty else not rows
-            if failed:
-                payload = {
-                    "property_name": name,
-                    "runs": run_index + 1,
-                    "row_context": {},
-                    "dataset": dataset,
-                    "schema_fingerprint": self.schema_fingerprint,
-                }
-                raise SqlProofPropertyFailure(
-                    f"Invariant {name!r} failed: query returned {len(rows)} rows.",
-                    counterexample=payload,
-                )
+        run_invariant(
+            self,
+            name=name,
+            sizes=sizes,
+            query=query,
+            expect_empty=expect_empty,
+            runs=runs,
+            seed=seed,
+        )
 
     def disconnect(self) -> None:
         if self._db_manager is not None:

@@ -156,6 +156,51 @@ def run_property(
     execute()
 
 
+def run_invariant(
+    proof: Any,
+    *,
+    name: str,
+    sizes: Mapping[str, SizeSpec],
+    query: str,
+    expect_empty: bool,
+    runs: int,
+    seed: int | None = None,
+) -> None:
+    """Search for a violating dataset without wrapping database errors."""
+    strategy = proof.dataset_strategy(sizes=sizes)
+    run_count = 0
+
+    @given(strategy)
+    @settings(
+        max_examples=runs,
+        deadline=None,
+        suppress_health_check=[HealthCheck.function_scoped_fixture],
+    )
+    def execute(dataset: dict[str, list[dict[str, Any]]]) -> None:
+        nonlocal run_count
+        run_count += 1
+        with proof.client_for_dataset(dataset) as client:
+            rows = client.query(query)
+        failed = bool(rows) if expect_empty else not rows
+        if failed:
+            payload = {
+                "property_name": name,
+                "seed": _seed_in_use(execute, seed),
+                "runs": run_count,
+                "row_context": {},
+                "dataset": dataset,
+                "schema_fingerprint": proof.schema_fingerprint,
+            }
+            raise SqlProofPropertyFailure(
+                f"Invariant {name!r} failed: query returned {len(rows)} rows.",
+                counterexample=payload,
+            )
+
+    if seed is not None:
+        execute = hypothesis_seed(seed)(execute)
+    execute()
+
+
 def _seed_in_use(wrapped: Any, explicit: int | None) -> int | None:
     """The seed this run used, for the counterexample: the one passed in,
     else the one Hypothesis drew (or was forced to with `--hypothesis-seed`).

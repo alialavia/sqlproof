@@ -73,6 +73,13 @@ Each run loads a generated dataset into the database inside a savepoint, execute
 the database, such as an unknown table or a syntax error, are raised as-is and
 never count as a pass.
 
+Pass `seed=1234` to `check()` or `invariant()` to repeat a search with the
+same schema, strategies and dependency versions. An explicit seed disables
+Hypothesis's example database for that run. Without a seed, Hypothesis's
+normal profile and `--hypothesis-seed` settings apply. Failing invariants
+shrink their datasets, and the exception's counterexample includes the seed
+used (or `None` for a derandomized run).
+
 `invariant()` needs a database connection (`from_connection_string`) to run
 arbitrary SQL. A proof built only from a schema file evaluates queries in
 memory, which handles just a plain `SELECT <columns> FROM <table>`. Any other
