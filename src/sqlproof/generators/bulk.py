@@ -39,7 +39,9 @@ from sqlproof.generators.rows import (
     _element_checks_as_column_checks,  # pyright: ignore[reportPrivateUsage]
     _foreign_key_for_column,  # pyright: ignore[reportPrivateUsage]
     _is_single_column_unique,  # pyright: ignore[reportPrivateUsage]
+    _unique_column_value,  # pyright: ignore[reportPrivateUsage]
     _unique_value,  # pyright: ignore[reportPrivateUsage]
+    _warn_numeric_key_checks,  # pyright: ignore[reportPrivateUsage]
 )
 from sqlproof.generators.typespec import (
     BINARY_MAX_SIZE,
@@ -422,6 +424,7 @@ def _assign_composite_key(
     parent_counts: Mapping[str, int],
     fk_map: Mapping[str, ForeignKey | None],
     key_partition: tuple[tuple[str, ...], tuple[str, ...]],
+    parent_tables: Mapping[str, Table] | None = None,
 ) -> dict[str, Any]:
     """Per-row core of `composite_key_values`, given the table-invariant
     `fk_map` and `key_partition` already computed. See
@@ -444,10 +447,10 @@ def _assign_composite_key(
         else:
             position = remaining
             remaining = 0
-        values[name] = _unique_value(name, column.type, position)
+        values[name] = _parent_key_value(column, fk, position, parent_tables)
     for name in unbounded_names:
         column = table.column(name)
-        values[name] = _unique_value(name, column.type, remaining)
+        values[name] = _unique_column_value(table, column, remaining)
         remaining = 0
     return values
 
@@ -456,6 +459,7 @@ def composite_key_values(
     table: Table,
     index: int,
     parent_counts: Mapping[str, int] | None = None,
+    *, parent_tables: Mapping[str, Table] | None = None,
 ) -> dict[str, Any]:
     """Assign the `index`-th distinct composite key for `table`.
 
@@ -489,7 +493,34 @@ def composite_key_values(
     """
     fk_map = _foreign_key_map(table)
     key_partition = _composite_key_partition(table, fk_map)
-    return _assign_composite_key(table, index, parent_counts or {}, fk_map, key_partition)
+    return _assign_composite_key(
+        table, index, parent_counts or {}, fk_map, key_partition, parent_tables
+    )
+
+
+def _parent_key_value(
+    column: Column, fk: ForeignKey, index: int, parent_tables: Mapping[str, Table] | None,
+) -> Any:
+    parent = None
+    if parent_tables is not None:
+        schema = fk.referenced_schema or "public"
+        parent = parent_tables.get(f"{schema}.{fk.referenced_table}")
+        if parent is None:
+            parent = parent_tables.get(fk.referenced_table)
+    if parent is not None:
+        referenced = parent.column(fk.referenced_columns[0])
+        parent_fk = _foreign_key_for_column(parent, referenced.name)
+        if parent.primary_key == (referenced.name,) and parent_fk is not None:
+            return _parent_key_value(referenced, parent_fk, index, parent_tables)
+        return _unique_column_value(parent, referenced, index)
+    # Low-level callers historically supplied only parent counts. Numeric
+    # keys need the parent's modifiers and CHECKs; guessing from the child
+    # type can silently reconstruct a key the parent never generated.
+    spec, _ = spec_for_column(column)
+    if spec.kind == "decimal":
+        msg = f"Numeric foreign key {column.name} requires parent_tables for {fk.referenced_table}."
+        raise SqlProofGenerationError(msg)
+    return _unique_value(fk.referenced_columns[0], column.type, index)
 
 
 def _composite_key_space(
@@ -561,6 +592,7 @@ def bulk_table_rows(
     count: int,
     rng: random.Random,
     parent_counts: Mapping[str, int],
+    parent_tables: Mapping[str, Table] | None = None,
     distribution: str = "uniform",
     zipf_alpha: float = 1.2,
     null_frac: float = DEFAULT_NULL_FRAC,
@@ -572,6 +604,10 @@ def bulk_table_rows(
     `_unique_value` the Hypothesis path uses, so both paths produce
     identical keys. That is what lets a foreign key be satisfied by
     arithmetic -- the parent list never has to exist in memory.
+
+    `parent_tables` supplies the definitions used to reconstruct parent
+    values, including numeric modifiers and CHECKs. `generate_dataset`
+    supplies it automatically; low-level numeric-FK callers must pass it.
 
     Composite primary keys are assigned the same way, via
     `composite_key_values`: a mixed-radix decomposition of the row
@@ -589,6 +625,7 @@ def bulk_table_rows(
     for throughput makes the same mistake more expensive, not less.
     """
     columns = columns or {}
+    _warn_numeric_key_checks(table, columns)
     fk_map = _foreign_key_map(table)
     unique_names = _single_column_unique_names(table)
     # Table-invariant like fk_map/unique_names: which columns carry an
@@ -654,7 +691,7 @@ def bulk_table_rows(
     for index in range(count):
         row: dict[str, Any] = {}
         key_values = (
-            _assign_composite_key(table, index, parent_counts, fk_map, key_partition)
+            _assign_composite_key(table, index, parent_counts, fk_map, key_partition, parent_tables)
             if key_partition is not None
             else {}
         )
@@ -687,7 +724,17 @@ def bulk_table_rows(
                     if value is not GENERATE:
                         row[name] = value
                         continue
-                row[name] = _unique_value(name, column.type, index)
+                fk = fk_map.get(name)
+                if fk is not None:
+                    if index >= parent_counts.get(fk.referenced_table, 0):
+                        msg = (
+                            f"Cannot generate {table.qualified_name}.{name}: "
+                            "not enough distinct parent keys."
+                        )
+                        raise SqlProofGenerationError(msg)
+                    row[name] = _parent_key_value(column, fk, index, parent_tables)
+                else:
+                    row[name] = _unique_column_value(table, column, index)
                 continue
             # Branch order below mirrors `rows.py`'s per-row loop exactly:
             # PK, then is_generated, then the override, then default. The
@@ -724,11 +771,10 @@ def bulk_table_rows(
                 parent_index = parent_index_for(
                     index, available, rng, distribution, zipf_alpha
                 )
-                referenced = fk.referenced_columns[0]
-                row[name] = _unique_value(referenced, column.type, parent_index)
+                row[name] = _parent_key_value(column, fk, parent_index, parent_tables)
                 continue
             if name in unique_names:
-                row[name] = _unique_value(name, column.type, index)
+                row[name] = _unique_column_value(table, column, index)
                 continue
             row[name] = sampler(column)()
         yield row

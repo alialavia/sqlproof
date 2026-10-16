@@ -21,11 +21,14 @@ from sqlproof.generators.narrowing import (
     array_element_type,
     element_domain_checks,
     narrow_array_elements,
+    narrow_spec_for_checks,
 )
 from sqlproof.generators.typespec import (
     DATE_WINDOW,
     DATETIME_WINDOW,
     TypeSpec,
+    decimal_from_units,
+    decimal_unit_bounds,
     spec_for_type,
     spec_is_empty,
 )
@@ -70,6 +73,7 @@ def table_rows_strategy(
     parent_rows = parent_rows or {}
     rows_by_table = rows_by_table or {}
     columns = columns or {}
+    _warn_numeric_key_checks(table, columns)
 
     # Composite UNIQUEs (>1 column) and composite PRIMARY KEYs both
     # require the generator to produce distinct tuples across rows.
@@ -194,7 +198,7 @@ def table_rows_strategy(
                 if single_key and not isinstance(
                     _column_override(columns, table, column.name), PinnedKey
                 ):
-                    row[column.name] = _unique_value(column.name, column.type, index)
+                    row[column.name] = _primary_key_value(table, column, index, parent_rows)
                     continue
                 if column.is_generated:
                     continue
@@ -213,7 +217,7 @@ def table_rows_strategy(
                         row[column.name] = value
                         continue
                     if single_key:
-                        row[column.name] = _unique_value(column.name, column.type, index)
+                        row[column.name] = _primary_key_value(table, column, index, parent_rows)
                         continue
                 if column.default is not None:
                     continue
@@ -234,7 +238,7 @@ def table_rows_strategy(
                     )
                     raise SqlProofGenerationError(msg)
                 if _is_single_column_unique(table, column.name):
-                    row[column.name] = _unique_value(column.name, column.type, index)
+                    row[column.name] = _unique_column_value(table, column, index)
                     continue
                 row[column.name] = draw(refined_strategy(column))
 
@@ -437,12 +441,16 @@ def _domain_checks_as_column_checks(column: Column) -> tuple[CheckConstraint, ..
     that happen to contain "value" as a substring).
     """
     pg_type = column.type
-    if pg_type.kind != "domain" or not pg_type.check_expressions:
-        return ()
-    return tuple(
-        CheckConstraint(expression=_VALUE_PLACEHOLDER_RE.sub(column.name, expr))
-        for expr in pg_type.check_expressions
-    )
+    checks: list[CheckConstraint] = []
+    while pg_type.kind == "domain":
+        checks.extend(
+            CheckConstraint(expression=_VALUE_PLACEHOLDER_RE.sub(column.name, expr))
+            for expr in pg_type.check_expressions
+        )
+        if pg_type.base is None:
+            break
+        pg_type = pg_type.base
+    return tuple(checks)
 
 
 def _element_checks_as_column_checks(column: Column) -> tuple[CheckConstraint, ...]:
@@ -471,7 +479,50 @@ def _hashable(value: Any) -> Any:
     return value
 
 
-def _unique_value(column_name: str, pg_type: str | PgType, index: int) -> Any:
+def _primary_key_value(table: Table, column: Column, index: int, parents: DatasetRows) -> Any:
+    fk = _foreign_key_for_column(table, column.name)
+    if fk is None:
+        return _unique_column_value(table, column, index)
+    parent_key = _parent_rows_key(fk, parents)
+    available = parents.get(parent_key or "", [])
+    if index >= len(available):
+        msg = (
+            f"Cannot generate {table.qualified_name}.{column.name}: "
+            "not enough distinct parent keys."
+        )
+        raise SqlProofGenerationError(msg)
+    return available[index][fk.referenced_columns[0]]
+
+
+def _unique_column_value(table: Table, column: Column, index: int) -> Any:
+    return _unique_value(column.name, column.type, index, checks=table.check_constraints)
+
+
+def _warn_numeric_key_checks(table: Table, overrides: ColumnOverrides) -> None:
+    names: list[str] = []
+    checks = list(table.check_constraints)
+    for column in table.columns:
+        base = column.type
+        while base.kind == "domain" and base.base is not None:
+            base = base.base
+        if base.kind != "scalar" or base.name.lower() not in {"numeric", "decimal"}:
+            continue
+        override = _column_override(overrides, table, column.name)
+        primary = table.primary_key == (column.name,) and not isinstance(override, PinnedKey)
+        unique = (
+            _is_single_column_unique(table, column.name) and override is None
+            and column.default is None and _foreign_key_for_column(table, column.name) is None
+        )
+        if primary or unique:
+            names.append(column.name)
+            checks.extend(_domain_checks_as_column_checks(column))
+    warn_unhonored_checks(table, checks, names)
+
+
+def _unique_value(
+    column_name: str, pg_type: str | PgType, index: int,
+    *, checks: tuple[CheckConstraint, ...] = (),
+) -> Any:
     """The `index`-th value of a single-column key or UNIQUE column.
 
     Takes the column's type, or just its name. With the type, an array
@@ -480,6 +531,20 @@ def _unique_value(column_name: str, pg_type: str | PgType, index: int) -> Any:
         element = array_element_type(pg_type)
         if element is not None:
             return _unique_array(column_name, pg_type, element, index)
+        base = pg_type
+        while base.kind == "domain" and base.base is not None:
+            base = base.base
+        if base.name.lower() in {"numeric", "decimal"}:
+            capacity, nth = _numeric_key_domain(
+                column_name, pg_type, tuple(check.expression for check in checks)
+            )
+            if index >= capacity:
+                msg = (
+                    f"Cannot generate {column_name}: only {capacity} distinct non-NULL "
+                    "numeric key values satisfy its type and recognized CHECKs."
+                )
+                raise SqlProofGenerationError(msg)
+            return nth(index)
         pg_type = pg_type.name
     normalized = pg_type.lower()
     if normalized.endswith("[]"):
@@ -495,6 +560,44 @@ def _unique_value(column_name: str, pg_type: str | PgType, index: int) -> Any:
     if normalized == "uuid":
         return str(UUID(int=value))
     return f"{column_name}_{value}"
+
+
+@lru_cache(maxsize=256)
+def _numeric_key_domain(
+    name: str, pg_type: PgType, expressions: tuple[str, ...],
+) -> tuple[int, Callable[[int], Decimal]]:
+    """A bounded, deterministic enumeration, shared by keys and references."""
+    column = Column(name, pg_type, False, None, False)
+    checks = tuple(CheckConstraint(expr) for expr in expressions)
+    checks += _domain_checks_as_column_checks(column)
+    spec = narrow_spec_for_checks(spec_for_type(pg_type), column, checks)
+    if spec_is_empty(spec):
+        return 0, lambda _index: Decimal(0)
+    if spec.kind == "enum":
+        values = tuple(Decimal(value) for value in spec.enum_values)
+        return len(values), values.__getitem__
+    low, high = decimal_unit_bounds(spec)
+    places = spec.places if spec.places is not None else 2
+    start = min(max(1, low), high)
+    upward = high - start + 1
+    blocked: set[int] = set()
+    for value in spec.excluded_values:
+        lower, upper = decimal_unit_bounds(
+            TypeSpec(kind="decimal", min_value=value, max_value=value, places=places)
+        )
+        if lower == upper and low <= lower <= high:
+            blocked.add(lower - start if lower >= start else upward + start - 1 - lower)
+    skipped = sorted(blocked)
+    coefficient = _integer_from_one(low, high)
+
+    def nth(index: int) -> Decimal:
+        for position in skipped:
+            if position > index:
+                break
+            index += 1
+        return decimal_from_units(coefficient(index), places)
+
+    return high - low + 1 - len(skipped), nth
 
 
 _DATE_SPAN = 1_000_000
@@ -515,10 +618,19 @@ def _unique_array(column_name: str, pg_type: PgType, element: PgType, index: int
     column: element domains resolve to their base type, and an integer
     element keeps inside its domain's bounds (`pos[]`)."""
     spec = _narrowed_element_spec(pg_type)
+    element_type = element
     while element.kind == "domain" and element.base is not None:
         element = element.base
     if element.kind == "enum" and element.enum_values:
         return _counting_array(len(element.enum_values), element.enum_values.__getitem__, index)
+    if element.name.lower() in {"numeric", "decimal"}:
+        capacity, nth = _numeric_key_domain(column_name, element_type, ())
+        if capacity == 0:
+            if index == 0:
+                return []
+            msg = f"Cannot generate {column_name}: only the empty numeric array is admissible."
+            raise SqlProofGenerationError(msg)
+        return _counting_array(capacity, nth, index)
     if spec is not None and spec.kind == "integer" and not spec_is_empty(spec):
         assert spec.min_value is not None and spec.max_value is not None
         low, high = int(spec.min_value), int(spec.max_value)

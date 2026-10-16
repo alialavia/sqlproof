@@ -40,10 +40,13 @@ CHECKs narrow the values further. Primary keys, single-column UNIQUE values and
 foreign keys follow their own assignment paths: keys are usually deterministic
 and foreign keys select existing parent keys. Do not assume those columns
 explore the full type domain or nullable foreign keys explore missing links.
-The key-assignment path can also exceed a narrow column's precision or ignore
-its CHECKs. Numeric key values can round to duplicates at a negative scale.
-These are current limitations of key assignment; ordinary `columns=` overrides
-do not replace single-column primary keys.
+Numeric keys and single-column UNIQUE values are enumerated as distinct
+multiples of their declared unit, with recognized CHECKs and domain CHECKs
+applied. Requests beyond that finite non-NULL domain raise a generation error.
+Bulk foreign keys and scenario references use the parent's assignment rules,
+including its precision and scale. Other key types can still exceed narrow
+type bounds or ignore CHECKs. Ordinary `columns=` overrides do not replace
+single-column primary keys.
 
 | PostgreSQL type | Default search domain | Cases to request explicitly |
 | --- | --- | --- |

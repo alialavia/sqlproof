@@ -175,37 +175,32 @@ def test_multiple_composite_uniques_are_all_honored(
     deadline=None,
     suppress_health_check=[HealthCheck.function_scoped_fixture],
 )
-def test_composite_with_missing_columns_does_not_falsely_collide(
-    data: st.DataObject,
-) -> None:
-    """Invariant (iv): rows missing any of the composite-key columns
-    (e.g. a deferred FK column that was left NULL) shouldn't be
-    compared against each other as if their NULL values collide.
-
-    The behavior we want: rows that don't have all the composite-key
-    columns in their row dict are skipped during the uniqueness check.
-
-    Failure case it addresses: a cyclic schema (per PR #47) leaves a
-    deferred FK column unset on every row; the uniqueness check
-    incorrectly says all those rows have the same NULL tuple and
-    discards every example.
-    """
-    # We can't directly model 'missing column' easily through the
-    # public strategy API — the generator always populates non-
-    # default, non-deferred columns. Instead, this test documents
-    # the invariant: a table where one composite-key column happens
-    # to be a nullable column with no FK fallback should still
-    # produce distinct rows. The generator will set those columns
-    # to NULL; the uniqueness check should treat NULL ≠ NULL
-    # (matching SQL's NULL-in-UNIQUE semantics).
+def test_composite_unique_allows_repeated_values_when_one_column_is_null(data) -> None:
+    """Oracle: SQL UNIQUE treats NULL as distinct, even when other values repeat."""
     table = _table(
         "rows_with_optional",
         columns=(("id", False), ("a", False), ("b", True)),
         unique_constraints=(("a", "b"),),
     )
-    rows = data.draw(table_rows_strategy(table, count=3))
-    # If `b` happens to be None for multiple rows, SQL would allow it
-    # (NULL distinct in standard UNIQUE). Our check should also allow
-    # it. So we just assert the generator didn't refuse to produce
-    # rows entirely.
-    assert len(rows) == 3
+    value = data.draw(st.integers())
+    rows = data.draw(table_rows_strategy(
+        table, count=3, columns={"rows_with_optional.a": value, "rows_with_optional.b": st.none()},
+    ))
+    assert [(row["a"], row["b"]) for row in rows] == [(value, None)] * 3
+
+
+def test_composite_unique_rejects_repeated_values_when_no_column_is_null() -> None:
+    import pytest
+    from hypothesis import find
+    from hypothesis.errors import Unsatisfiable
+
+    table = _table(
+        "rows_with_optional",
+        columns=(("id", False), ("a", False), ("b", True)),
+        unique_constraints=(("a", "b"),),
+    )
+    strategy = table_rows_strategy(
+        table, count=2, columns={"rows_with_optional.a": 7, "rows_with_optional.b": 8},
+    )
+    with pytest.raises(Unsatisfiable):
+        find(strategy, lambda _rows: True)

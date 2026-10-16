@@ -172,6 +172,12 @@ def _admits(spec: TypeSpec, value: Any, *, check_min_size: bool) -> bool:
             # A literal that isn't a number of this type (only possible
             # in an unvalidated schema file) can't be stored here.
             return False
+        if spec.kind == "decimal" and spec.places is not None:
+            low, high = decimal_unit_bounds(
+                replace(spec, min_value=Decimal(value), max_value=Decimal(value))
+            )
+            if low != high:
+                return False
         if spec.min_value is not None and not _numeric_compare(value, ">=", spec.min_value):
             return False
         return spec.max_value is None or _numeric_compare(value, "<=", spec.max_value)

@@ -282,6 +282,8 @@ def generate_dataset(
     plan = insertion_plan(schema)
     rng = random.Random(seed)
     counts: dict[str, int] = {}
+    parent_tables = {table.qualified_name: table for table in schema.tables}
+    parent_tables.update({table.name: table for table in schema.tables})
     for table in plan.ordered_tables:
         count = size_for(sizes, table)
         if count <= 0:
@@ -293,6 +295,7 @@ def generate_dataset(
                 count=count,
                 rng=rng,
                 parent_counts=counts,
+                parent_tables=parent_tables,
                 distribution=distribution,
                 null_frac=null_frac,
                 columns=columns,

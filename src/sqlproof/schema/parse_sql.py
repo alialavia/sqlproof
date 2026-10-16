@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import replace
 from typing import Any, Literal, cast
 
 from postgast.pg_query_pb2 import ConstrType
@@ -224,7 +225,10 @@ def _parse_table_statement(statement: Any, type_names: dict[str, PgType], schema
     return Table(
         schema=table_schema,
         name=table_name,
-        columns=tuple(columns),
+        columns=tuple(
+            replace(column, nullable=False) if column.name in primary_key else column
+            for column in columns
+        ),
         primary_key=primary_key,
         foreign_keys=tuple(foreign_keys),
         unique_constraints=tuple(unique_constraints),

@@ -9,6 +9,10 @@ remains in `0.x`, minor versions may include breaking changes.
 
 ### Changed
 
+* **generators:** generated numeric keys and their references now count in
+  storage-scale units, so key values can change in Hypothesis datasets, bulk
+  loads and scenarios after upgrading (for example, `numeric(2,-3)` starts
+  with 1000 and 2000 instead of values that both round to zero).
 * **generators:** numeric values are sampled as exact decimal units instead
   of through floats. Bulk loads and scenario `load()` calls can produce
   different numeric values and subsequent draws for the same seed after this
@@ -17,6 +21,13 @@ remains in `0.x`, minor versions may include breaking changes.
 
 ### Fixed
 
+* **generators:** numeric primary keys, single-column UNIQUE values and
+  numeric array keys honor storage scale and recognized CHECKs without
+  rounding collisions. Parent references and scenario names use the parent's
+  key definition. Exhausted finite non-NULL key domains raise a generation
+  error; unsupported numeric-key CHECKs produce the existing warning.
+* **schema:** table-level primary-key columns are non-nullable when parsing
+  SQL, matching PostgreSQL's implicit NOT NULL rule for composite keys.
 * **generators:** honor `numeric(p)` precision and zero scale, negative
   scales, and precision beyond the Python Decimal context. Numeric CHECK
   bounds preserve valid multiples of the declared unit, including bounds
