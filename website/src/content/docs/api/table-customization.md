@@ -1,39 +1,38 @@
 ---
 title: Table Customization
-description: Override column strategies and FK distributions per table.
+description: Override column generators while keeping schema-aware datasets.
 ---
 
-`customize()` lets you tune generated data while keeping the rest of the schema
-generation automatic.
+Pass `columns=` to `proof.dataset_strategy()` or the `@sqlproof` decorator to
+override selected columns while keeping the rest of the dataset schema-aware.
+The keys are `"table.column"`; values can be Hypothesis strategies, fixed values,
+or callables receiving a `ColumnContext` and returning a value.
 
 ```python
 from hypothesis import strategies as st
 
-proof.customize(
-    "products",
-    price=st.decimals(min_value="0.01", max_value="9999.99", places=2),
-    sku=st.from_regex(r"^[A-Z]{2}-\d{4}$", fullmatch=True),
+datasets = proof.dataset_strategy(
+    sizes={"products": 3},
+    columns={
+        "products.price": st.decimals(min_value="0.01", max_value="9999.99", places=2),
+        "products.sku": st.from_regex(r"[A-Z]{2}-[0-9]{4}", fullmatch=True),
+    },
 )
 ```
 
-## FK Distribution Strategies
+Draw a dataset inside a Hypothesis test and use
+`proof.client_for_dataset(dataset)` to load it. Overrides must satisfy the
+schema's constraints. An override replaces the normal generator, including
+CHECK refinement and nullable-column handling. Use `st.just(None)` to force
+SQL NULL in a nullable column.
 
-Control how child rows pick parent rows:
+Default-bearing columns are omitted unless requested explicitly. Single-column
+primary keys use a separate assignment path; use a [scenario](/guides/scenarios/)
+when you need pinned keys and relationships.
 
-```python
-proof.customize(
-    "orders",
-    fk_distribution={"customer_id": "zipf"},
-)
-```
+`proof.customize()` is currently a placeholder and does not apply overrides.
+Use `columns=` for working customizations.
 
-| Strategy                | Behavior                                  |
-| ----------------------- | ----------------------------------------- |
-| `uniform`               | Equal probability per parent              |
-| `zipf`                  | A few parents receive most child rows     |
-| `adversarial`           | First, middle, and last parents only      |
-| `single`                | All children point to one parent          |
-| custom callable         | Return any Hypothesis strategy per FK     |
-
-Custom FK distribution callables receive the available parent primary keys and a
-draw context, and must return a Hypothesis strategy so values still shrink.
+See [custom generators](/guides/custom-generators/) for default sampling limits
+and edge-case recipes, and [FK distributions](/guides/fk-distributions/) for
+controlling parent selection.
