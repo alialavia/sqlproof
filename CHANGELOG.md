@@ -12,15 +12,60 @@ remains in `0.x`, minor versions may include breaking changes.
 * **generators:** generated numeric keys and their references now count in
   storage-scale units, so key values can change in Hypothesis datasets, bulk
   loads and scenarios after upgrading (for example, `numeric(2,-3)` starts
-  with 1000 and 2000 instead of values that both round to zero).
+  with 1000 and 2000 instead of values that both round to zero). Whole
+  numbers come first: a `numeric(5,2)` key counts 1.00, 2.00, ..., then
+  0.00, -1.00, ..., and uses fractional values such as 0.01 only after the
+  whole numbers its type and CHECKs allow are used up, so integer columns
+  can reference it.
+* **core:** `check()` and `invariant()` honor `seed=`. `invariant()` now runs
+  a Hypothesis search that shrinks failing datasets, instead of independent
+  draws, so the reported dataset, the runtime and the example database in
+  `.hypothesis/` are those of a normal property run. A failing invariant
+  also saves its counterexample under `.sqlproof/failures/`, as `check()`
+  does.
+* **core:** a counterexample's `runs` is the run that first failed, and
+  `shrink_steps` counts the calls Hypothesis made after it while shrinking.
+  Previously `runs` included shrinking calls and `shrink_steps` was always 0.
+* **core:** each property and invariant has its own entry in Hypothesis's
+  example database. Saved failures recorded under the previous shared entry
+  are not replayed after upgrading.
 * **generators:** numeric values are sampled as exact decimal units instead
   of through floats. Bulk loads and scenario `load()` calls can produce
   different numeric values and subsequent draws for the same seed after this
   upgrade. Recreate generated fixtures when upgrading; the same scenario,
   schema, seed and SqlProof version still reproduce identical rows.
 
+### Added
+
+* **generators:** `sqlproof.generators.well_known.ranges(elements)` draws
+  empty, bounded, single-point and half- or fully-unbounded ranges for use
+  as a column override. Continuous subtypes get all four bound forms;
+  integer and date ranges use PostgreSQL's canonical `[)`. NaN endpoints are
+  refused.
+* **generators:** an `UnhonoredCheckWarning` reports CHECKs that restrict a
+  foreign-key column, since its values are the parent's keys and are not
+  filtered by the child's CHECK.
+
 ### Fixed
 
+* **core:** `check()` and `@sqlproof` raise `SqlProofPropertyFailure` when
+  different datasets fail in different ways, instead of an
+  `ExceptionGroup`.
+* **database:** a negative number parameter keeps its value before a `::`
+  cast (`%s::integer` with the smallest integer, `%s::text`) and after a
+  character that would merge with its minus sign (`2-%s`), by grouping it in
+  parentheses there. Elsewhere it is sent bare, as before, so grammar
+  positions that accept only a signed constant (`SET name = %s`,
+  `INCREMENT BY %s`) still work. A float `-0.0` keeps its sign.
+* **database:** after COPY, commit, rollback and connection cleanup see the
+  completed transaction, and a failed COPY no longer leaves the connection
+  stuck in an aborted state.
+* **generators:** bulk loads into an integer column that references a
+  scaled numeric key convert whole parent keys to integers, and raise a
+  generation error for a fractional key the column would round.
+* **generators:** a foreign key that names another schema, such as
+  `REFERENCES auth.users`, no longer takes its values from a same-named
+  table in the app's schema (`public.users`) on the bulk and scale paths.
 * **generators:** numeric primary keys, single-column UNIQUE values and
   numeric array keys honor storage scale and recognized CHECKs without
   rounding collisions. Parent references and scenario names use the parent's
