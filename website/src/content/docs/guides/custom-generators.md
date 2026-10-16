@@ -38,6 +38,38 @@ proof.customize(
 )
 ```
 
+## Range Edge Cases
+
+Schema-derived range values are finite, nonempty and use `[)` bounds. To
+exercise empty ranges and missing lower or upper bounds, use `ranges()` as
+a column override. The endpoint strategy must match the PostgreSQL subtype,
+and the schema must admit the range shapes being generated.
+
+```python
+from hypothesis import strategies as st
+
+from sqlproof import sqlproof
+from sqlproof.generators.well_known import ranges
+
+
+@sqlproof(
+    proof,
+    sizes={"bookings": 3},
+    columns={"bookings.slots": ranges(st.integers(-100, 100))},
+)
+def test_ranges_survive_loading(db, dataset):
+    # bookings.slots is int4range. PostgreSQL should preserve emptiness.
+    stored = db.query("SELECT isempty(slots) AS empty FROM bookings")
+    assert sum(row["empty"] for row in stored) == sum(
+        row["slots"].isempty for row in dataset["bookings"]
+    )
+```
+
+`ranges()` can generate empty, finite, lower-unbounded, upper-unbounded and
+fully unbounded values. Finite endpoints are ordered, and equal endpoints
+produce an empty range without filtering out the draw. The default generator
+is unchanged; this helper opts a particular property into those cases.
+
 ## Type Mapping Examples
 
 | PostgreSQL type | Default strategy |

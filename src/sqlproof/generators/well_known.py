@@ -1,7 +1,53 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from typing import Any
+
 from hypothesis import strategies as st
 from hypothesis.strategies import SearchStrategy
+
+from sqlproof._range import Range
+
+
+@st.composite
+def ranges(draw: st.DrawFn, elements: SearchStrategy[Any]) -> Range:
+    """Draw empty, bounded and unbounded PostgreSQL ranges.
+
+    ``elements`` supplies non-null, mutually comparable endpoints of the
+    range's PostgreSQL subtype. Finite ranges use ``[)`` bounds; equal
+    endpoints produce an empty range. Unbounded endpoints stay open.
+    Timezone-aware datetimes are ordered by instant, including repeated hours.
+    Use as a column override when a property needs these edge cases;
+    schema-derived ranges remain finite and nonempty by default.
+    """
+    shape = draw(
+        st.sampled_from(("empty", "bounded", "lower_unbounded", "upper_unbounded", "unbounded"))
+    )
+    if shape == "empty":
+        return Range(empty=True)
+    if shape == "unbounded":
+        return Range(bounds="()")
+    if shape == "lower_unbounded":
+        return Range(None, draw(elements), "()")
+    if shape == "upper_unbounded":
+        return Range(draw(elements), None)
+    first, second = draw(elements), draw(elements)
+    first_key, second_key = _range_order_key(first), _range_order_key(second)
+    if first_key == second_key:
+        return Range(empty=True)
+    if first_key > second_key:
+        first, second = second, first
+    return Range(first, second)
+
+
+def _range_order_key(value: Any) -> Any:
+    # Python ignores fold when both datetimes share a tzinfo. Fixed offsets
+    # preserve the instants and compare them correctly without UTC overflow.
+    if isinstance(value, datetime):
+        offset = value.utcoffset()
+        if offset is not None:
+            return value.replace(tzinfo=timezone(offset))
+    return value
 
 
 def slugs(min_length: int = 1, max_length: int = 64) -> SearchStrategy[str]:
