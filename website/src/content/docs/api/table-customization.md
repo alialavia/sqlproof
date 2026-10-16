@@ -27,8 +27,9 @@ CHECK refinement and nullable-column handling. Use `st.just(None)` to force
 SQL NULL in a nullable column.
 
 Default-bearing columns are omitted unless requested explicitly. Single-column
-primary keys use a separate assignment path; use a [scenario](/guides/scenarios/)
-when you need pinned keys and relationships.
+primary keys use a separate assignment path and ignore ordinary `columns=`
+overrides. A [scenario](/guides/scenarios/) can pin relationships to named rows'
+generated keys; it does not provide arbitrary primary-key values.
 
 `proof.customize()` is currently a placeholder and does not apply overrides.
 Use `columns=` for working customizations.

@@ -41,7 +41,9 @@ foreign keys follow their own assignment paths: keys are usually deterministic
 and foreign keys select existing parent keys. Do not assume those columns
 explore the full type domain or nullable foreign keys explore missing links.
 The key-assignment path can also exceed a narrow column's precision or ignore
-its CHECKs; use explicit, schema-valid scenario keys for those cases.
+its CHECKs. Numeric key values can round to duplicates at a negative scale.
+These are current limitations of key assignment; ordinary `columns=` overrides
+do not replace single-column primary keys.
 
 | PostgreSQL type | Default search domain | Cases to request explicitly |
 | --- | --- | --- |
