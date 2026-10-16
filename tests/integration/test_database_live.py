@@ -10,7 +10,7 @@ from decimal import Decimal
 from uuid import UUID, uuid4
 
 import pytest
-from hypothesis import given, settings
+from hypothesis import example, given, settings
 from hypothesis import strategies as st
 
 from sqlproof import _database as database
@@ -385,6 +385,31 @@ def test_parameters_and_copy_each_preserve_postgresql_values(sql_type, value) ->
         copy_table(conn, schema.tables[0], [{"value": value}], ["value"])
         rows = conn.execute("SELECT value FROM transport_types").fetchall()
         assert rows == [(value,), (value,)]
+
+
+@pytest.mark.parametrize("style", ["postgres", "postgres_verbose", "sql_standard", "iso_8601"])
+@settings(max_examples=20, deadline=None)
+@example(value=timedelta(microseconds=100000))
+@example(value=timedelta(microseconds=-100000))
+@example(value=timedelta(microseconds=120000))
+@example(value=timedelta(microseconds=-123000))
+@example(value=timedelta(microseconds=123400))
+@example(value=timedelta(microseconds=-123450))
+@example(value=timedelta(microseconds=123456))
+@given(value=st.timedeltas(timedelta(days=-365), timedelta(days=365)))
+def test_intervals_preserve_fractional_seconds_in_every_output_style(style, value):
+    """Oracle: the original duration, across scalar/array INSERT and COPY."""
+    with database.connect(os.environ["SQLPROOF_TEST_DATABASE_URL"]) as conn:
+        conn.execute("SET intervalstyle TO %s", (style,))
+        conn.execute("CREATE TEMPORARY TABLE transport_interval (value interval, items interval[])")
+        conn.execute("INSERT INTO transport_interval VALUES (%s, %s)", (value, [value, None]))
+        table = parse_schema_sql(
+            "CREATE TABLE transport_interval (value interval, items interval[])", schema="pg_temp"
+        ).tables[0]
+        copy_table(conn, table, [{"value": value, "items": [value, None]}], ["value", "items"])
+        assert conn.execute("SELECT * FROM transport_interval").fetchall() == [
+            (value, [value, None]), (value, [value, None]),
+        ]
 
 
 @pytest.mark.parametrize("value", ["a string", [1, None], {"nested": [True, None]}, None])

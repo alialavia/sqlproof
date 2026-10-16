@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable, Generator, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
@@ -510,6 +511,16 @@ def connect(
             return default_timestamptz(value)
 
         cast(Any, connection.type_cache).set_typecast("timestamptz", cast_timestamptz)
+        default_interval = cast(Any, connection.type_cache).get_typecast("interval")
+
+        def cast_interval(value: str) -> Any:
+            # PostgreSQL trims trailing fractional zeros. PyGreSQL treats
+            # the remaining digits as microseconds ('.1' becomes 1 us).
+            # Pad before its parser, preserving all four IntervalStyles.
+            padded = re.sub(r"\.\d+", lambda match: match[0].ljust(7, "0"), value)
+            return default_interval(padded)
+
+        cast(Any, connection.type_cache).set_typecast("interval", cast_interval)
     except BaseException:
         native.close()
         raise
