@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import inspect
+import re
 from collections.abc import Callable, Generator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, ParamSpec, TypeVar
+from typing import Any, ParamSpec, TypeVar, cast
 
 from hypothesis import HealthCheck, given, settings
 from hypothesis import seed as hypothesis_seed
+from hypothesis.strategies import SearchStrategy
 
 from sqlproof.exceptions import SqlProofPropertyFailure
 from sqlproof.generators.graph import ColumnOverrides, SizeSpec, dataset_strategy
@@ -67,8 +69,12 @@ def sqlproof(
     `seed` fixes Hypothesis's random choices (and, as Hypothesis's `@seed`
     does, turns off its example database for the run). Without one,
     Hypothesis chooses as usual -- `derandomize` and `--hypothesis-seed`
-    apply -- and the counterexample records the seed it drew, so passing
-    it back repeats the search.
+    apply -- and the counterexample records the seed it drew. Passing that
+    seed back repeats the run's random search. It does not reproduce a
+    failure Hypothesis replayed from its example database (one an earlier
+    run found): that run's seed never searched for it, and with the
+    database off the search may not find it again. Keep the `.hypothesis/`
+    directory, or the counterexample file, to reproduce those.
     """
     del timeout_ms, commit
 
@@ -108,17 +114,10 @@ def run_property(
     signature = inspect.signature(function)
     wants_check = "check" in signature.parameters
     wants_dataset = "dataset" in signature.parameters
-    run_count = 0
+    counter = _RunCounter()
 
-    @given(strategy)
-    @settings(
-        max_examples=runs,
-        deadline=None,
-        suppress_health_check=[HealthCheck.function_scoped_fixture],
-    )
     def execute(dataset: dict[str, list[dict[str, Any]]]) -> None:
-        nonlocal run_count
-        run_count += 1
+        counter.start()
         check = Check()
         try:
             with proof.client_for_dataset(dataset) as client:
@@ -129,13 +128,14 @@ def run_property(
                     kwargs["check"] = check
                 function(client, **kwargs)
         except Exception as exc:
+            runs_used, shrink_steps = counter.failed()
             payload: dict[str, Any] = {
                 "$schema": "https://sqlproof.dev/schemas/counterexample-v1.json",
                 "version": 1,
                 "property_name": function.__name__,
-                "seed": _seed_in_use(execute, seed),
-                "runs": run_count,
-                "shrink_steps": 0,
+                "seed": _seed_in_use(wrapped, seed),
+                "runs": runs_used,
+                "shrink_steps": shrink_steps,
                 "schema_fingerprint": proof.schema_fingerprint,
                 "row_context": check.row_context or {},
                 "dataset": dataset,
@@ -149,11 +149,9 @@ def run_property(
             write_counterexample(failure_dir / f"{function.__name__}.json", payload)
             raise SqlProofPropertyFailure(str(exc), counterexample=payload) from exc
 
-    if seed is not None:
-        # Only an explicit seed is forced: `@seed` also turns off the example
-        # database and overrides `derandomize` and `--hypothesis-seed`.
-        execute = hypothesis_seed(seed)(execute)
-    execute()
+    key = f"sqlproof.property:{function.__module__}.{function.__qualname__}"
+    wrapped = _search(execute, strategy, runs=runs, seed=seed, key=key)
+    wrapped()
 
 
 def run_invariant(
@@ -165,42 +163,101 @@ def run_invariant(
     expect_empty: bool,
     runs: int,
     seed: int | None = None,
+    failure_dir: Path = Path(".sqlproof/failures"),
 ) -> None:
     """Search for a violating dataset without wrapping database errors."""
     strategy = proof.dataset_strategy(sizes=sizes)
-    run_count = 0
+    counter = _RunCounter()
 
-    @given(strategy)
-    @settings(
-        max_examples=runs,
-        deadline=None,
-        # Preserve the public error types when inputs fail in different ways.
-        report_multiple_bugs=False,
-        suppress_health_check=[HealthCheck.function_scoped_fixture],
-    )
     def execute(dataset: dict[str, list[dict[str, Any]]]) -> None:
-        nonlocal run_count
-        run_count += 1
+        counter.start()
         with proof.client_for_dataset(dataset) as client:
             rows = client.query(query)
         failed = bool(rows) if expect_empty else not rows
         if failed:
-            payload = {
+            runs_used, shrink_steps = counter.failed()
+            message = f"Invariant {name!r} failed: query returned {len(rows)} rows."
+            payload: dict[str, Any] = {
+                "$schema": "https://sqlproof.dev/schemas/counterexample-v1.json",
+                "version": 1,
                 "property_name": name,
-                "seed": _seed_in_use(execute, seed),
-                "runs": run_count,
+                "seed": _seed_in_use(wrapped, seed),
+                "runs": runs_used,
+                "shrink_steps": shrink_steps,
                 "row_context": {},
                 "dataset": dataset,
                 "schema_fingerprint": proof.schema_fingerprint,
+                "failure": {
+                    "kind": "InvariantViolation",
+                    "message": message,
+                    "locals": {},
+                    "traceback": [],
+                },
             }
-            raise SqlProofPropertyFailure(
-                f"Invariant {name!r} failed: query returned {len(rows)} rows.",
-                counterexample=payload,
-            )
+            write_counterexample(failure_dir / f"{_file_stem(name)}.json", payload)
+            raise SqlProofPropertyFailure(message, counterexample=payload)
 
+    key = f"sqlproof.invariant:{name}\0{query}"
+    wrapped = _search(execute, strategy, runs=runs, seed=seed, key=key)
+    wrapped()
+
+
+class _RunCounter:
+    """Counts runs so a counterexample reports the run that first failed.
+
+    Hypothesis calls the test again while shrinking. Those calls are
+    reported as `shrink_steps`, not as runs, so a property that fails on
+    its first dataset reports `runs: 1` however long shrinking takes.
+    """
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self.first_failure: int | None = None
+
+    def start(self) -> None:
+        self.calls += 1
+
+    def failed(self) -> tuple[int, int]:
+        if self.first_failure is None:
+            self.first_failure = self.calls
+        return self.first_failure, self.calls - self.first_failure
+
+
+def _search(
+    execute: Callable[[dict[str, list[dict[str, Any]]]], None],
+    strategy: SearchStrategy[Any],
+    *,
+    runs: int,
+    seed: int | None,
+    key: str,
+) -> Callable[[], None]:
+    """Wrap `execute` as a Hypothesis search over `strategy`.
+
+    Every property shares the same `execute` source, and Hypothesis keys
+    its example database by source. Adding the property's own key keeps
+    one property's saved failures from being replayed against, or deleted
+    by, another. `report_multiple_bugs=False` keeps the public error types:
+    two distinct failures would otherwise surface as an ExceptionGroup.
+    """
+    cast(Any, execute)._hypothesis_internal_add_digest = key.encode()
+    wrapped = given(strategy)(
+        settings(
+            max_examples=runs,
+            deadline=None,
+            report_multiple_bugs=False,
+            suppress_health_check=[HealthCheck.function_scoped_fixture],
+        )(execute)
+    )
     if seed is not None:
-        execute = hypothesis_seed(seed)(execute)
-    execute()
+        # Only an explicit seed is forced: `@seed` also turns off the example
+        # database and overrides `derandomize` and `--hypothesis-seed`.
+        wrapped = hypothesis_seed(seed)(wrapped)
+    return wrapped
+
+
+def _file_stem(name: str) -> str:
+    stem = re.sub(r"[^A-Za-z0-9_.-]+", "_", name).strip("._")
+    return stem or "invariant"
 
 
 def _seed_in_use(wrapped: Any, explicit: int | None) -> int | None:

@@ -247,8 +247,12 @@ class SqlProof:
         reported as a passing invariant.
 
         ``seed`` repeats Hypothesis's search, just as it does for
-        ``check()`` and ``@sqlproof``. Failing datasets are shrunk and the
-        counterexample records the seed used by the run.
+        ``check()`` and ``@sqlproof``. Failing datasets are shrunk; the
+        counterexample records the seed used by the run, the run that first
+        failed (``runs``) and the shrinking calls after it
+        (``shrink_steps``), and is saved under ``.sqlproof/failures/``. A
+        recorded seed repeats the random search but not a failure replayed
+        from Hypothesis's example database, which that seed never found.
 
         Without a database connection (``from_schema_file`` and no DSN)
         there is nothing to execute SQL on, so only a plain
