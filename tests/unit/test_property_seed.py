@@ -77,6 +77,7 @@ def test_a_derandomized_profile_stays_derandomized(tmp_path: Path) -> None:
 
 @pytest.fixture
 def recorded_proof(tmp_path: Path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
     schema = tmp_path / "schema.sql"
     schema.write_text("CREATE TABLE numbers (value integer NOT NULL)", encoding="utf-8")
     proof = SqlProof.from_schema_file(schema)

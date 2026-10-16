@@ -174,6 +174,8 @@ def run_invariant(
     @settings(
         max_examples=runs,
         deadline=None,
+        # Preserve the public error types when inputs fail in different ways.
+        report_multiple_bugs=False,
         suppress_health_check=[HealthCheck.function_scoped_fixture],
     )
     def execute(dataset: dict[str, list[dict[str, Any]]]) -> None:
