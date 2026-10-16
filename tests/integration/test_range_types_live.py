@@ -57,7 +57,7 @@ CREATE TABLE bookings (
         ),
     ],
 )
-@settings(max_examples=25, deadline=None)
+@settings(max_examples=60, deadline=None)
 @given(data=st.data())
 def test_range_overrides_preserve_empty_and_unbounded_values_in_postgres(
     range_type, elements, data
@@ -75,14 +75,18 @@ def test_range_overrides_preserve_empty_and_unbounded_values_in_postgres(
     with database.connect(os.environ["SQLPROOF_TEST_DATABASE_URL"]) as connection:
         connection.execute(f"CREATE TEMP TABLE range_cases (span {range_type} NOT NULL)")
         copy_table(connection, schema.tables[0], dataset["range_cases"], ["span"])
-        empty, lower_inf, upper_inf, lower, upper = connection.execute(
-            "SELECT isempty(span), lower_inf(span), upper_inf(span), lower(span), upper(span) "
-            "FROM range_cases"
+        empty, lower_inf, upper_inf, lower, upper, lower_inc, upper_inc = connection.execute(
+            "SELECT isempty(span), lower_inf(span), upper_inf(span), lower(span), upper(span), "
+            "lower_inc(span), upper_inc(span) FROM range_cases"
         ).fetchone()
     assert empty == value.isempty
     if not empty:
         assert (lower_inf, upper_inf) == (value.lower is None, value.upper is None)
         assert (lower, upper) == (value.lower, value.upper)
+        if value.lower is not None:
+            assert lower_inc == (value.bounds[0] == "[")
+        if value.upper is not None:
+            assert upper_inc == (value.bounds[1] == "]")
 
 
 @pytest.mark.skipif(
@@ -98,7 +102,8 @@ def test_repeated_hour_ranges_preserve_their_instants_in_postgres(
     later = datetime(2026, 11, 1, 1, second_minute, tzinfo=fold_timezone, fold=1)
     value = find(
         ranges(st.sampled_from([earlier, later])),
-        lambda r: not r.isempty and r.lower is not None and r.upper is not None,
+        lambda r: not r.isempty and r.lower is not None and r.upper is not None
+        and r.lower.astimezone(UTC) != r.upper.astimezone(UTC),
         settings=settings(database=None, deadline=None),
     )
     with database.connect(os.environ["SQLPROOF_TEST_DATABASE_URL"]) as connection:

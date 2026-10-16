@@ -195,8 +195,15 @@ def test_ranges_survive_loading(db, dataset):
 
 `ranges()` can generate empty, finite, lower-unbounded, upper-unbounded and
 fully unbounded values. Finite endpoints are ordered, and equal endpoints
-produce an empty range without filtering out the draw. The default generator
-is unchanged; this helper opts a particular property into those cases.
+produce an empty range without filtering out the draw. For continuous
+subtypes (`numrange`, `tsrange`, `tstzrange`) it also draws every bound form
+(`[)`, `[]`, `(]`, `()`), single-point ranges such as `[5.0,5.0]`, and
+inclusive or exclusive finite ends on half-unbounded ranges, so a property
+can catch an off-by-one between `<` and `<=` at a range's edge. Integer and
+date ranges stay in the `[)` form PostgreSQL stores them in. NaN endpoints
+are refused, so pass `st.decimals(allow_nan=False)` or
+`st.floats(allow_nan=False)`. The default generator is unchanged; this
+helper opts a particular property into those cases.
 
 ## Type Mapping Examples
 
