@@ -16,7 +16,6 @@ import string
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import UTC, time, timedelta
-from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
@@ -50,6 +49,8 @@ from sqlproof.generators.typespec import (
     VECTOR_COMPONENT_WINDOW,
     TypeSpec,
     array_size_bounds,
+    decimal_from_units,
+    decimal_unit_bounds,
     float32_ceil,
     float_bounds,
     spec_for_column,
@@ -154,28 +155,11 @@ def _base_sampler_for_spec(spec: TypeSpec, rng: random.Random) -> Callable[[], A
         hi = int(spec.max_value or 0)
         return lambda: rng.randint(lo, hi)
     if kind == "decimal":
-        # `min_value`/`max_value` may now be `Decimal` -- narrowing.py
-        # represents an exclusive bound (`rate > 1`) as one unit in
-        # the last place off the literal, e.g. `Decimal("1.0001")`,
-        # which an `int` can't hold. `random.uniform` needs floats
-        # (Decimal doesn't support arithmetic with the float `random()`
-        # returns), so convert once here -- but float(Decimal(...)) can
-        # round a hair outside the original bound, and the whole point
-        # of an exclusive bound is that it's respected exactly. Keep
-        # the precise Decimal bounds too, and clamp each quantised
-        # draw back into them.
-        lo_dec = Decimal(spec.min_value or 0)
-        hi_dec = Decimal(spec.max_value or 0)
-        lo_f = float(lo_dec)
-        hi_f = float(hi_dec)
+        # Draw exact multiples of the declared unit. A float round-trip
+        # loses digits for wide numerics and overflows for large exponents.
+        lo, hi = decimal_unit_bounds(spec)
         places = spec.places if spec.places is not None else 2
-        quant = Decimal(1).scaleb(-places)
-
-        def draw_decimal() -> Decimal:
-            value = Decimal(rng.uniform(lo_f, hi_f)).quantize(quant)
-            return min(max(value, lo_dec), hi_dec)
-
-        return draw_decimal
+        return lambda: decimal_from_units(rng.randint(lo, hi), places)
     if kind == "float":
         return _float_sampler(spec, rng)
     if kind == "boolean":

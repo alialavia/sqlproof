@@ -25,7 +25,12 @@ from dataclasses import replace
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal, InvalidOperation
 from typing import Any
 
-from sqlproof.generators.typespec import SpecKind, TypeSpec
+from sqlproof.generators.typespec import (
+    SpecKind,
+    TypeSpec,
+    decimal_from_units,
+    decimal_unit_bounds,
+)
 from sqlproof.schema.checks import analyze_check
 from sqlproof.schema.model import CheckConstraint, Column, ParsedCheck, PgType
 
@@ -321,10 +326,17 @@ def _narrow_decimal_bound(spec: TypeSpec, op: str, value: Decimal) -> TypeSpec:
     # together (e.g. `1 < rate < 2`) would invert min/max into an
     # empty range that nothing downstream checks for.
     assert spec.min_value is not None and spec.max_value is not None
+    # Strict bounds snap to the next representable value, rather than
+    # adding a unit to an off-grid literal (1001 < n at scale -3 must
+    # admit 2000). Keep non-strict bounds exact; samplers round inward.
+    places = spec.places if spec.places is not None else 0
+    low, high = decimal_unit_bounds(
+        replace(spec, min_value=value, max_value=value, places=places)
+    )
     if op in (">=", ">"):
-        dec_lo = value if op == ">=" else value + _decimal_ulp(spec.places)
+        dec_lo = value if op == ">=" else decimal_from_units(high + 1, places)
         return replace(spec, min_value=max(Decimal(spec.min_value), dec_lo))
-    dec_hi = value if op == "<=" else value - _decimal_ulp(spec.places)
+    dec_hi = value if op == "<=" else decimal_from_units(low - 1, places)
     return replace(spec, max_value=min(Decimal(spec.max_value), dec_hi))
 
 
@@ -338,16 +350,3 @@ def _int_upper_bound(value: Decimal, op: str) -> int:
     if op == "<":
         return int(value.to_integral_value(rounding=ROUND_CEILING)) - 1
     return int(value.to_integral_value(rounding=ROUND_FLOOR))
-
-
-def _decimal_ulp(places: int | None) -> Decimal:
-    # One unit in the last place at the spec's declared scale -- the
-    # smallest step that moves a decimal bound strictly past the
-    # literal without overshooting it. `places` is normally set (the
-    # `numeric` builder in typespec.py defaults it to 2), but a
-    # defensively-constructed spec could carry no scale at all; with
-    # no unit to step by, fall back to the old whole-1 step for that
-    # case only -- over-narrow rather than guess a precision.
-    if places is None:
-        return Decimal(1)
-    return Decimal(1).scaleb(-places)
