@@ -221,6 +221,18 @@ def test_negative_zero_keeps_its_sign_as_a_float() -> None:
     assert math.copysign(1.0, items[1]) == -1.0
 
 
+def test_negative_zero_does_not_turn_a_decimal_array_into_floats() -> None:
+    """Oracle: the Decimal's own digits. A float8 element would type the
+    whole array float8[] and round 1.10000000000000000001 to 1.1."""
+    exact = Decimal("1.10000000000000000001")
+    with database.connect(os.environ["SQLPROOF_TEST_DATABASE_URL"]) as conn:
+        array_type, values = conn.execute(
+            "SELECT pg_typeof(%s)::text, %s", ([exact, -0.0], [[exact], [-0.0]])
+        ).fetchone()
+    assert array_type == "numeric[]"
+    assert values == [[exact], [Decimal(0)]]
+
+
 @pytest.mark.parametrize(
     ("statement", "check"),
     [
