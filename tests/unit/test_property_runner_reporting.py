@@ -159,6 +159,34 @@ def test_a_passing_property_keeps_another_propertys_saved_failure(tmp_path: Path
     assert again.value.counterexample["runs"] == 1, "the saved failure replays first"
 
 
+def test_named_properties_sharing_a_function_keep_their_own_saved_failures(
+    tmp_path: Path,
+) -> None:
+    """Contract: as above, for check()'s `name`. One factory function yields
+    properties with the same qualified name; only `name` tells them apart."""
+    database = InMemoryExampleDatabase()
+
+    def below(limit: int) -> Any:
+        def prop(db: Any) -> None:
+            assert max(db.values) < limit
+
+        return prop
+
+    with _profile(database=database):
+        with pytest.raises(SqlProofPropertyFailure):
+            run_property(
+                LoggingProof(), below(900_000), sizes={}, runs=500,
+                failure_dir=tmp_path, name="strict",
+            )
+        saved = {key: set(values) for key, values in database.data.items() if values}
+        assert saved, "the failing property saved its counterexample"
+        run_property(
+            LoggingProof(), below(10**7), sizes={}, runs=50, failure_dir=tmp_path, name="loose"
+        )
+        for key, values in saved.items():
+            assert values <= set(database.data.get(key, ())), "loose removed strict's failure"
+
+
 class LargeDatasetProof(LoggingProof):
     """Datasets far bigger than Hypothesis's default size health checks allow."""
 
