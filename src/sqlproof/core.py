@@ -209,7 +209,7 @@ class SqlProof:
     ) -> None:
         from sqlproof.runners.property import run_property
 
-        del name, setup, timeout_ms, commit
+        del setup, timeout_ms, commit
         if not callable(property):
             msg = "property must be callable"
             raise TypeError(msg)
@@ -220,6 +220,7 @@ class SqlProof:
             runs=runs,
             failure_dir=Path(".sqlproof/failures"),
             seed=seed,
+            name=name,
         )
 
     def invariant(
