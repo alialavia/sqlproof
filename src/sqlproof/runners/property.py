@@ -238,6 +238,8 @@ def _search(
     one property's saved failures from being replayed against, or deleted
     by, another. `report_multiple_bugs=False` keeps the public error types:
     two distinct failures would otherwise surface as an ExceptionGroup.
+    Large datasets are the point of some properties, so the health checks
+    that reject big or slow draws are off, as they were for `.example()`.
     """
     cast(Any, execute)._hypothesis_internal_add_digest = key.encode()
     wrapped = given(strategy)(
@@ -245,7 +247,12 @@ def _search(
             max_examples=runs,
             deadline=None,
             report_multiple_bugs=False,
-            suppress_health_check=[HealthCheck.function_scoped_fixture],
+            suppress_health_check=[
+                HealthCheck.function_scoped_fixture,
+                HealthCheck.data_too_large,
+                HealthCheck.large_base_example,
+                HealthCheck.too_slow,
+            ],
         )(execute)
     )
     if seed is not None:
