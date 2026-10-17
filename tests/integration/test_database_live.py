@@ -250,14 +250,26 @@ def test_negative_parameters_stay_bare_where_postgres_wants_a_signed_constant(
         ("SELECT -%s", -5, 5),
         ("SELECT %s ::int2", -(2**15), -(2**15)),
         ("SELECT 7 %% 3 + %s::int", -4, -3),
+        ("SELECT 1!=%s", -1, True),
+        ("SELECT int4range(-5, 0)@>%s", -1, True),
+        ("SELECT 3<%s", -1, False),
     ],
-    ids=["after-minus", "after-operator", "negated", "spaced-cast", "percent-escape"],
+    ids=[
+        "after-minus",
+        "after-operator",
+        "negated",
+        "spaced-cast",
+        "percent-escape",
+        "after-multi-character-operator",
+        "after-containment-operator",
+        "after-plain-comparison",
+    ],
 )
 def test_negative_parameters_are_grouped_where_a_bare_sign_would_be_misread(
     sql, value, expected
 ) -> None:
-    """Oracle: the arithmetic value; `2--5` would be a comment and `@-3`
-    one operator token if the sign were not grouped."""
+    """Oracle: the arithmetic value; `2--5` would be a comment, and `@-3`,
+    `!=-1` and `@>-1` one operator token each, if the sign were not grouped."""
     with database.connect(os.environ["SQLPROOF_TEST_DATABASE_URL"]) as conn:
         assert conn.execute(sql, (value,)).fetchone()[0] == expected
 

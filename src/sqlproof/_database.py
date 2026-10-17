@@ -66,9 +66,22 @@ def _json_without_nul(value: Json) -> str:
     return json.dumps(value.obj)
 
 
-_MERGING_OPERATOR_CHARACTERS = frozenset("-~!@#%^&|`?")
-"""Characters that join a following minus sign into one token: `--`
-starts a comment, and PostgreSQL lexes `@-` or `%-` as a single operator."""
+_OPERATOR_CHARACTERS = frozenset("+-*/<>=~!@#%^&|`?")
+"""Characters PostgreSQL lexes into one multi-character operator."""
+_MERGING_OPERATOR_CHARACTERS = frozenset("~!@#%^&|`?")
+"""An operator may end in `-` only when it contains one of these, so a run
+holding any of them absorbs a following minus sign (`@-`, `!=-`, `@>-`)."""
+
+
+def _merges_minus(sql: str, index: int) -> bool:
+    """Whether a minus sign inserted at `index` would join the operator
+    characters written right before it, instead of negating the number."""
+    start = index
+    while start > 0 and sql[start - 1] in _OPERATOR_CHARACTERS:
+        start -= 1
+    run = sql[start:index]
+    # `--` starts a comment, whatever precedes it.
+    return run.endswith("-") or any(char in _MERGING_OPERATOR_CHARACTERS for char in run)
 
 
 def _placeholder_contexts(sql: str) -> list[bool]:
@@ -89,7 +102,7 @@ def _placeholder_contexts(sql: str) -> list[bool]:
             following = sql[index + 1]
             if following == "s":
                 cast_follows = sql[index + 2 :].lstrip().startswith("::")
-                merges = index > 0 and sql[index - 1] in _MERGING_OPERATOR_CHARACTERS
+                merges = _merges_minus(sql, index)
                 contexts.append(cast_follows or merges)
                 index += 2
                 continue
