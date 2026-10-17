@@ -281,6 +281,40 @@ def test_a_reference_into_another_schema_never_borrows_a_same_named_tables_keys(
         assert row["owner"] in {user["id"] for user in dataset["users"]}
 
 
+def test_hypothesis_references_into_another_schema_never_borrow_a_same_named_table():
+    """Contract: as above, on the Hypothesis path. With no `auth.users` rows
+    registered, a nullable reference stays NULL instead of taking `users` keys."""
+    schema = parse_schema_sql(
+        "CREATE TABLE users (id int PRIMARY KEY);"
+        "CREATE TABLE notes (id int PRIMARY KEY,"
+        " author uuid REFERENCES auth.users(id),"
+        " owner int NOT NULL REFERENCES users(id));"
+    )
+    dataset = find(dataset_strategy(schema, sizes={"users": 2, "notes": 3}), lambda _d: True)
+    assert [row["author"] for row in dataset["notes"]] == [None, None, None]
+    assert {row["owner"] for row in dataset["notes"]} <= {user["id"] for user in dataset["users"]}
+
+
+def test_a_primary_key_that_references_an_ungenerated_parent_still_gets_distinct_keys(tmp_path):
+    """Regression: a 1:1 table drawn on its own (`row_strategy`) has no parent
+    rows to take keys from; it gets distinct keys, as before the parent lookup."""
+    from sqlproof import SqlProof
+
+    sql = (
+        "CREATE TABLE users (id int PRIMARY KEY);"
+        "CREATE TABLE settings (user_id int PRIMARY KEY REFERENCES users(id), theme text);"
+    )
+    rows = find(
+        table_rows_strategy(parse_schema_sql(sql).table("settings"), count=3), lambda _r: True
+    )
+    assert [row["user_id"] for row in rows] == [1, 2, 3]
+
+    schema_file = tmp_path / "schema.sql"
+    schema_file.write_text(sql)
+    row = find(SqlProof.from_schema_file(schema_file).row_strategy("settings"), lambda _r: True)
+    assert row["user_id"] == 1
+
+
 def test_references_through_an_integer_domain_are_converted_too():
     """A child column typed by a domain over an integer stores whole parent
     keys as integers, exactly like a plain integer column."""
