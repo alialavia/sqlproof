@@ -157,3 +157,28 @@ def test_a_passing_property_keeps_another_propertys_saved_failure(tmp_path: Path
             run_property(replay, fails_on_large_values, sizes={}, runs=500, failure_dir=tmp_path)
     assert again.value.counterexample is not None
     assert again.value.counterexample["runs"] == 1, "the saved failure replays first"
+
+
+class LargeDatasetProof(LoggingProof):
+    """Datasets far bigger than Hypothesis's default size health checks allow."""
+
+    def dataset_strategy(self, sizes: Any, columns: Any = None) -> Any:
+        del sizes, columns
+        return st.fixed_dictionaries(
+            {"t": st.lists(st.integers(0, 10), min_size=3000, max_size=3000)}
+        )
+
+
+@pytest.mark.parametrize("runner", ["property", "invariant"])
+def test_large_datasets_run_instead_of_failing_a_health_check(tmp_path: Path, runner: str) -> None:
+    """Regression: invariant() drew with `.example()` before it became a
+    search, so big `sizes` worked; the search must not reject them either."""
+    proof = LargeDatasetProof()
+    if runner == "property":
+        run_property(proof, lambda db: None, sizes={}, runs=2, failure_dir=tmp_path, seed=1)
+    else:
+        run_invariant(
+            proof, name="large", sizes={}, query="q", expect_empty=True, runs=2,
+            seed=1, failure_dir=tmp_path,
+        )
+    assert proof.calls and all(len(values) == 3000 for values in proof.calls)
