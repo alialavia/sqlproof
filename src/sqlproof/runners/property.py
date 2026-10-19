@@ -106,6 +106,7 @@ def run_property(
     runs: int,
     failure_dir: Path,
     seed: int | None = None,
+    name: str | None = None,
 ) -> None:
     if hasattr(proof, "dataset_strategy"):
         strategy = proof.dataset_strategy(sizes=sizes, columns=columns)
@@ -149,7 +150,11 @@ def run_property(
             write_counterexample(failure_dir / f"{function.__name__}.json", payload)
             raise SqlProofPropertyFailure(str(exc), counterexample=payload) from exc
 
+    # `check(name=...)` tells apart properties that share a function (a
+    # lambda, or one nested function per parametrization).
     key = f"sqlproof.property:{function.__module__}.{function.__qualname__}"
+    if name is not None:
+        key += f"\0{name}"
     wrapped = _search(execute, strategy, runs=runs, seed=seed, key=key)
     wrapped()
 
@@ -238,6 +243,8 @@ def _search(
     one property's saved failures from being replayed against, or deleted
     by, another. `report_multiple_bugs=False` keeps the public error types:
     two distinct failures would otherwise surface as an ExceptionGroup.
+    Large datasets are the point of some properties, so the health checks
+    that reject big or slow draws are off, as they were for `.example()`.
     """
     cast(Any, execute)._hypothesis_internal_add_digest = key.encode()
     wrapped = given(strategy)(
@@ -245,7 +252,12 @@ def _search(
             max_examples=runs,
             deadline=None,
             report_multiple_bugs=False,
-            suppress_health_check=[HealthCheck.function_scoped_fixture],
+            suppress_health_check=[
+                HealthCheck.function_scoped_fixture,
+                HealthCheck.data_too_large,
+                HealthCheck.large_base_example,
+                HealthCheck.too_slow,
+            ],
         )(execute)
     )
     if seed is not None:

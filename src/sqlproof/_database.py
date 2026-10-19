@@ -66,9 +66,22 @@ def _json_without_nul(value: Json) -> str:
     return json.dumps(value.obj)
 
 
-_MERGING_OPERATOR_CHARACTERS = frozenset("-~!@#%^&|`?")
-"""Characters that join a following minus sign into one token: `--`
-starts a comment, and PostgreSQL lexes `@-` or `%-` as a single operator."""
+_OPERATOR_CHARACTERS = frozenset("+-*/<>=~!@#%^&|`?")
+"""Characters PostgreSQL lexes into one multi-character operator."""
+_MERGING_OPERATOR_CHARACTERS = frozenset("~!@#%^&|`?")
+"""An operator may end in `-` only when it contains one of these, so a run
+holding any of them absorbs a following minus sign (`@-`, `!=-`, `@>-`)."""
+
+
+def _merges_minus(sql: str, index: int) -> bool:
+    """Whether a minus sign inserted at `index` would join the operator
+    characters written right before it, instead of negating the number."""
+    start = index
+    while start > 0 and sql[start - 1] in _OPERATOR_CHARACTERS:
+        start -= 1
+    run = sql[start:index]
+    # `--` starts a comment, whatever precedes it.
+    return run.endswith("-") or any(char in _MERGING_OPERATOR_CHARACTERS for char in run)
 
 
 def _placeholder_contexts(sql: str) -> list[bool]:
@@ -89,7 +102,7 @@ def _placeholder_contexts(sql: str) -> list[bool]:
             following = sql[index + 1]
             if following == "s":
                 cast_follows = sql[index + 2 :].lstrip().startswith("::")
-                merges = index > 0 and sql[index - 1] in _MERGING_OPERATOR_CHARACTERS
+                merges = _merges_minus(sql, index)
                 contexts.append(cast_follows or merges)
                 index += 2
                 continue
@@ -108,7 +121,7 @@ def _adapt_parameters(sql: str, params: Sequence[Any]) -> tuple[Any, ...]:
     )
 
 
-def _adapt(value: Any, *, grouped: bool = False) -> Any:
+def _adapt(value: Any, *, grouped: bool = False, numeric_array: bool = False) -> Any:
     if isinstance(value, str):
         return _reject_nul(value)
     if isinstance(value, Json):
@@ -118,8 +131,13 @@ def _adapt(value: Any, *, grouped: bool = False) -> Any:
         return pgdb.Binary(value)
     if isinstance(value, Range) or (isinstance(value, Decimal) and not value.is_finite()):
         return str(value)
-    if isinstance(value, float) and value == 0.0 and copysign(1.0, value) < 0:
+    if (
+        isinstance(value, float) and value == 0.0 and copysign(1.0, value) < 0
+        and not numeric_array
+    ):
         # A bare -0.0 is a numeric literal, and numeric has no negative zero.
+        # Inside an array holding a Decimal it stays bare: one float8 element
+        # would type the whole array float8[] and round every Decimal.
         return pgdb.Literal("'-0'::float8")
     if (
         grouped
@@ -134,7 +152,8 @@ def _adapt(value: Any, *, grouped: bool = False) -> Any:
             # PyGreSQL renders these as a typed ARRAY[...] constructor, so
             # the array keeps its type even where PostgreSQL has no column
             # or cast to infer it from (array_length, unnest, SELECT %s).
-            return [_adapt(item) for item in cast(Sequence[Any], value)]
+            numeric = numeric_array or _has_decimal_leaf(cast(list[Any], value))  # type: ignore[redundant-cast]
+            return [_adapt(item, numeric_array=numeric) for item in cast(Sequence[Any], value)]
         # Other element types (text, UUID, ranges, JSON, dates) are sent as
         # an array literal that takes its type from the column or an
         # explicit cast. pgdb's ARRAY constructor would type them as text[].
@@ -142,6 +161,15 @@ def _adapt(value: Any, *, grouped: bool = False) -> Any:
     if isinstance(value, tuple):
         return tuple(_adapt(item) for item in cast(Sequence[Any], value))
     return value
+
+
+def _has_decimal_leaf(value: list[Any]) -> bool:
+    return any(
+        _has_decimal_leaf(cast(list[Any], item))  # type: ignore[redundant-cast]
+        if isinstance(item, list)
+        else isinstance(item, Decimal)
+        for item in value
+    )
 
 
 def _is_numeric_or_boolean_array(value: list[Any]) -> bool:

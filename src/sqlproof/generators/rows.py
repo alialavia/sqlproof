@@ -173,7 +173,7 @@ def table_rows_strategy(
         fk = _foreign_key_for_column(table, column.name)
         if fk is None:
             continue
-        parent_key = _parent_rows_key(fk, parent_rows)
+        parent_key = _parent_rows_key(fk, parent_rows, table.schema)
         if parent_key is None:
             continue
         available = parent_rows[parent_key]
@@ -379,12 +379,20 @@ def _foreign_key_for_column(table: Table, column_name: str) -> ForeignKey | None
 def _parent_rows_key(
     foreign_key: ForeignKey,
     parent_rows: dict[str, list[dict[str, Any]]],
+    schema: str,
 ) -> str | None:
-    if foreign_key.referenced_schema is not None:
-        qualified = f"{foreign_key.referenced_schema}.{foreign_key.referenced_table}"
+    """The `parent_rows` entry holding `foreign_key`'s parent, if any.
+
+    Dataset tables are keyed by bare name and external tables by their
+    qualified name. A bare name stands for a table in `schema` (the
+    child's), so a reference into another schema (`auth.users`) never
+    picks up a same-named dataset table (`public.users`)."""
+    referenced_schema = foreign_key.referenced_schema
+    if referenced_schema is not None:
+        qualified = f"{referenced_schema}.{foreign_key.referenced_table}"
         if qualified in parent_rows:
             return qualified
-    if foreign_key.referenced_table in parent_rows:
+    if referenced_schema in (None, schema) and foreign_key.referenced_table in parent_rows:
         return foreign_key.referenced_table
     return None
 
@@ -488,8 +496,13 @@ def _primary_key_value(table: Table, column: Column, index: int, parents: Datase
     fk = _foreign_key_for_column(table, column.name)
     if fk is None:
         return _unique_column_value(table, column, index)
-    parent_key = _parent_rows_key(fk, parents)
-    available = parents.get(parent_key or "", [])
+    parent_key = _parent_rows_key(fk, parents, table.schema)
+    if parent_key is None:
+        # No rows for the parent table were generated or registered (a
+        # lone `row_strategy()`, or a parent outside the dataset): keep
+        # the key distinct and storable, as for a key with no reference.
+        return _unique_column_value(table, column, index)
+    available = parents[parent_key]
     if index >= len(available):
         msg = (
             f"Cannot generate {table.qualified_name}.{column.name}: "
