@@ -33,12 +33,13 @@ from typing import TYPE_CHECKING, Any, cast
 from sqlproof._database import Json
 from sqlproof.core import _base_type_name  # pyright: ignore[reportPrivateUsage]
 from sqlproof.exceptions import SqlProofGenerationError, SqlProofScenarioError
+from sqlproof.generators.bulk import _parent_key_value  # pyright: ignore[reportPrivateUsage]
 from sqlproof.generators.rows import (
     GENERATE,
     PinnedKey,
     _foreign_key_for_column,  # pyright: ignore[reportPrivateUsage]
     _is_single_column_unique,  # pyright: ignore[reportPrivateUsage]
-    _unique_value,  # pyright: ignore[reportPrivateUsage]
+    _unique_column_value,  # pyright: ignore[reportPrivateUsage]
 )
 from sqlproof.scale.load import insertion_plan, missing_required_parents
 from sqlproof.scenarios.model import Group, PerParent, RowRef, TableSpec
@@ -195,7 +196,7 @@ def compile_scenario(scenario: Scenario, schema: SchemaInfo) -> CompiledScenario
                 # Its key is the referenced row's key (parents come first).
                 refs[group.name] = refs[pinned_key.name]
             else:
-                refs[group.name] = _key_value(table, index, group.name, where)
+                refs[group.name] = _key_value(table, index, group.name, where, schema)
 
     # Per-parent tables: sized from their parent's layout.
     parent_keys: dict[tuple[str, str], list[Any]] = {}
@@ -407,7 +408,7 @@ def _check_pinnable(table: Table, column_name: str, where: str) -> Column:
     return column
 
 
-def _key_value(table: Table, index: int, row_name: str, where: str) -> Any:
+def _key_value(table: Table, index: int, row_name: str, where: str, schema: SchemaInfo) -> Any:
     if len(table.primary_key) != 1:
         msg = (
             f"{where}: row {row_name!r} is in {table.qualified_name}, which has no "
@@ -415,7 +416,12 @@ def _key_value(table: Table, index: int, row_name: str, where: str) -> Any:
         )
         raise SqlProofScenarioError(msg)
     pk = table.primary_key[0]
-    return _unique_value(pk, table.column(pk).type.name, index)
+    fk = _foreign_key_for_column(table, pk)
+    if fk is not None:
+        parents = {parent.qualified_name: parent for parent in schema.tables}
+        parents.update({parent.name: parent for parent in schema.tables})
+        return _parent_key_value(table.column(pk), fk, index, parents)
+    return _unique_column_value(table, table.column(pk), index)
 
 
 def _fk_into(table: Table, parent: str, column: str | None, where: str) -> ForeignKey:
@@ -465,13 +471,15 @@ def _per_parent_layout(
     rng = random.Random(f"{scenario_name}:{seed}:per_parent:{table.qualified_name}")
     keys: list[Any] = []
     parent_table = parent_layout.table
+    parents = {parent.qualified_name: parent for parent in schema.tables}
+    parents.update({parent.name: parent for parent in schema.tables})
     for parent_index in range(parent_layout.size):
         low, high = pp.count if matched[parent_index] else pp.default
         children = rng.randint(low, high)
         if parent_table is None:
             key: Any = _uuid(scenario_name, seed, AUTH_USERS, parent_index)
         else:
-            key = _unique_value(fk.referenced_columns[0], column.type.name, parent_index)
+            key = _parent_key_value(column, fk, parent_index, parents)
         keys.extend([key] * children)
     return column, keys
 
@@ -722,7 +730,7 @@ def _check_unique_collisions(
     if column.default is not None or _foreign_key_for_column(table, column.name) is not None:
         return
     generated = {
-        _comparable(_unique_value(column.name, column.type, index))
+        _comparable(_unique_column_value(table, column, index))
         for group_index, (group, value) in enumerate(zip(layout.groups, pinned, strict=True))
         if value is _UNSET
         for index in layout.indexes(group_index)

@@ -37,7 +37,7 @@ import struct
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
-from decimal import Decimal
+from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal, localcontext
 from typing import Any, Literal
 
 from sqlproof.exceptions import SqlProofSchemaError
@@ -77,8 +77,8 @@ class TypeSpec:
     # in the last place off a literal (e.g. `Decimal("1.0001")` at
     # scale 4), which an `int` field cannot hold without rounding away
     # the whole point of the narrowing. Both interpreters already
-    # accept a `Decimal` here (columns.py wraps in `Decimal(...)`
-    # regardless; bulk.py converts to `float` for `random.uniform`).
+    # accept a `Decimal` here; decimal_unit_bounds converts exact
+    # bounds to integral units of the declared scale for sampling.
     # A float spec has no bounds unless a CHECK narrows it; narrowing
     # then stores the exact Decimal value of a float8 bound.
     min_value: int | Decimal | None = None
@@ -117,12 +117,34 @@ def _numeric(t: PgType) -> TypeSpec:
     #
     # A bare `numeric` declares no precision, so there is nothing to cap
     # against and we fall back to a broad-but-bounded range.
-    if len(t.modifiers) >= 2:
-        precision, scale = t.modifiers[0], t.modifiers[1]
-        max_abs = Decimal(10) ** (precision - scale) - Decimal(10) ** (-scale)
-        return TypeSpec(kind="decimal", min_value=-max_abs, max_value=max_abs, places=scale)
-    places = t.modifiers[1] if len(t.modifiers) > 1 else 2
-    return TypeSpec(kind="decimal", min_value=-1_000_000, max_value=1_000_000, places=places)
+    if t.modifiers:
+        precision = t.modifiers[0]
+        scale = t.modifiers[1] if len(t.modifiers) > 1 else 0
+        # Tuple construction is exact even beyond the caller's Decimal
+        # context precision. Arithmetic here could round 999...99 to
+        # 1000...00, admitting a value PostgreSQL rejects.
+        max_abs = Decimal((0, (9,) * precision, -scale))
+        return TypeSpec(
+            kind="decimal", min_value=max_abs.copy_negate(), max_value=max_abs, places=scale
+        )
+    return TypeSpec(kind="decimal", min_value=-1_000_000, max_value=1_000_000, places=2)
+
+
+def decimal_unit_bounds(spec: TypeSpec) -> tuple[int, int]:
+    """Inclusive integer coefficients at the spec's scale, rounded inward."""
+    lo, hi = Decimal(spec.min_value or 0), Decimal(spec.max_value or 0)
+    places = spec.places if spec.places is not None else 2
+    with localcontext() as context:
+        context.prec = max(len(lo.as_tuple().digits), len(hi.as_tuple().digits))
+        low = int(lo.scaleb(places).to_integral_value(rounding=ROUND_CEILING))
+        high = int(hi.scaleb(places).to_integral_value(rounding=ROUND_FLOOR))
+    return low, high
+
+
+def decimal_from_units(units: int, places: int) -> Decimal:
+    """Apply a decimal scale without rounding through float or Decimal context."""
+    sign, digits, _ = Decimal(units).as_tuple()
+    return Decimal((sign, digits, -places))
 
 
 def _varchar(t: PgType) -> TypeSpec:
@@ -208,6 +230,10 @@ def spec_is_empty(spec: TypeSpec) -> bool:
         and Decimal(spec.min_value) > Decimal(spec.max_value)
     ):
         return True
+    if spec.kind == "decimal" and spec.places is not None:
+        low, high = decimal_unit_bounds(spec)
+        if low > high:
+            return True
     if spec.min_size is not None and spec.max_size is not None:
         return spec.min_size > spec.max_size
     return False

@@ -16,6 +16,8 @@ from sqlproof.generators.typespec import (
     VECTOR_COMPONENT_WINDOW,
     TypeSpec,
     array_size_bounds,
+    decimal_from_units,
+    decimal_unit_bounds,
     float_bounds,
     spec_for_type,
     spec_is_empty,
@@ -75,6 +77,12 @@ def _strategy_for_spec(spec: TypeSpec) -> SearchStrategy[Any]:
         # cast just narrows the field's static type.
         return st.integers(int(spec.min_value), int(spec.max_value))
     if spec.kind == "decimal":
+        if spec.places is not None:
+            # Integer coefficients support PostgreSQL's negative scales and
+            # 1000-digit precision without a float conversion in st.decimals.
+            low, high = decimal_unit_bounds(spec)
+            places = spec.places
+            return st.integers(low, high).map(lambda units: decimal_from_units(units, places))
         return st.decimals(
             min_value=Decimal(spec.min_value or 0),
             max_value=Decimal(spec.max_value or 0),

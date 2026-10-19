@@ -1,53 +1,57 @@
 ---
 title: FK Distribution Strategies
-description: Control how foreign key references are distributed across parent rows.
+description: Control foreign key parent selection in property tests and bulk loads.
 ---
 
-By default, SqlProof picks parent rows uniformly when generating FK references.
-Distribution strategies let you simulate realistic skew or adversarial boundary
-cases.
+The Hypothesis dataset generator selects existing parents with
+`st.sampled_from`. It searches and shrinks examples; it does not promise a
+fixed distribution or automatically explore NULL foreign keys when parents
+are available.
 
-## Built-In Strategies
+## Pinning Parent Selection in a Property
+
+For a property that needs every order to belong to the same customer, use a
+column override. The callable receives a `ColumnContext`, whose
+`rows_by_table` holds already-generated parent rows:
 
 ```python
-proof.customize(
-    "orders",
-    fk_distribution={"customer_id": "uniform"},
-)
-
-proof.customize(
-    "orders",
-    fk_distribution={"customer_id": "zipf"},
-)
-
-proof.customize(
-    "line_items",
-    fk_distribution={"product_id": "adversarial"},
+datasets = proof.dataset_strategy(
+    sizes={"customers": 3, "orders": 10},
+    columns={
+        "orders.customer_id": lambda context: context.rows_by_table["customers"][0]["id"],
+    },
 )
 ```
 
-| Strategy      | Behavior                                      |
-| ------------- | --------------------------------------------- |
-| `uniform`     | Each parent row has equal probability         |
-| `zipf`        | Early parents are referenced more often       |
-| `adversarial` | Only first, middle, and last parents are used |
-| `single`      | All children point to one parent              |
+This assumes `orders.customer_id` is an ordinary, single-column FK and at
+least one customer is generated. The callable returns a value. Return a
+Hypothesis strategy directly as a `columns=` entry when the choices do not
+depend on the generated parents. To force a missing relationship in a
+nullable FK column, use `st.just(None)`.
 
-## Custom Strategy
+## Bulk Distributions for Scale Measurements
+
+The bulk loader supports `uniform` (the default) and `zipf` parent selection.
+Use Zipf when a few parents should own many child rows:
 
 ```python
-from hypothesis import strategies as st
+from sqlproof import postgres
+from sqlproof.scale.load import load_dataset
 
-
-def hottest_parent(parent_pks, ctx):
-    return st.just(parent_pks[0])
-
-
-proof.customize(
-    "orders",
-    fk_distribution={"customer_id": hottest_parent},
-)
+with postgres.connect(database_url, autocommit=True) as conn:
+    load_dataset(
+        conn,
+        proof.schema_info,
+        {"customers": 100, "orders": 10000},
+        seed=42,
+        distribution="zipf",
+    )
 ```
 
-The callable returns a strategy, not a value, so Hypothesis can still shrink
-counterexamples.
+This inserts into the supplied database; use a disposable test database.
+`distribution` applies to the load as a whole. These are bulk sampling options;
+the Hypothesis generator does not read them from `proof.customize()`.
+
+For property-specific cohorts and explicit relationships, see
+[scenarios](/guides/scenarios/). For other overrides and their sampling limits,
+see [custom generators](/guides/custom-generators/).

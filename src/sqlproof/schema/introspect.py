@@ -294,7 +294,8 @@ SELECT
     WHEN COALESCE(belem.typname, bt.typname) IN ('varchar', 'bpchar') AND t.typtypmod > 0
       THEN ARRAY[t.typtypmod - 4]
     WHEN COALESCE(belem.typname, bt.typname) = 'numeric' AND t.typtypmod > 0
-      THEN ARRAY[((t.typtypmod - 4) >> 16) & 65535, (t.typtypmod - 4) & 65535]
+      THEN ARRAY[((t.typtypmod - 4) >> 16) & 65535,
+                 (((t.typtypmod - 4) & 2047) # 1024) - 1024]
     ELSE ARRAY[]::integer[]
   END AS modifiers,
   COALESCE(
@@ -331,7 +332,8 @@ SELECT
     WHEN COALESCE(elem.typname, typ.typname) IN ('varchar', 'bpchar') AND att.atttypmod > 0
       THEN ARRAY[att.atttypmod - 4]
     WHEN COALESCE(elem.typname, typ.typname) = 'numeric' AND att.atttypmod > 0
-      THEN ARRAY[((att.atttypmod - 4) >> 16) & 65535, (att.atttypmod - 4) & 65535]
+      THEN ARRAY[((att.atttypmod - 4) >> 16) & 65535,
+                 (((att.atttypmod - 4) & 2047) # 1024) - 1024]
     ELSE ARRAY[]::integer[]
   END AS modifiers
 FROM pg_catalog.pg_attribute att

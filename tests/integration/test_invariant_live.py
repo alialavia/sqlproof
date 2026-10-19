@@ -101,6 +101,20 @@ def test_c_garbage_sql_raises_instead_of_passing(live_proof: SqlProof) -> None:
     assert database.sqlstate(exc.value) == "42601"
 
 
+def test_an_invariant_reports_one_failure_when_inputs_fail_in_different_ways(
+    live_proof: SqlProof,
+) -> None:
+    """Oracle: the query either divides by zero or violates the empty-result contract."""
+    with pytest.raises((database.DatabaseError, SqlProofPropertyFailure)):
+        live_proof.invariant(
+            "no rows",
+            sizes={"orders": 1},
+            query="SELECT 1 / (total % 2) FROM orders",
+            runs=10,
+            seed=0,
+        )
+
+
 def test_passing_where_invariant(live_proof: SqlProof) -> None:
     # The README example: the CHECK constraint guarantees no negative totals.
     proof = live_proof

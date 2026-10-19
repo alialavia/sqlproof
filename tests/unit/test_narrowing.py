@@ -3,9 +3,15 @@ from __future__ import annotations
 import random
 from decimal import Decimal
 
+import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
+
+from sqlproof.exceptions import SqlProofGenerationError
 from sqlproof.generators.bulk import sampler_for_spec
+from sqlproof.generators.columns import strategy_for_spec
 from sqlproof.generators.narrowing import narrow_spec_for_checks
-from sqlproof.generators.typespec import TypeSpec, spec_for_type
+from sqlproof.generators.typespec import TypeSpec, spec_for_type, spec_is_empty
 from sqlproof.schema.model import CheckConstraint, Column, PgType
 
 
@@ -274,6 +280,40 @@ def test_decimal_strict_bound_draws_never_hit_the_forbidden_endpoint():
     sampler = sampler_for_spec(spec, rng)
     draws = [sampler() for _ in range(20_000)]
     assert Decimal("1.0000") not in draws
+
+
+@pytest.mark.parametrize(
+    ("modifiers", "expression", "expected"),
+    [
+        ((2, -3), "n > 1001 AND n < 2999", "2000"),
+        ((2, -3), "n > -2999 AND n < -1001", "-2000"),
+        ((2, -3), "n >= 1001 AND n <= 2999", "2000"),
+        ((3, 2), "n > 0.001 AND n < 0.019", "0.01"),
+        ((3, 2), "n >= 0.001 AND n <= 0.019", "0.01"),
+        ((2,), "n > 0.1 AND n < 1.1", "1"),
+    ],
+)
+@settings(max_examples=10, deadline=None)
+@given(data=st.data())
+def test_off_grid_bounds_preserve_the_only_storable_value(modifiers, expression, expected, data):
+    """Oracle: the sole multiple of the declared unit satisfying each CHECK."""
+    column = _col("n", "numeric", modifiers=modifiers)
+    spec = narrow_spec_for_checks(
+        spec_for_type(column.type), column, (CheckConstraint(expression),)
+    )
+    assert data.draw(strategy_for_spec(spec)) == Decimal(expected)
+    sample = sampler_for_spec(spec, random.Random(42))
+    assert {sample() for _ in range(10)} == {Decimal(expected)}
+
+
+def test_decimal_interval_with_no_storable_multiple_is_empty():
+    column = _col("n", "numeric", modifiers=(2, 0))
+    spec = narrow_spec_for_checks(
+        spec_for_type(column.type), column, (CheckConstraint("n >= 0.1 AND n <= 0.9"),)
+    )
+    assert spec_is_empty(spec)
+    with pytest.raises(SqlProofGenerationError, match="admit no value"):
+        sampler_for_spec(spec, random.Random(42))
 
 
 def test_decimal_narrow_open_interval_is_satisfiable_not_inverted():

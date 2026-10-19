@@ -73,6 +73,23 @@ Each run loads a generated dataset into the database inside a savepoint, execute
 the database, such as an unknown table or a syntax error, are raised as-is and
 never count as a pass.
 
+Pass `seed=1234` to `check()` or `invariant()` to repeat a search with the
+same schema, strategies and dependency versions. An explicit seed disables
+Hypothesis's example database for that run. Without a seed, Hypothesis's
+normal profile and `--hypothesis-seed` settings apply. Failing invariants
+shrink their datasets, and the exception's counterexample includes the seed
+used (or `None` for a derandomized run), the run that first failed and the
+number of shrinking calls after it. It is also saved under
+`.sqlproof/failures/`, as `check()` does.
+
+A recorded seed repeats the random search, not necessarily the failure.
+When Hypothesis replays a failure saved in its example database by an
+earlier run, the seed of the current run never searched for it, and passing
+it back turns the database off. Keep the `.hypothesis/` directory or the
+counterexample file to reproduce such a failure. Each property and
+invariant has its own example-database entry, so one passing property
+never discards another's saved failure.
+
 `invariant()` needs a database connection (`from_connection_string`) to run
 arbitrary SQL. A proof built only from a schema file evaluates queries in
 memory, which handles just a plain `SELECT <columns> FROM <table>`. Any other

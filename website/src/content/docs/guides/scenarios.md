@@ -306,7 +306,10 @@ To repeat the search instead, pass the recorded seed back:
 `@sqlproof(proof, sizes=..., seed=<seed>)`; `sqlproof replay FILE`
 prints it. A run with no `seed=` is left to Hypothesis, so a
 `derandomize` profile or `--hypothesis-seed` still applies (and then the
-file records no seed, or the forced one).
+file records no seed, or the forced one). The seed repeats the random
+search, so it finds the failure again only if that search found it: a
+failure Hypothesis replayed from its example database was found by an
+earlier run, and is reproduced from the counterexample file instead.
 
 ## Errors before the database
 
