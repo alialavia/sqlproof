@@ -5,6 +5,18 @@ All notable changes to SqlProof will be documented here. The format is based on
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While SqlProof
 remains in `0.x`, minor versions may include breaking changes.
 
+## [0.15.0](https://github.com/alialavia/sqlproof/compare/v0.14.0...v0.15.0) (2026-10-19)
+
+
+### ⚠ BREAKING CHANGES
+
+* **generators:** generated numeric keys, references and some numeric values differ for the same seed, so seed-generated fixtures need regenerating. invariant() now runs a shrinking search and writes .hypothesis/ and .sqlproof/failures/. Counterexample `runs` and `shrink_steps` change meaning, and failures saved under the previous shared example-database key are not replayed.
+
+### Fixed
+
+* **generators:** restore 1:1 keys in row_strategy and close review gaps from [#164](https://github.com/alialavia/sqlproof/issues/164) ([#177](https://github.com/alialavia/sqlproof/issues/177)) ([8907697](https://github.com/alialavia/sqlproof/commit/8907697d8f82b724d2d20ad5bc00436341d23b60))
+* **generators:** widen generated domains, fix numeric keys and make property runs reproducible ([#164](https://github.com/alialavia/sqlproof/issues/164)) ([98e7d6f](https://github.com/alialavia/sqlproof/commit/98e7d6f5fbd5efba8205ba757f2d06b4c5b0975e))
+
 ## [0.14.0](https://github.com/alialavia/sqlproof/compare/v0.13.0...v0.14.0) (2026-10-15)
 
 
