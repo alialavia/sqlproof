@@ -153,29 +153,12 @@ def insertion_plan(schema: SchemaInfo) -> InsertionPlan:
     can never disagree about what loads.
 
     Raises `CircularDependencyError` (from `resolve_insertion_plan`) for
-    a foreign-key cycle with no nullable edge to defer, and
-    `SqlProofGenerationError` for a cycle that could be deferred, since
-    the bulk path has no second UPDATE pass yet.
+    a foreign-key cycle with no nullable edge to defer. A cycle that can
+    be deferred loads in two passes, as on the Hypothesis path (core.py's
+    `_insert_dataset`): `load_dataset` COPYs the deferred columns as NULL,
+    then sets them with one UPDATE per table once every table is loaded.
     """
-    plan = resolve_insertion_plan(schema.tables)
-    if plan.deferred_edges:
-        # core.py:346-391 resolves FK cycles with a second UPDATE
-        # pass. The bulk path has no equivalent yet. Without this
-        # guard the load SUCCEEDS and every deferred FK is silently
-        # NULL -- and a measurement taken against data whose
-        # relationships do not exist is worse than no measurement,
-        # because it looks correct.
-        edges = ", ".join(
-            f"{e.source_table}->{e.referenced_table}" for e in plan.deferred_edges
-        )
-        msg = (
-            f"Bulk loading does not yet support foreign-key cycles "
-            f"(deferred edges: {edges}). The Hypothesis path handles these "
-            f"via a second UPDATE pass; until the bulk loader does the "
-            f"same, loading would silently leave these columns NULL."
-        )
-        raise SqlProofGenerationError(msg)
-    return plan
+    return resolve_insertion_plan(schema.tables)
 
 
 def missing_required_parents(
@@ -238,29 +221,114 @@ def load_dataset(
     is that a Hypothesis `SearchStrategy` is rejected here rather than
     drawn -- see `bulk._resolve_override`.
     """
+    deferred = _deferred_columns(insertion_plan(schema))
     loaded: dict[str, int] = {}
-    for table, rows in generate_dataset(
-        schema,
-        sizes,
-        seed=seed,
-        distribution=distribution,
-        null_frac=null_frac,
-        columns=columns,
-    ):
-        # The column list is derived from a real row `bulk_table_rows`
-        # produced, not re-filtered from `table.columns` independently.
-        # A single-column primary key is assigned a value regardless
-        # of `is_generated`/`default` (to match the Hypothesis path --
-        # see generators/bulk.py), so "generated or has a default"
-        # is no longer the same set of columns as "present in the
-        # row". Two independent rules for "which columns" is exactly
-        # the drift this codebase keeps getting bitten by; asking the
-        # row itself is the only way to stay in sync by construction.
-        first_row = next(rows)
-        column_names = list(first_row.keys())
-        all_rows = itertools.chain([first_row], rows)
-        loaded[table.name] = copy_table(conn, table, all_rows, column_names)
+    pending: list[tuple[Table, list[str], SpooledTemporaryFile[str]]] = []
+    try:
+        for table, rows in generate_dataset(
+            schema,
+            sizes,
+            seed=seed,
+            distribution=distribution,
+            null_frac=null_frac,
+            columns=columns,
+        ):
+            # The column list is derived from a real row `bulk_table_rows`
+            # produced, not re-filtered from `table.columns` independently.
+            # A single-column primary key is assigned a value regardless
+            # of `is_generated`/`default` (to match the Hypothesis path --
+            # see generators/bulk.py), so "generated or has a default"
+            # is no longer the same set of columns as "present in the
+            # row". Two independent rules for "which columns" is exactly
+            # the drift this codebase keeps getting bitten by; asking the
+            # row itself is the only way to stay in sync by construction.
+            first_row = next(rows)
+            all_rows: Iterator[dict[str, Any]] = itertools.chain([first_row], rows)
+            later = [name for name in deferred.get(table.name, ()) if name in first_row]
+            if later:
+                # A deferred edge's parent loads after this table, so COPY
+                # cannot carry the value yet. Keep (key, value) aside and
+                # set it once every table is in.
+                side = _side_file()
+                pending.append((table, later, side))
+                all_rows = _set_aside(table, all_rows, later, side)
+            column_names = [name for name in first_row if name not in later]
+            loaded[table.name] = copy_table(conn, table, all_rows, column_names)
+        for table, later, side in pending:
+            _apply_deferred(conn, table, later, side)
+    finally:
+        for _, _, side in pending:
+            side.close()
     return loaded
+
+
+def _deferred_columns(plan: InsertionPlan) -> dict[str, list[str]]:
+    """Table name -> the columns its deferred edges cover, in edge order."""
+    out: dict[str, list[str]] = {}
+    for edge in plan.deferred_edges:
+        names = out.setdefault(edge.source_table, [])
+        names.extend(name for name in edge.fk_columns if name not in names)
+    return out
+
+
+def _side_file() -> SpooledTemporaryFile[str]:
+    return SpooledTemporaryFile(max_size=1024 * 1024, mode="w+t", encoding="utf-8")
+
+
+def _set_aside(
+    table: Table,
+    rows: Iterator[dict[str, Any]],
+    later: Sequence[str],
+    side: SpooledTemporaryFile[str],
+) -> Iterator[dict[str, Any]]:
+    """`rows` unchanged, writing each row's key and `later` values to
+    `side` in COPY format. `copy_table` sends only the columns it is
+    given, so the deferred values never reach the first COPY. A row whose
+    deferred values are all NULL needs no UPDATE and is not written."""
+    if not table.primary_key:
+        msg = (
+            f"Cannot load {table.qualified_name}: its foreign key into a later "
+            "table must be set after that table loads, which needs a primary "
+            "key to find each row again."
+        )
+        raise SqlProofGenerationError(msg)
+    names = [*table.primary_key, *later]
+    kinds = column_wrap_kinds(table, names)
+    for row in rows:
+        if any(row.get(name) is not None for name in later):
+            side.write(copy_line(row, names, kinds))
+        yield row
+
+
+def _apply_deferred(
+    conn: database.Connection,
+    table: Table,
+    later: Sequence[str],
+    side: SpooledTemporaryFile[str],
+) -> None:
+    """Set `later` on the rows `side` names: COPY them into a temporary
+    table shaped like the target's columns, then one UPDATE ... FROM.
+    Postgres checks the foreign keys on the UPDATE, so a value pointing
+    at no row fails the load rather than loading."""
+    if side.tell() == 0:
+        return
+    side.seek(0)
+    qualified = f"{_quote(table.schema)}.{_quote(table.name)}"
+    key = list(table.primary_key)
+    temp = _quote(f"sqlproof_deferred_{table.name}")
+    selected = ", ".join(_quote(name) for name in [*key, *later])
+    conn.execute(f"DROP TABLE IF EXISTS pg_temp.{temp}")
+    conn.execute(
+        f"CREATE TEMPORARY TABLE {temp} AS SELECT {selected} FROM {qualified} WITH NO DATA"
+    )
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f"COPY {temp} ({selected}) FROM STDIN", stream=side)
+        assignments = ", ".join(f"{_quote(name)} = d.{_quote(name)}" for name in later)
+        match = " AND ".join(f"t.{_quote(name)} = d.{_quote(name)}" for name in key)
+        conn.execute(f"UPDATE {qualified} AS t SET {assignments} FROM {temp} AS d WHERE {match}")
+    finally:
+        conn.execute(f"DROP TABLE IF EXISTS pg_temp.{temp}")
 
 
 def generate_dataset(
@@ -284,6 +352,16 @@ def generate_dataset(
     counts: dict[str, int] = {}
     parent_tables = {table.qualified_name: table for table in schema.tables}
     parent_tables.update({table.name: table for table in schema.tables})
+    # A deferred edge's parent comes later in the order, but its size is
+    # already known, so its keys are too: rows reference it like any other
+    # parent, and `load_dataset` sets those columns after it loads.
+    later_parents: dict[str, dict[str, int]] = {}
+    for edge in plan.deferred_edges:
+        parent = parent_tables.get(edge.referenced_table)
+        if parent is not None:
+            later_parents.setdefault(edge.source_table, {})[edge.referenced_table] = size_for(
+                sizes, parent
+            )
     for table in plan.ordered_tables:
         count = size_for(sizes, table)
         if count <= 0:
@@ -294,7 +372,7 @@ def generate_dataset(
                 table,
                 count=count,
                 rng=rng,
-                parent_counts=counts,
+                parent_counts={**later_parents.get(table.name, {}), **counts},
                 parent_tables=parent_tables,
                 distribution=distribution,
                 null_frac=null_frac,

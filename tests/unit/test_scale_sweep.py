@@ -17,6 +17,7 @@ from sqlproof.exceptions import SqlProofScaleError, SqlProofUsageError
 from sqlproof.scale import sweep
 from sqlproof.scale.args import heaviest
 from sqlproof.scale.fit import MIN_POINTS
+from sqlproof.scale.load import insertion_plan
 from sqlproof.scale.probe import ProbePoint
 from sqlproof.scale.sweep import run_sweep
 from sqlproof.schema.model import Column, ForeignKey, PgType, SchemaInfo, Table
@@ -417,8 +418,8 @@ def test_a_nullable_parent_left_empty_is_not_refused(monkeypatch: pytest.MonkeyP
 
 def _cyclic_schema(*, nullable: bool) -> SchemaInfo:
     """a.b_id -> b and b.a_id -> a. With a nullable a.b_id the planner can
-    defer that edge, and the bulk loader then refuses the deferred edge;
-    with every foreign key NOT NULL there is nothing to defer."""
+    defer that edge, and the bulk loader sets it in a second pass; with
+    every foreign key NOT NULL there is nothing to defer."""
 
     def table(name: str, fk_column: str, parent: str, fk_nullable: bool) -> Table:
         return Table(
@@ -440,24 +441,23 @@ def _cyclic_schema(*, nullable: bool) -> SchemaInfo:
     return SchemaInfo(tables=(table("a", "b_id", "b", nullable), table("b", "a_id", "a", False)))
 
 
-@pytest.mark.parametrize(
-    ("nullable", "loader_says"),
-    [
-        (True, "does not yet support foreign-key cycles"),
-        (False, "Circular foreign-key dependency"),
-    ],
-)
 def test_a_schema_the_loader_cannot_load_is_refused_before_any_database_call(
-    monkeypatch: pytest.MonkeyPatch, nullable: bool, loader_says: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The check is the loader's own planning step (`insertion_plan`,
     which `load_dataset` also calls), not a reimplementation of it."""
     log: list[tuple[Any, ...]] = []
     _install_db_stubs(monkeypatch, _never_probe, log=log)
-    with pytest.raises(SqlProofUsageError, match=loader_says) as exc_info:
-        run_sweep(object(), _cyclic_schema(nullable=nullable), "fn", sizes={"a": 2, "b": 2})
+    with pytest.raises(SqlProofUsageError, match="Circular foreign-key dependency") as exc_info:
+        run_sweep(object(), _cyclic_schema(nullable=False), "fn", sizes={"a": 2, "b": 2})
     assert exc_info.value.__cause__ is not None  # chained from the loader's error
     assert log == []
+
+
+def test_a_cycle_with_a_nullable_edge_passes_the_planning_check() -> None:
+    """The bulk loader defers the nullable edge, as the Hypothesis path does."""
+    plan = insertion_plan(_cyclic_schema(nullable=True))
+    assert [(e.source_table, e.fk_columns) for e in plan.deferred_edges] == [("a", ("b_id",))]
 
 
 def test_tables_holding_rows_are_refused_and_nothing_is_truncated(

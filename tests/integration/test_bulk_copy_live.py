@@ -14,7 +14,6 @@ import pytest
 
 from sqlproof import _database as database
 from sqlproof._database import dict_row
-from sqlproof.exceptions import SqlProofGenerationError
 from sqlproof.scale.load import analyze, load_dataset, truncate
 from sqlproof.schema.introspect import introspect_schema
 from sqlproof.schema.parse_sql import parse_schema_sql
@@ -76,43 +75,70 @@ def test_analyze_populates_planner_statistics(conn):
     assert rows > 0
 
 
-def test_cyclic_schema_raises_rather_than_loading_null_relationships(conn):
-    """The dangerous failure, made loud.
+CYCLIC_SQL = """
+CREATE TABLE content (id bigint PRIMARY KEY, current_version_id bigint);
+CREATE TABLE versions (
+  id bigint PRIMARY KEY,
+  content_id bigint NOT NULL REFERENCES content(id)
+);
+ALTER TABLE content ADD CONSTRAINT fk_cv
+  FOREIGN KEY (current_version_id) REFERENCES versions(id);
+"""
 
-    Without the guard this load SUCCEEDS with every deferred FK NULL,
-    and a later sweep would measure a function against data whose
-    relationships do not exist -- returning a confident wrong answer.
 
-    The `SchemaInfo` here comes from live introspection, not
-    `parse_schema_sql`: `parse_schema_sql` silently drops `ALTER
-    TABLE ... ADD CONSTRAINT ... FOREIGN KEY` (confirmed -- on this
-    exact cyclic SQL it returns `content.foreign_keys == ()`), which
-    would make the cycle invisible to `resolve_insertion_plan` and
-    fail this test for the wrong reason (either no raise at all, or a
-    `database` error from the tables never having been introspected
-    correctly, instead of the `SqlProofGenerationError` this test is
-    actually about). Introspecting the live schema after applying the
-    ALTER TABLE picks the FK up the same way a real caller's schema
-    would be read.
-    """
-    cyclic = """
-    CREATE TABLE content (id bigint PRIMARY KEY, current_version_id bigint);
-    CREATE TABLE versions (
-      id bigint PRIMARY KEY,
-      content_id bigint NOT NULL REFERENCES content(id)
-    );
-    ALTER TABLE content ADD CONSTRAINT fk_cv
-      FOREIGN KEY (current_version_id) REFERENCES versions(id);
-    """
-    conn.execute(cyclic)
-
+def _introspected_cyclic_schema(conn):
+    """The `SchemaInfo` comes from live introspection, not
+    `parse_schema_sql`: `parse_schema_sql` silently drops `ALTER TABLE
+    ... ADD CONSTRAINT ... FOREIGN KEY` (on this exact SQL it returns
+    `content.foreign_keys == ()`), which would hide the cycle from
+    `resolve_insertion_plan` and let these tests pass for the wrong
+    reason."""
+    conn.execute(CYCLIC_SQL)
     with database.connect(
         os.environ[DSN_ENV], autocommit=True, row_factory=dict_row
     ) as introspect_conn:
-        schema = introspect_schema(introspect_conn, schema="bulk_test")
+        return introspect_schema(introspect_conn, schema="bulk_test")
 
-    with pytest.raises(SqlProofGenerationError, match="foreign-key cycles"):
-        load_dataset(conn, schema, {"content": 10, "versions": 10}, seed=1)
+
+def test_a_cyclic_schema_loads_with_every_deferred_foreign_key_set(conn):
+    """A deferred edge (content.current_version_id -> versions) is
+    COPYed as NULL, then set by one UPDATE once versions exist -- the
+    bulk counterpart of the Hypothesis path's second pass. Leaving it
+    NULL would be the dangerous failure: a sweep measuring a function
+    against data whose relationships do not exist."""
+    schema = _introspected_cyclic_schema(conn)
+    counts = load_dataset(conn, schema, {"content": 10, "versions": 40}, seed=1)
+    assert counts == {"content": 10, "versions": 40}
+    unset, dangling = conn.execute(
+        "SELECT count(*) FILTER (WHERE c.current_version_id IS NULL),"
+        "       count(*) FILTER (WHERE c.current_version_id IS NOT NULL AND v.id IS NULL)"
+        "  FROM bulk_test.content c"
+        "  LEFT JOIN bulk_test.versions v ON v.id = c.current_version_id"
+    ).fetchone()
+    assert (unset, dangling) == (0, 0)
+
+
+def test_a_deferred_foreign_key_into_an_empty_table_stays_null(conn):
+    """Nothing to point at: the column is nullable, so NULL is the only
+    valid value, exactly as for an acyclic nullable FK into an empty
+    parent."""
+    schema = _introspected_cyclic_schema(conn)
+    counts = load_dataset(conn, schema, {"content": 5}, seed=1)
+    assert counts == {"content": 5}
+    unset = conn.execute(
+        "SELECT count(*) FROM bulk_test.content WHERE current_version_id IS NULL"
+    ).fetchone()[0]
+    assert unset == 5
+
+
+def test_a_cyclic_load_is_reproducible(conn):
+    schema = _introspected_cyclic_schema(conn)
+    query = "SELECT id, current_version_id FROM bulk_test.content ORDER BY id"
+    load_dataset(conn, schema, {"content": 10, "versions": 40}, seed=3)
+    first = conn.execute(query).fetchall()
+    truncate(conn, schema)
+    load_dataset(conn, schema, {"content": 10, "versions": 40}, seed=3)
+    assert conn.execute(query).fetchall() == first
 
 
 def test_truncate_refuses_a_table_outside_the_modelled_schema(conn):
