@@ -33,9 +33,9 @@
         },
         {
           "type": "object",
-          "description": "n rows with nothing pinned.",
+          "description": "n rows with the columns in `set` pinned. Unlike a cohort, a fill grows in a scale sweep, so pin per-row values with the value generators (format, one_of, some_of, pick).",
           "required": ["fill"],
-          "properties": {"fill": {"type": "integer", "minimum": 0}},
+          "properties": {"fill": {"type": "integer", "minimum": 0}, "set": {"$ref": "#/$defs/pinned"}},
           "additionalProperties": false
         },
         {
@@ -75,12 +75,72 @@
       "additionalProperties": {"$ref": "#/$defs/value"}
     },
     "value": {
-      "description": "A literal Postgres can read, a reference to a named row, a list (an array column) or an object (a json column). An object that is exactly {ref: <name>} is always a reference.",
+      "description": "A literal Postgres can read, a reference to a named row, a value generator, a list (an array column; its elements may be format generators) or an object (a json column). An object that is exactly {ref: <name>} is always a reference. An object with a format, one_of, some_of, pick or json key is a generator, so a json value of that shape is written {json: <value>}.",
       "anyOf": [
         {"type": ["string", "number", "boolean", "null"]},
         {"$ref": "#/$defs/ref"},
-        {"type": "array"},
-        {"type": "object"}
+        {"$ref": "#/$defs/generator"},
+        {"type": "array", "items": {"anyOf": [{"$ref": "#/$defs/format"}, {"$ref": "#/$defs/data"}]}},
+        {"$ref": "#/$defs/data"}
+      ]
+    },
+    "data": {
+      "description": "A scalar, array or json object that cannot read as a generator.",
+      "anyOf": [
+        {"type": ["string", "number", "boolean", "null", "array"]},
+        {
+          "type": "object",
+          "not": {
+            "anyOf": [
+              {"required": ["format"]},
+              {"required": ["one_of"]},
+              {"required": ["some_of"]},
+              {"required": ["pick"]},
+              {"required": ["json"]}
+            ]
+          }
+        }
+      ]
+    },
+    "format": {
+      "type": "object",
+      "description": "Text with {n} replaced by each row's number in its table (1, 2, 3, ...).",
+      "required": ["format"],
+      "properties": {"format": {"type": "string"}},
+      "additionalProperties": false
+    },
+    "generator": {
+      "description": "A value that differs per row: a pure function of the scenario, its seed, the column and the row.",
+      "oneOf": [
+        {"$ref": "#/$defs/format"},
+        {
+          "type": "object",
+          "description": "One of the values per row.",
+          "required": ["one_of"],
+          "properties": {"one_of": {"type": "array", "minItems": 1}},
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "description": "An array of count distinct values from the list, for an array column.",
+          "required": ["some_of", "count"],
+          "properties": {"some_of": {"type": "array", "minItems": 1}, "count": {"$ref": "#/$defs/count"}},
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "description": "Values another column of the scenario holds (table.column): an array of count distinct ones for an array column, or one value without count. The source must be a column the scenario computes per row: a literal, a generator, a key or a UNIQUE column.",
+          "required": ["pick"],
+          "properties": {"pick": {"type": "string", "pattern": "^[^.]+(\\.[^.]+){1,2}$"}, "count": {"$ref": "#/$defs/count"}},
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "description": "A json value written so it cannot read as a generator.",
+          "required": ["json"],
+          "properties": {"json": {}},
+          "additionalProperties": false
+        }
       ]
     },
     "ref": {

@@ -41,7 +41,7 @@ an ordered list of row groups:
 | Call | Rows |
 | --- | --- |
 | `s.table("t").cohort(n, col=value, ...)` | `n` rows with the listed columns pinned; every other column is generated |
-| `s.table("t").fill(n)` | `n` rows with nothing pinned |
+| `s.table("t").fill(n, col=value, ...)` | `n` rows, with any listed columns pinned; unlike a cohort, a fill grows in scale sweeps |
 | `s.row("t", name="x", col=value, ...)` | one row that other rows can reference as `x` |
 | `s.table("t").per_parent("p", where=..., count=..., default=0)` | children sized by their parents, see below |
 
@@ -49,11 +49,56 @@ Table names are bare (`"customers"`) or schema-qualified
 (`"billing.customers"`). A bare name that matches tables in two schemas
 is an error that asks for the qualified name.
 
-Pinned values are literals, references, or callables. A callable
-receives the same context object as a
+Pinned values are literals, references, value generators (below), or
+callables. A callable receives the same context object as a
 [per-column override](/examples/data-generation/) and may
 return `GENERATE` (from `sqlproof.generators`) to let the generator
 choose that row's value after all.
+
+### Values that differ per row
+
+A literal gives every row of a group the same value. A value generator
+gives each row its own:
+
+| Python | YAML | Each row gets |
+| --- | --- | --- |
+| `s.format("https://acme.com/blog/{n}")` | `{format: "https://acme.com/blog/{n}"}` | the text with `{n}` replaced by the row's number in its table (1, 2, 3, ...) |
+| `s.one_of("chatgpt", "claude")` | `{one_of: [chatgpt, claude]}` | one of the values |
+| `s.some_of(["a", "b", "c"], count=(0, 2))` | `{some_of: [a, b, c], count: [0, 2]}` | an array of 0 to 2 distinct values, for an array column |
+| `s.pick("pages.url", count=(1, 3))` | `{pick: pages.url, count: [1, 3]}` | an array of 1 to 3 distinct values that `pages.url` holds; one value without `count` |
+
+`format` also works inside an array literal: `names: [{format: "Rival {n}"}]`.
+
+`pick` is how rows carry a relationship the schema does not declare. A
+response citing a page's URL, or mentioning a tracked brand, has no
+foreign key to point along, so generated values would never match:
+
+```yaml
+pages:
+  - fill: 10
+    set: {project_id: {ref: acme}, url: {format: "https://acme.com/blog/{n}"}}
+responses:
+  - fill: 200
+    set:
+      project_id: {ref: acme}
+      cited_sources: {pick: pages.url, count: [0, 4]}
+      brands_mentioned: {pick: tracked_brands.names, count: [0, 3]}
+```
+
+Every value is a function of the scenario, its seed, the column and the
+row, so a scenario with generators still loads the same rows every
+time. Adding a generator to a column changes that column and nothing
+else: the generator still takes the random draws the column would have
+taken. `pick` reads its source column per row without loading the
+table, so the source must be one the scenario computes: a literal or a
+generator pinned on every group, a key, a `UNIQUE` column the generator
+fills, or a `gen_random_uuid()`-style default. A column generated at
+random is refused. From a table with no rows, `pick` gives an empty
+array (or `NULL`).
+
+In a scenario file, an object with a `format`, `one_of`, `some_of`,
+`pick` or `json` key is a generator. To pin a json value of that shape,
+write it as `{json: {format: "kept as data"}}`; exports do so.
 
 ### References
 
@@ -273,6 +318,25 @@ At factor `k` the scenario grows about `k` times:
   (a named row, or a cohort) gets `k` times the children; parents that
   themselves multiply keep their per-parent count.
 
+A function's cost usually grows with one dimension: prompts, pages,
+brands. Name the tables to grow instead with `grow=`; their fills and
+cohorts multiply, every other table keeps its size, and a per-parent
+table grows with its parent (or by itself, when it is named and its
+parent is not):
+
+```python
+# Responses x pages: grow both, keep prompts and brands fixed.
+result = scale_analysis(
+    proof, "content_citations", scenario=visibility, args=[RowRef("acme")],
+    grow=["pages", "responses"],
+)
+```
+
+A sweep that grows only responses reads a function that rescans every
+page per response as linear; growing pages as well shows it is
+quadratic. Value generators keep their meaning at every factor, so
+`pick` keeps citations pointing at real pages as both grow.
+
 So "acme's invoices as the rest of the data grows" is one sweep. The
 scenario's seed is the sweep's, its `auth.users` rows are inserted before
 each load and removed at the end, and the run artifact records the
@@ -319,7 +383,13 @@ key that is not made of references (and one that is, unless every row
 of the table pins all of it, distinctly),
 values that break a `NOT NULL`, enum or `CHECK` constraint, a unique
 value pinned on two rows, references to undeclared rows or to the wrong
-table, and child rows whose required parent table would be empty.
+table, and child rows whose required parent table would be empty. For
+value generators: one on a foreign key (pin a reference or use
+`per_parent`), on a json column, or a non-`format` one on a `UNIQUE`
+column; `format` into a column that is not text; `some_of`, or `pick`
+with `count`, into a column that is not an array; a `pick` from a
+column generated at random; and a `NOT NULL` `pick` from a table with no
+rows.
 
 ## Limits in this release
 

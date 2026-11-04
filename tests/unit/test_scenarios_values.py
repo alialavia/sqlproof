@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import jsonschema
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
@@ -22,7 +23,7 @@ from hypothesis import strategies as st
 from sqlproof.exceptions import SqlProofScenarioError
 from sqlproof.scale.load import generate_dataset
 from sqlproof.scenarios import Scenario, ScenarioBuilder
-from sqlproof.scenarios.serialize import dumps, scenario_from_dict
+from sqlproof.scenarios.serialize import dumps, json_schema, scenario_from_dict
 from sqlproof.schema.model import SchemaInfo
 from sqlproof.schema.parse_sql import parse_schema_sql
 
@@ -303,6 +304,7 @@ YAML_SCENARIO = {
 
 
 def test_the_yaml_form_loads_and_round_trips(schema: SchemaInfo) -> None:
+    jsonschema.Draft202012Validator(json_schema()).validate(YAML_SCENARIO)
     built = scenario_from_dict(YAML_SCENARIO)
     again = scenario_from_dict(built.to_dict())
     assert again.fingerprint == built.fingerprint
@@ -478,6 +480,141 @@ def test_minimal_and_scaled_variants_keep_their_generators(
 )
 def test_the_serialized_form_round_trips(pages: int, responses: int, hint: str, seed: int) -> None:
     built = _scenario(_hinted(pages, responses, hint), seed=seed, name="round")
+    jsonschema.Draft202012Validator(json_schema()).validate(built.to_dict())
     again = scenario_from_dict(built.to_dict())
     assert again.fingerprint == built.fingerprint
     assert _rows(again) == _rows(built)
+
+
+# -- every refusal names its column -----------------------------------------------------
+
+EDGE_SCHEMA = parse_schema_sql(
+    """
+    CREATE TABLE owners (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id uuid REFERENCES auth.users(id),
+      handle text,
+      ref_code uuid NOT NULL DEFAULT gen_random_uuid(),
+      scores integer[]
+    );
+    CREATE TABLE notes (
+      id bigint PRIMARY KEY,
+      owner_id uuid REFERENCES owners(id),
+      label text,
+      refs text[],
+      codes text[]
+    );
+    """
+)
+
+
+def _edge(build: Any) -> Scenario:
+    return Scenario(build, seed=2, name="edge")
+
+
+@pytest.mark.parametrize(
+    ("build", "problem"),
+    [
+        (
+            lambda s: s.table("notes").fill(1, label=[s.format("a{n}")]),
+            r"notes\.label is not an array; pin one value",
+        ),
+        (
+            lambda s: s.table("owners").fill(1, scores=[s.format("{n}")]),
+            r"format writes text; the elements of public\.owners\.scores are",
+        ),
+        (
+            lambda s: s.table("notes").fill(1, refs=[s.one_of("a", "b")]),
+            "inside an array, only format is supported",
+        ),
+        (
+            lambda s: (
+                s.table("auth.users").fill(1),
+                s.table("notes").fill(1, label=s.pick("auth.users.id")),
+            ),
+            "pick cannot read auth.users",
+        ),
+        (
+            lambda s: (
+                s.table("owners").fill(1, handle=s.pick("notes.label")),
+                s.table("notes").fill(
+                    1, label=s.format("l{n}"), refs=s.pick("owners.handle", count=1)
+                ),
+            ),
+            r"owners\.handle is itself picked",
+        ),
+        (
+            lambda s: (
+                s.table("owners").cohort(1, handle=lambda ctx: "x"),
+                s.table("notes").fill(1, label=s.pick("owners.handle")),
+            ),
+            r"owners\.handle is pinned to a callable",
+        ),
+        (
+            lambda s: (
+                s.table("owners").fill(2),
+                s.table("notes").fill(1, label=s.pick("owners.handle")),
+            ),
+            r"owners\.handle is generated at random on a fill",
+        ),
+    ],
+)
+def test_each_misuse_is_refused_with_its_column(build: Any, problem: str) -> None:
+    with pytest.raises(SqlProofScenarioError, match=problem):
+        _edge(build).compile(EDGE_SCHEMA)
+
+
+def test_pick_reads_keys_and_volatile_defaults() -> None:
+    """A uuid key or a gen_random_uuid() default is derived from the seed
+    and row, so it can be picked from."""
+
+    def build(s: ScenarioBuilder) -> None:
+        s.table("owners").fill(3)
+        s.table("notes").fill(6, label=s.pick("owners.ref_code"), refs=s.pick("owners.id"))
+
+    rows = _rows(_edge(build), EDGE_SCHEMA)
+    codes = {r["ref_code"] for r in rows["owners"]}
+    ids = {r["id"] for r in rows["owners"]}
+    for row in rows["notes"]:
+        assert row["label"] in codes
+        assert len(row["refs"]) == 1 and row["refs"][0] in ids  # an array pick without count: one
+
+
+@pytest.mark.parametrize(
+    ("make", "problem"),
+    [
+        (lambda s: s.format(3), "format must be a string"),
+        (lambda s: s.one_of(), "one_of needs at least one value"),
+        (lambda s: s.some_of("abc", count=1), "some_of needs a non-empty list"),
+        (lambda s: s.some_of([], count=1), "some_of needs a non-empty list"),
+        (lambda s: s.some_of(["a"], count=True), "count must be an int"),
+        (lambda s: s.some_of(["a"], count=(1, "2")), "count must be an int"),
+        (lambda s: s.some_of(["a"], count=[1, 2, 3]), "count must be an int"),
+        (lambda s: s.pick("url"), "pick names a column as table.column"),
+        (lambda s: s.pick("pages."), "pick names a column as table.column"),
+    ],
+)
+def test_the_python_builders_check_their_arguments(make: Any, problem: str) -> None:
+    with pytest.raises(SqlProofScenarioError, match=problem):
+        make(ScenarioBuilder())
+
+
+@pytest.mark.parametrize(
+    ("value", "problem"),
+    [
+        ({"format": "a", "one_of": ["b"]}, "mixes format and one_of"),
+        ({"some_of": ["a"]}, "some_of needs a count"),
+        ({"some_of": "a", "count": 1}, "some_of needs a non-empty list"),
+        ({"one_of": "a"}, "one_of needs at least one value"),
+        ({"pick": 3}, "pick names a column as table.column"),
+    ],
+)
+def test_more_bad_generators_in_files(value: dict[str, Any], problem: str) -> None:
+    data = {
+        "version": 1,
+        "name": "bad",
+        "seed": 1,
+        "tables": {"notes": [{"fill": 1, "set": {"refs": [value]}}]},
+    }
+    with pytest.raises(SqlProofScenarioError, match=problem):
+        scenario_from_dict(data)

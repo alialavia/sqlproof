@@ -325,7 +325,26 @@ def test_json_schema_accepts_exports_and_rejects_what_the_parser_rejects() -> No
     validator.validate(
         {**_valid(), "tables": {"customers": [{"cohort": 1, "set": {"tags": ["a"], "m": {}}}]}}
     )
+    # Fills pin columns too, and generators are values.
+    validator.validate(
+        {
+            **_valid(),
+            "tables": {
+                "customers": [
+                    {
+                        "fill": 3,
+                        "set": {"email": {"format": "c{n}@x.io"}, "tier": {"one_of": [1, 2]}},
+                    },
+                    {"fill": 2, "set": {"tags": {"some_of": ["a", "b"], "count": [0, 2]}}},
+                    {"fill": 1, "set": {"tags": [{"format": "t{n}"}], "m": {"json": {"pick": 1}}}},
+                    {"fill": 1, "set": {"nick": {"pick": "customers.email"}}},
+                ]
+            },
+        }
+    )
     for bad in (
+        {**_valid(), "tables": {"customers": [{"fill": 1, "set": {"t": {"some_of": ["a"]}}}]}},
+        {**_valid(), "tables": {"customers": [{"fill": 1, "set": {"t": {"pick": "nodot"}}}]}},
         {**_valid(), "colour": "red"},
         {**_valid(), "version": 2},
         {**_valid(), "tables": {"customers": [{"fill": 1, "cohort": 1}]}},

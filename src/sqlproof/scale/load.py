@@ -15,6 +15,7 @@ database.
 
 from __future__ import annotations
 
+import contextlib
 import itertools
 import random
 from collections.abc import Iterable, Iterator, Mapping, Sequence
@@ -317,7 +318,6 @@ def _apply_deferred(
     key = list(table.primary_key)
     temp = _quote(f"sqlproof_deferred_{table.name}")
     selected = ", ".join(_quote(name) for name in [*key, *later])
-    conn.execute(f"DROP TABLE IF EXISTS pg_temp.{temp}")
     conn.execute(
         f"CREATE TEMPORARY TABLE {temp} AS SELECT {selected} FROM {qualified} WITH NO DATA"
     )
@@ -327,8 +327,14 @@ def _apply_deferred(
         assignments = ", ".join(f"{_quote(name)} = d.{_quote(name)}" for name in later)
         match = " AND ".join(f"t.{_quote(name)} = d.{_quote(name)}" for name in key)
         conn.execute(f"UPDATE {qualified} AS t SET {assignments} FROM {temp} AS d WHERE {match}")
-    finally:
-        conn.execute(f"DROP TABLE IF EXISTS pg_temp.{temp}")
+    except (database.DatabaseError, OSError):
+        # (COPY reports a failure as OSError.) Inside a transaction the
+        # failure aborted it and the rollback drops the temporary table, so
+        # the drop here fails too: keep this error.
+        with contextlib.suppress(database.DatabaseError, OSError):
+            conn.execute(f"DROP TABLE pg_temp.{temp}")
+        raise
+    conn.execute(f"DROP TABLE pg_temp.{temp}")
 
 
 def generate_dataset(
