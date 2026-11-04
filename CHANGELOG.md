@@ -5,6 +5,14 @@ All notable changes to SqlProof will be documented here. The format is based on
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While SqlProof
 remains in `0.x`, minor versions may include breaking changes.
 
+## [0.16.0](https://github.com/alialavia/sqlproof/compare/v0.15.0...v0.16.0) (2026-11-04)
+
+
+### Added
+
+* **scale:** load schemas with foreign-key cycles in the bulk loader ([#184](https://github.com/alialavia/sqlproof/issues/184)) ([bfc0d50](https://github.com/alialavia/sqlproof/commit/bfc0d5003f8aeb78cfecc348687778af6489448e))
+* **scenarios:** value generators, pinned fills and per-table growth for scale sweeps ([#186](https://github.com/alialavia/sqlproof/issues/186)) ([0100b22](https://github.com/alialavia/sqlproof/commit/0100b2265cbbadc5dbbd8e4a490912940be5b511))
+
 ## [0.15.0](https://github.com/alialavia/sqlproof/compare/v0.14.0...v0.15.0) (2026-10-19)
 
 
