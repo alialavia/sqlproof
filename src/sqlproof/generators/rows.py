@@ -345,6 +345,34 @@ class PinnedKey:
         return self.resolve(context)
 
 
+class Shadowed:
+    """A column override that may stand in for a generated value per row
+    (a scenario's value generators): it returns `Replaced(value)` for
+    those rows, a plain value for rows it pins outright, or `GENERATE`.
+
+    The bulk generator still builds the column's sampler and takes its
+    draws on a `Replaced` row before using the value, so the draws of
+    every column after it -- and so their values -- are the same as
+    without the override. On the Hypothesis path it is an ordinary
+    callable override."""
+
+    __slots__ = ("resolve",)
+
+    def __init__(self, resolve: Callable[[Any], Any]) -> None:
+        self.resolve = resolve
+
+    def __call__(self, context: Any) -> Any:
+        return self.resolve(context)
+
+
+@dataclass(frozen=True, slots=True)
+class Replaced:
+    """What a `Shadowed` override returns for a row whose value replaces
+    the generated one after its draws are taken."""
+
+    value: Any
+
+
 def _column_override(
     overrides: ColumnOverrides,
     table: Table,
@@ -365,7 +393,8 @@ def _draw_override(draw: st.DrawFn, override: Any, context: ColumnContext) -> An
         # call works with whatever element type the user supplied.
         return draw(override)  # pyright: ignore[reportUnknownArgumentType, reportUnknownVariableType]
     if callable(override):
-        return override(context)
+        value = override(context)
+        return value.value if isinstance(value, Replaced) else value
     return override
 
 

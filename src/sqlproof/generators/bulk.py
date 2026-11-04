@@ -35,6 +35,8 @@ from sqlproof.generators.rows import (
     GENERATE,
     ColumnOverrides,
     PinnedKey,
+    Replaced,
+    Shadowed,
     _column_override,  # pyright: ignore[reportPrivateUsage]
     _domain_checks_as_column_checks,  # pyright: ignore[reportPrivateUsage]
     _element_checks_as_column_checks,  # pyright: ignore[reportPrivateUsage]
@@ -706,7 +708,7 @@ def bulk_table_rows(
     for column in table.columns:
         if column.name in table.primary_key or column.is_generated:
             continue
-        if column.name in override_map:
+        if column.name in override_map and not isinstance(override_map[column.name], Shadowed):
             # The override supplies the value, so building a sampler for
             # this column would be wasted setup -- and `spec_for_column`
             # can raise (an undimensioned `vector`), which would turn a
@@ -750,6 +752,9 @@ def bulk_table_rows(
 
     for index in range(count):
         row: dict[str, Any] = {}
+        # Values that replace a column's generated one once its draws are
+        # taken (`Shadowed` overrides): set after the row is complete.
+        replaced: dict[str, Any] = {}
         key_values = (
             _assign_composite_key(table, index, parent_counts, fk_map, key_partition, parent_tables)
             if key_partition is not None
@@ -811,7 +816,9 @@ def bulk_table_rows(
                         table=table, column_name=name, row_index=index, row=row
                     ),
                 )
-                if value is not GENERATE:
+                if isinstance(value, Replaced):
+                    replaced[name] = value.value
+                elif value is not GENERATE:
                     row[name] = value
                     continue
             if column.default is not None:
@@ -837,6 +844,7 @@ def bulk_table_rows(
                 row[name] = _unique_column_value(table, column, index)
                 continue
             row[name] = sampler(column)()
+        row.update(replaced)
         yield row
 
 

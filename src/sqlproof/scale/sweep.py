@@ -81,10 +81,18 @@ class ScenarioProfile:
     `Scenario.minimal()` to calibrate. Seeds the scenario's `auth.users`
     rows before each load, and `cleanup` removes them at the end."""
 
-    def __init__(self, scenario: Scenario, schema: SchemaInfo, *, scale_cohorts: bool) -> None:
+    def __init__(
+        self,
+        scenario: Scenario,
+        schema: SchemaInfo,
+        *,
+        scale_cohorts: bool,
+        grow: Sequence[str] | None = None,
+    ) -> None:
         self.scenario = scenario
         self.schema = schema
         self.scale_cohorts = scale_cohorts
+        self.grow = None if grow is None else tuple(grow)
         self._auth_ids: set[str] = set()
 
     def __call__(self, factor: int) -> LoadStep:
@@ -95,7 +103,7 @@ class ScenarioProfile:
         variant = (
             self.scenario.minimal()
             if factor == 0
-            else self.scenario.scaled(factor, scale_cohorts=self.scale_cohorts)
+            else self.scenario.scaled(factor, scale_cohorts=self.scale_cohorts, grow=self.grow)
         )
         compiled = variant.compile(self.schema)
         users = compiled.auth_users
@@ -121,6 +129,7 @@ def run_sweep(
     sizes: Mapping[str, int] | None = None,
     scenario: Scenario | None = None,
     scale_cohorts: bool = False,
+    grow: Sequence[str] | None = None,
     args: Sequence[Any] = (),
     max_factor: int = 32,
     min_points: int = 5,
@@ -193,7 +202,9 @@ def run_sweep(
     compiled sizes are the 1x profile. At factor `k` its fills and
     per-parent counts grow `k` times, while cohorts (unless
     `scale_cohorts`) and named rows stay fixed -- "does it still work for
-    these two customers as the rest grows". Arguments may be references
+    these two customers as the rest grows". `grow` names the scenario's
+    tables to grow instead, so the sweep follows the dimension a
+    function's cost depends on (see `Scenario.scaled`). Arguments may be references
     (`ref("acme")`), resolved to the named row's key at each factor. The
     scenario's seed is the sweep's; its `auth.users` rows are inserted
     before each load and removed at the end. `columns` cannot be combined
@@ -217,6 +228,9 @@ def run_sweep(
     if (sizes is None) == (scenario is None):
         msg = "Pass exactly one of sizes or scenario."
         raise SqlProofUsageError(msg)
+    if grow is not None and scenario is None:
+        msg = "grow names a scenario's tables; pass a scenario, or grow every table with sizes."
+        raise SqlProofUsageError(msg)
     if distribution not in DISTRIBUTIONS:
         msg = f"distribution must be one of {', '.join(DISTRIBUTIONS)}; got {distribution!r}."
         raise SqlProofUsageError(msg)
@@ -232,7 +246,9 @@ def run_sweep(
             raise SqlProofUsageError(msg)
         seed = scenario.seed
         try:
-            scenario_profile = ScenarioProfile(scenario, schema, scale_cohorts=scale_cohorts)
+            scenario_profile = ScenarioProfile(
+                scenario, schema, scale_cohorts=scale_cohorts, grow=grow
+            )
             first = scenario_profile(1)
         except Exception as exc:
             msg = f"The sweep refused before truncating anything: {exc}"
@@ -244,6 +260,8 @@ def run_sweep(
             "fingerprint": scenario.fingerprint,
             "scale_cohorts": scale_cohorts,
         }
+        if grow is not None:
+            scenario_info["grow"] = list(grow)
     else:
         assert sizes is not None
         seed = 0 if seed is None else seed

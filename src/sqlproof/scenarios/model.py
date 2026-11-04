@@ -24,6 +24,8 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import UUID
 
 from sqlproof.exceptions import SqlProofScenarioError
+from sqlproof.scenarios import values
+from sqlproof.scenarios.values import Format, OneOf, Pick, SomeOf
 
 if TYPE_CHECKING:
     from hypothesis.strategies import SearchStrategy
@@ -123,11 +125,14 @@ class TableBuilder:
         self._groups.append(Group("cohort", n, dict(pinned)))
         return self
 
-    def fill(self, n: int) -> TableBuilder:
-        """`n` rows with nothing pinned."""
+    def fill(self, n: int, **pinned: Any) -> TableBuilder:
+        """`n` rows, with any listed columns pinned. Unlike a cohort, a fill
+        grows in a scale sweep (`Scenario.scaled`), so pin per-row values
+        on it with the value generators (`s.format`, `s.one_of`,
+        `s.some_of`, `s.pick`) rather than one literal for every row."""
         _require_int(n, f"fill size for {self._name}", 0)
         if n:
-            self._groups.append(Group("fill", n))
+            self._groups.append(Group("fill", n, dict(pinned)))
         return self
 
     def per_parent(
@@ -200,6 +205,28 @@ class ScenarioBuilder:
     def ref(self, name: str) -> RowRef:
         """A reference to a named row, declared before or after this call."""
         return RowRef(name)
+
+    def format(self, pattern: str) -> Format:
+        """Text with `{n}` replaced by each row's number in its table (1, 2,
+        3, ...): `s.format("https://acme.com/blog/{n}")`."""
+        return values.format_(pattern)
+
+    def one_of(self, *options: Any) -> OneOf:
+        """One of `options` per row, drawn from the scenario seed."""
+        return values.one_of(*options)
+
+    def some_of(self, options: Sequence[Any], *, count: int | tuple[int, int]) -> SomeOf:
+        """An array of `count` (a number or a `(min, max)` range) distinct
+        values from `options` per row, for an array column."""
+        return values.some_of(options, count=count)
+
+    def pick(self, source: str, *, count: int | tuple[int, int] | None = None) -> Pick:
+        """Values another column of this scenario holds (`"pages.url"`): an
+        array of `count` distinct ones for an array column, or one value
+        without `count`. The source column must be one the scenario can
+        compute per row: a literal, a generator, a key, or a UNIQUE column
+        the generator fills."""
+        return values.pick(source, count=count)
 
     def _spec(self, name: str, seed: int, clock: datetime) -> ScenarioSpec:
         tables = tuple(
@@ -291,7 +318,13 @@ class Scenario:
             raise SqlProofScenarioError(msg)
         return dataset_strategy(schema, sizes=compiled.sizes, columns=compiled.columns)
 
-    def scaled(self, factor: int, *, scale_cohorts: bool = False) -> Scenario:
+    def scaled(
+        self,
+        factor: int,
+        *,
+        scale_cohorts: bool = False,
+        grow: Sequence[str] | None = None,
+    ) -> Scenario:
         """This scenario at about `factor` times the size, for a scale sweep.
 
         Fills grow by `factor`; cohorts too when `scale_cohorts` is set.
@@ -300,9 +333,18 @@ class Scenario:
         that stay fixed (a named row, or cohorts unless `scale_cohorts`)
         get `factor` times the children each, while parents that multiply
         keep their per-parent counts, since there are already `factor`
-        times as many of them. The seed and clock stay the same."""
+        times as many of them. The seed and clock stay the same.
+
+        `grow` names the tables to grow instead (as the scenario names
+        them): their fills and cohorts multiply and every other table
+        keeps its size, so a sweep can follow the dimension a function's
+        cost depends on (prompts, pages, brands). A per-parent table grows
+        with its parent, or by itself when it is listed and its parent is
+        not."""
         _require_int(factor, "scale factor", 1)
         spec = self.spec
+        if grow is not None:
+            return self._grown(factor, set(_check_grow(spec, grow)))
 
         def build(s: ScenarioBuilder) -> None:
             for table in spec.tables:
@@ -312,7 +354,7 @@ class Scenario:
                         assert group.name is not None
                         s._named_row(table.name, group.name, group.pinned)  # pyright: ignore[reportPrivateUsage]
                     elif group.kind == "fill":
-                        builder.fill(group.count * factor)
+                        builder.fill(group.count * factor, **group.pinned)
                     else:
                         count = group.count * factor if scale_cohorts else group.count
                         builder.cohort(count, **group.pinned)
@@ -336,6 +378,37 @@ class Scenario:
 
         return Scenario(build, seed=self.seed, name=self.name, clock=self.clock)
 
+    def _grown(self, factor: int, grow: set[str]) -> Scenario:
+        spec = self.spec
+
+        def build(s: ScenarioBuilder) -> None:
+            for table in spec.tables:
+                builder = s.table(table.name)
+                growing = table.name in grow
+                for group in table.groups:
+                    if group.kind == "row":
+                        assert group.name is not None
+                        s._named_row(table.name, group.name, group.pinned)  # pyright: ignore[reportPrivateUsage]
+                        continue
+                    count = group.count * factor if growing else group.count
+                    if group.kind == "fill":
+                        builder.fill(count, **group.pinned)
+                    else:
+                        builder.cohort(count, **group.pinned)
+                if table.per_parent is not None:
+                    pp = table.per_parent
+                    parent_grows = pp.parent in grow and not isinstance(pp.where, RowRef)
+                    times = factor if growing and not parent_grows else 1
+                    builder.per_parent(
+                        pp.parent,
+                        where=pp.where,
+                        count=(pp.count[0] * times, pp.count[1] * times),
+                        default=(pp.default[0] * times, pp.default[1] * times),
+                        column=pp.column,
+                    )
+
+        return Scenario(build, seed=self.seed, name=self.name, clock=self.clock)
+
     def minimal(self) -> Scenario:
         """At most one row per group, for a scale sweep's calibration round:
         the same shape, so the same tables and references exist, with as
@@ -350,7 +423,7 @@ class Scenario:
                         assert group.name is not None
                         s._named_row(table.name, group.name, group.pinned)  # pyright: ignore[reportPrivateUsage]
                     elif group.kind == "fill":
-                        builder.fill(min(group.count, 1))
+                        builder.fill(min(group.count, 1), **group.pinned)
                     else:
                         builder.cohort(1, **group.pinned)
                 if table.per_parent is not None:
@@ -405,7 +478,38 @@ def scenario(
     return decorate
 
 
+def _check_grow(spec: ScenarioSpec, grow: Sequence[str]) -> Sequence[str]:
+    if isinstance(grow, str):
+        grow = [grow]
+    names = {table.name for table in spec.tables}
+    unknown = sorted(name for name in grow if name not in names)
+    if unknown:
+        msg = (
+            f"grow names {', '.join(map(repr, unknown))}, which scenario {spec.name!r} "
+            f"has no rows for. Its tables: {', '.join(sorted(names)) or '(none)'}."
+        )
+        raise SqlProofScenarioError(msg)
+    return grow
+
+
 def _normalize(spec: ScenarioSpec, *, strict: bool = False) -> dict[str, Any]:
+    def pinned_value(v: Any, where: str) -> Any:
+        """A pinned value, where a mapping could be read as a generator: a
+        json literal of that shape is written wrapped, `{json: ...}`, so
+        the serialized form reads back as data. Only the serialized form
+        wraps; the fingerprint keeps hashing the value itself."""
+        if values.is_generator(v):
+            return values.to_dict(v, lambda option: value(option, where))  # pyright: ignore[reportUnknownLambdaType]
+        if isinstance(v, list | tuple) and values.has_generator(v):
+            seq = cast("Sequence[Any]", v)
+            return [pinned_value(item, f"{where}[{i}]") for i, item in enumerate(seq)]
+        out = value(v, where)
+        if strict and isinstance(v, dict):
+            mapping = cast("dict[str, Any]", out)
+            if values.looks_like_generator(mapping):
+                return {"json": out}
+        return out
+
     def value(v: Any, where: str) -> Any:
         if isinstance(v, RowRef):
             return {"ref": v.name}
@@ -446,7 +550,7 @@ def _normalize(spec: ScenarioSpec, *, strict: bool = False) -> dict[str, Any]:
         # A named row is written by name: `{"row": "acme"}`.
         out: dict[str, Any] = {g.kind: g.name if g.kind == "row" else g.count}
         if g.pinned:
-            out["set"] = {k: value(v, f"{table}.{k}") for k, v in sorted(g.pinned.items())}
+            out["set"] = {k: pinned_value(v, f"{table}.{k}") for k, v in sorted(g.pinned.items())}
         return out
 
     tables: dict[str, Any] = {}

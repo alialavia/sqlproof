@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import Any, Literal, NoReturn, cast
 
 from sqlproof.exceptions import SqlProofScenarioError
+from sqlproof.scenarios import values
 from sqlproof.scenarios.model import RowRef, Scenario, ScenarioBuilder
 
 FORMAT_VERSION = 1
@@ -144,7 +145,7 @@ def _group_replay(table: str, raw: Any, where: str) -> Replay:
     if len(kinds) != 1:
         _fail(where, f"must have exactly one of {', '.join(_GROUP_KINDS)}; got {sorted(group)}")
     kind = kinds[0]
-    allowed = {kind} if kind in ("fill", "per_parent") else {kind, "set"}
+    allowed = {kind} if kind == "per_parent" else {kind, "set"}
     extra = sorted(k for k in group if k not in allowed)
     if extra:
         _fail(where, f"unexpected key(s) {', '.join(map(repr, extra))} in a {kind} group")
@@ -155,7 +156,7 @@ def _group_replay(table: str, raw: Any, where: str) -> Replay:
         return lambda s: s.table(table).cohort(count, **pinned)
     if kind == "fill":
         count = _int(value, f"{where}.fill")
-        return lambda s: s.table(table).fill(count)
+        return lambda s: s.table(table).fill(count, **pinned)
     if kind == "row":
         row = _name(value, f"{where}.row", "must be the row's name, a non-empty string")
         return lambda s: s._named_row(table, row, pinned)  # pyright: ignore[reportPrivateUsage]
@@ -202,13 +203,78 @@ def _value(value: Any, where: str) -> Any:
         return ref
     if isinstance(value, list):
         items = cast("list[Any]", value)  # type: ignore[redundant-cast]
-        return [_json_value(item, f"{where}[{i}]") for i, item in enumerate(items)]
+        return [_element(item, f"{where}[{i}]") for i, item in enumerate(items)]
     if isinstance(value, Mapping):
-        # A json/jsonb value. {ref: name} alone is always a reference.
-        return _json_value(value, where)
+        # A value generator, `{json: ...}` (a json value written so it cannot
+        # read as one), or else a json/jsonb value. {ref: name} alone is
+        # always a reference.
+        return _generator_or_json(value, where)  # pyright: ignore[reportUnknownArgumentType]
     if value is None or isinstance(value, str | int | float | bool | date | datetime | time):
         return value
     _fail(where, f"has unsupported type {type(value).__name__}")
+
+
+def _element(value: Any, where: str) -> Any:
+    """An array element: a scalar, or a generator (`[{format: "Rival {n}"}]`)."""
+    if isinstance(value, Mapping):
+        return _generator_or_json(value, where)  # pyright: ignore[reportUnknownArgumentType]
+    return _json_value(value, where)
+
+
+_GENERATOR_KEYS = {
+    "format": {"format"},
+    "one_of": {"one_of"},
+    "some_of": {"some_of", "count"},
+    "pick": {"pick", "count"},
+    "json": {"json"},
+}
+
+
+def _generator_or_json(value: Mapping[Any, Any], where: str) -> Any:
+    keys = {str(key) for key in value}
+    kinds = [kind for kind in _GENERATOR_KEYS if kind in keys]
+    if not kinds:
+        return _json_value(value, where)
+    if len(kinds) > 1:
+        _fail(where, f"mixes {' and '.join(kinds)}; write one generator, or {{json: ...}} for data")
+    kind = kinds[0]
+    extra = sorted(keys - _GENERATOR_KEYS[kind])
+    if extra:
+        _fail(
+            where,
+            f"has unexpected key(s) {', '.join(map(repr, extra))} for {kind}; "
+            "a json value of that shape is written {json: ...}",
+        )
+    raw = value[kind]
+    try:
+        if kind == "json":
+            return _json_value(raw, f"{where}.json")
+        if kind == "format":
+            if not isinstance(raw, str):
+                _fail(where, f"format must be a string with {{n}} in it; got {raw!r}")
+            return values.format_(raw)
+        if kind == "one_of":
+            if not isinstance(raw, list) or not raw:
+                _fail(where, "one_of needs at least one value, as a list")
+            options = cast("list[Any]", raw)  # type: ignore[redundant-cast]
+            items = [_json_value(o, f"{where}.one_of[{i}]") for i, o in enumerate(options)]
+            return values.one_of(*items)
+        if kind == "some_of":
+            if not isinstance(raw, list) or not raw:
+                _fail(where, "some_of needs a non-empty list of values")
+            if "count" not in value:
+                _fail(where, "some_of needs a count")
+            options = cast("list[Any]", raw)  # type: ignore[redundant-cast]
+            items = [_json_value(o, f"{where}.some_of[{i}]") for i, o in enumerate(options)]
+            return values.some_of(items, count=_count(value["count"], f"{where}.count"))
+        if not isinstance(raw, str):
+            _fail(where, f"pick names a column as table.column; got {raw!r}")
+        count = None if "count" not in value else _count(value["count"], f"{where}.count")
+        return values.pick(raw, count=count)
+    except SqlProofScenarioError as exc:
+        if str(exc).startswith(where):
+            raise
+        _fail(where, str(exc).rstrip("."))
 
 
 def _json_value(value: Any, where: str) -> Any:

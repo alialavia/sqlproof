@@ -76,7 +76,7 @@ def scale_analysis(
     overrides, as `load_dataset` takes them), `distribution` (`"uniform"`,
     the default, or `"zipf"`), `nested_plans` (count the plans of the
     statements inside the function, through auto_explain),
-    `scale_cohorts` and `advisors`.
+    `scale_cohorts`, `grow` (the scenario's tables to grow) and `advisors`.
 
     `advisors=True` (default False) also ranks Supabase `index_advisor`
     suggestions for the statements the function runs, computed once on
