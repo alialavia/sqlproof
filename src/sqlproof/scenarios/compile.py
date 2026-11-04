@@ -37,12 +37,15 @@ from sqlproof.generators.bulk import _parent_key_value  # pyright: ignore[report
 from sqlproof.generators.rows import (
     GENERATE,
     PinnedKey,
+    Replaced,
+    Shadowed,
     _foreign_key_for_column,  # pyright: ignore[reportPrivateUsage]
     _is_single_column_unique,  # pyright: ignore[reportPrivateUsage]
     _unique_column_value,  # pyright: ignore[reportPrivateUsage]
 )
 from sqlproof.scale.load import insertion_plan, missing_required_parents
 from sqlproof.scenarios.model import Group, PerParent, RowRef, TableSpec
+from sqlproof.scenarios.values import Format, OneOf, Pick, SomeOf, has_generator, is_generator
 from sqlproof.schema.checks import parse_check_expression
 from sqlproof.schema.fingerprint import compute
 from sqlproof.schema.model import Column, ForeignKey, ParsedCheck, SchemaInfo, Table
@@ -238,6 +241,7 @@ def compile_scenario(scenario: Scenario, schema: SchemaInfo) -> CompiledScenario
     auth_ids = [user.id for user in auth_users]
     columns: dict[str, Any] = {}
     nondeterministic: list[str] = []
+    generated_values = _Values(layouts, schema, refs, spec.name, spec.seed, spec.clock, where)
     for qualified, layout in layouts.items():
         table = layout.table
         if table is None:
@@ -255,6 +259,7 @@ def compile_scenario(scenario: Scenario, schema: SchemaInfo) -> CompiledScenario
                 clock=spec.clock,
                 nondeterministic=nondeterministic,
                 where=where,
+                generated_values=generated_values,
             )
             if override is not None:
                 columns[f"{qualified}.{column.name}"] = override
@@ -535,6 +540,7 @@ def _column_override_for(
     clock: datetime,
     nondeterministic: list[str],
     where: str,
+    generated_values: _Values,
 ) -> Callable[[BulkColumnContext], Any] | None:
     table = layout.table
     assert table is not None
@@ -554,6 +560,9 @@ def _column_override_for(
         value = group.pinned[column.name]
         if isinstance(value, RowRef):
             value = _resolve_ref(value, fk, refs, named, qualified_column, where)
+        elif has_generator(value):
+            generated_values.check(table, column, value)
+            value = _Generated(value)
         elif not callable(value):
             _check_literal(table, column, value, where)
         pinned.append(value)
@@ -586,6 +595,8 @@ def _column_override_for(
         index = context.row_index
         if has_pins:
             value = pinned[layout.group_index(index)]
+            if isinstance(value, _Generated):
+                return Replaced(generated_values.evaluate(value.value, layout, column, index))
             if value is not _UNSET:
                 return value(context) if callable(value) else value
         if parent_keys is not None:
@@ -597,7 +608,11 @@ def _column_override_for(
             return volatile(index)
         return GENERATE
 
-    return PinnedKey(override) if single_key else override
+    if single_key:
+        return PinnedKey(override)
+    if any(isinstance(value, _Generated) for value in pinned):
+        return Shadowed(override)
+    return override
 
 
 def _targets_auth_users(fk: ForeignKey) -> bool:
@@ -716,7 +731,7 @@ def _check_unique_collisions(
     qualified_column = f"{layout.qualified}.{column.name}"
     seen: dict[Any, int] = {}
     for group, value in zip(layout.groups, pinned, strict=True):
-        if value is _UNSET or callable(value):
+        if value is _UNSET or callable(value) or isinstance(value, _Generated):
             continue
         if isinstance(value, list | dict):
             value = json.dumps(value, sort_keys=True, default=str)
@@ -797,3 +812,276 @@ def _volatile_default(
         name = f"{qualified}.{column.name}"
         return lambda index: _unit(scenario_name, seed, name, index)
     return None
+
+
+@dataclass(frozen=True, slots=True)
+class _Generated:
+    """A group's pinned value generator, as `_column_override_for` holds it."""
+
+    value: Any
+
+
+_TEXT_TYPES = {
+    "text",
+    "varchar",
+    "character varying",
+    "citext",
+    "char",
+    "character",
+    "bpchar",
+    "name",
+}
+_JSON_TYPES = {"json", "jsonb"}
+
+
+def _array_element(column: Column) -> Any | None:
+    """The element type of an array column (through domains), or None."""
+    pg_type = column.type
+    while pg_type.kind != "array" and pg_type.base is not None:
+        pg_type = pg_type.base
+    return pg_type.base if pg_type.kind == "array" else None
+
+
+def _type_name(pg_type: Any) -> str:
+    while pg_type.base is not None and pg_type.kind != "array":
+        pg_type = pg_type.base
+    return str(pg_type.name).lower()
+
+
+class _Values:
+    """Checks and evaluates a scenario's value generators.
+
+    Every value is a function of the scenario, its seed, the column and
+    the row: each draws from its own `random.Random`, seeded from those, so
+    generators never touch the generator's shared stream. `pick` reads the
+    values its source column holds per row, which is why that column must
+    be one the scenario can compute without generating the table."""
+
+    def __init__(
+        self,
+        layouts: Mapping[str, _Layout],
+        schema: SchemaInfo,
+        refs: Mapping[str, Any],
+        scenario_name: str,
+        seed: int,
+        clock: datetime,
+        where: str,
+    ) -> None:
+        self.layouts = layouts
+        self.schema = schema
+        self.refs = refs
+        self.scenario_name = scenario_name
+        self.seed = seed
+        self.clock = clock
+        self.where = where
+        self._pools: dict[tuple[str, str], list[Any]] = {}
+
+    # -- checking ------------------------------------------------------------------
+
+    def check(self, table: Table, column: Column, value: Any) -> None:
+        qualified_column = f"{table.qualified_name}.{column.name}"
+        where = self.where
+        if _foreign_key_for_column(table, column.name) is not None:
+            msg = (
+                f"{where}: {qualified_column} is a foreign key; pin it to a named row "
+                "({ref: <row>}) or size the table with per_parent instead of a value generator."
+            )
+            raise SqlProofScenarioError(msg)
+        if _type_name(column.type) in _JSON_TYPES:
+            msg = (
+                f"{where}: {qualified_column} is json, so a value generator there would be "
+                "read as data. To store an object of that shape, write it {json: ...}."
+            )
+            raise SqlProofScenarioError(msg)
+        element = _array_element(column)
+        if isinstance(value, list | tuple):
+            items = cast("Sequence[Any]", value)
+            if element is None:
+                msg = f"{where}: {qualified_column} is not an array; pin one value, not a list."
+                raise SqlProofScenarioError(msg)
+            for item in items:
+                if isinstance(item, Format):
+                    if _type_name(element) not in _TEXT_TYPES:
+                        msg = (
+                            f"{where}: format writes text; the elements of "
+                            f"{qualified_column} are {element.name}."
+                        )
+                        raise SqlProofScenarioError(msg)
+                elif is_generator(item):
+                    msg = (
+                        f"{where}: inside an array, only format is supported; for "
+                        f"{qualified_column} use some_of or pick on the whole column."
+                    )
+                    raise SqlProofScenarioError(msg)
+            return
+        unique = _is_single_column_unique(table, column.name)
+        if unique and not isinstance(value, Format):
+            msg = (
+                f"{where}: {qualified_column} is UNIQUE, so only format (which numbers "
+                "each row) can fill it; one_of, some_of and pick can repeat a value."
+            )
+            raise SqlProofScenarioError(msg)
+        if isinstance(value, Format):
+            if element is not None or _type_name(column.type) not in _TEXT_TYPES:
+                msg = (
+                    f"{where}: format writes text; {qualified_column} is {column.type.name}. "
+                    "Use one_of for other types, or put format inside an array literal."
+                )
+                raise SqlProofScenarioError(msg)
+        elif isinstance(value, OneOf):
+            for option in value.options:
+                _check_literal(table, column, option, where)
+        elif isinstance(value, SomeOf):
+            if element is None:
+                msg = (
+                    f"{where}: some_of writes an array; {qualified_column} is "
+                    f"{column.type.name}. Use one_of for one value per row."
+                )
+                raise SqlProofScenarioError(msg)
+        elif isinstance(value, Pick):
+            if value.count is not None and element is None:
+                msg = (
+                    f"{where}: {qualified_column} is not an array, so pick takes one value; "
+                    "leave out count."
+                )
+                raise SqlProofScenarioError(msg)
+            pool = self.pool(value)
+            if element is None and not pool and not column.nullable:
+                msg = (
+                    f"{where}: {qualified_column} is NOT NULL and picks from {value.source}, "
+                    f"but {value.table} has no rows in this scenario."
+                )
+                raise SqlProofScenarioError(msg)
+
+    # -- evaluating ----------------------------------------------------------------
+
+    def _rng(self, qualified_column: str, index: int, element: int | None = None) -> random.Random:
+        digest = _digest(self.scenario_name, self.seed, "value", qualified_column, index, element)
+        return random.Random(int.from_bytes(digest[:8], "big"))
+
+    def evaluate(self, value: Any, layout: _Layout, column: Column, index: int) -> Any:
+        qualified_column = f"{layout.qualified}.{column.name}"
+        if isinstance(value, list | tuple):
+            items: Sequence[Any] = cast("Sequence[Any]", value)
+            return [
+                self._one(item, qualified_column, column, index, position)
+                if is_generator(item)
+                else item
+                for position, item in enumerate(items)
+            ]
+        return self._one(value, qualified_column, column, index, None)
+
+    def _one(
+        self, value: Any, qualified_column: str, column: Column, index: int, element: int | None
+    ) -> Any:
+        if isinstance(value, Format):
+            return value.pattern.replace("{n}", str(index + 1))
+        rng = self._rng(qualified_column, index, element)
+        if isinstance(value, OneOf):
+            return rng.choice(value.options)
+        if isinstance(value, SomeOf):
+            options = _distinct(value.options)
+            return rng.sample(options, min(rng.randint(*value.count), len(options)))
+        assert isinstance(value, Pick)
+        pool = self.pool(value)
+        count = value.count
+        if count is None and _array_element(column) is not None:
+            count = (1, 1)
+        if count is None:
+            return rng.choice(pool) if pool else None
+        return rng.sample(pool, min(rng.randint(*count), len(pool)))
+
+    # -- pick sources --------------------------------------------------------------
+
+    def pool(self, pick: Pick) -> list[Any]:
+        """The distinct values `pick`'s source column holds, in row order."""
+        where = f"{self.where}: pick({pick.source!r})"
+        qualified, table = _resolve_table(pick.table, self.schema, where)
+        key = (qualified, pick.column)
+        if key in self._pools:
+            return self._pools[key]
+        if table is None:
+            msg = f"{where}: pick cannot read auth.users; pick from a modelled table."
+            raise SqlProofScenarioError(msg)
+        names = {column.name for column in table.columns}
+        if pick.column not in names:
+            msg = (
+                f"{where}: {qualified} has no column {pick.column!r}. "
+                f"Columns: {', '.join(sorted(names))}."
+            )
+            raise SqlProofScenarioError(msg)
+        column = table.column(pick.column)
+        layout = self.layouts.get(qualified)
+        values: list[Any] = []
+        if layout is not None:
+            for index in range(layout.size):
+                value = self._source_value(layout, table, column, index, where)
+                if isinstance(value, list):
+                    values.extend(cast("list[Any]", value))  # type: ignore[redundant-cast]
+                elif value is not None:
+                    values.append(value)
+        pool = _distinct(values)
+        self._pools[key] = pool
+        return pool
+
+    def _source_value(
+        self, layout: _Layout, table: Table, column: Column, index: int, where: str
+    ) -> Any:
+        group = layout.groups[layout.group_index(index)]
+        qualified_column = f"{table.qualified_name}.{column.name}"
+        if column.name in group.pinned:
+            value: Any = group.pinned[column.name]
+            if isinstance(value, RowRef):
+                return self.refs.get(value.name)
+            if _picks(value):
+                msg = f"{where}: {qualified_column} is itself picked; pick from its source instead."
+                raise SqlProofScenarioError(msg)
+            if has_generator(value):
+                return self.evaluate(value, layout, column, index)
+            if callable(value):
+                msg = (
+                    f"{where}: {qualified_column} is pinned to a callable on some rows, "
+                    "whose values pick cannot know."
+                )
+                raise SqlProofScenarioError(msg)
+            return value
+        if table.primary_key == (column.name,):
+            return _key_value(table, index, "", where, self.schema)
+        if (
+            _is_single_column_unique(table, column.name)
+            and column.default is None
+            and _foreign_key_for_column(table, column.name) is None
+        ):
+            return _unique_column_value(table, column, index)
+        volatile = _volatile_default(
+            column, self.scenario_name, self.seed, layout.qualified, self.clock
+        )
+        if volatile is not None:
+            return volatile(index)
+        kind = "named row" if group.kind == "row" else group.kind
+        msg = (
+            f"{where}: {qualified_column} is generated at random on a {kind} of "
+            f"{table.qualified_name}, so its values are not known before loading. Pin it "
+            "there (a literal, format or one_of), or pick from a key or a UNIQUE column."
+        )
+        raise SqlProofScenarioError(msg)
+
+
+def _picks(value: Any) -> bool:
+    if isinstance(value, Pick):
+        return True
+    if isinstance(value, list | tuple):
+        items: Sequence[Any] = cast("Sequence[Any]", value)
+        return any(isinstance(item, Pick) for item in items)
+    return False
+
+
+def _distinct(values: Sequence[Any]) -> list[Any]:
+    seen: set[str] = set()
+    out: list[Any] = []
+    for value in values:
+        marker = json.dumps(value, sort_keys=True, default=str)
+        if marker not in seen:
+            seen.add(marker)
+            out.append(value)
+    return out

@@ -206,8 +206,10 @@ def _valid() -> dict[str, Any]:
             "must have exactly one of",
         ),
         (
-            lambda d: d["tables"].update(customers=[{"fill": 1, "set": {}}]),
-            "unexpected key\\(s\\) 'set' in a fill group",
+            lambda d: d["tables"].update(
+                invoices=[{"per_parent": {"parent": "customers", "count": 1}, "set": {}}]
+            ),
+            "unexpected key\\(s\\) 'set' in a per_parent group",
         ),
         (lambda d: d["tables"].update(customers=[{"cohort": "2"}]), r"\.cohort must be an int"),
         (lambda d: d["tables"].update(customers=[{"cohort": 0}]), "must be a positive int"),
